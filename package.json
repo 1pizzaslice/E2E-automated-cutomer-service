@@ -1,0 +1,28 @@
+{
+  "name": "e2e-automated-customer-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend-first AI customer support BPO platform.",
+  "type": "module",
+  "packageManager": "pnpm@11.3.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --filter @support/api dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "lint": "pnpm -r lint && python3 -m compileall ai",
+    "test": "pnpm -r test && pnpm test:py",
+    "test:integration": "echo \"integration tests are not implemented yet\"",
+    "test:py": "python3 -m unittest discover -s ai -p '*_test.py'",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "prettier": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.0"
+  }
+}

@@ -1,0 +1,10 @@
+[project]
+name = "support-ai-runtime"
+version = "0.1.0"
+description = "Python AI runtime for the customer support platform."
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pytest.ini_options]
+python_files = ["*_test.py"]
+
