@@ -134,4 +134,5 @@ Use this format:
 - Context: Repository helpers now enforce tenant filters and live PostgreSQL tests prove those helpers do not return cross-tenant rows. The platform will still expose high-risk multi-tenant support data through API endpoints, workflows, AI retrieval, tool execution, and audit reads.
 - Decision: Add PostgreSQL row-level security policies for tenant-scoped tables before exposing tenant-scoped API endpoints. Repository tenant filters remain mandatory; RLS is a database-level defense in depth, not a replacement for scoped data access.
 - Consequences: API and worker database transactions must set an explicit tenant context for tenant-scoped operations. Global or platform-admin access must use explicit, audited paths. Global tool definitions must remain visible where `tenant_id is null` while other tenants' tool definitions stay hidden.
-- Follow-up: Implement an RLS migration and live negative tests before starting the Milestone 3 tenant/customer/ticket endpoints.
+- Implementation: `0002_tenant_rls.sql` enables RLS, defines `support_current_tenant_id()` over `app.current_tenant_id`, grants the non-owner `support_app` application role, and keeps global tool definitions visible to tenant contexts.
+- Follow-up: Milestone 3 API and worker database code must set transaction-local tenant context before tenant-scoped operations.

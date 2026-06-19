@@ -6,21 +6,27 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 2 database foundation implemented and locally verified; RLS hardening is the final pre-API database task.
-- Current milestone: Milestone 2 - database and core models.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, and live PostgreSQL repository execution tests. No business workflow implementation yet.
+- Project phase: Milestone 2 database foundation and RLS hardening are implemented and locally verified; Milestone 3 API skeleton is next.
+- Current milestone: Milestone 3 - backend API skeleton.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, and live PostgreSQL repository/RLS execution tests. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Continue Milestone 2 by adding PostgreSQL row-level security policies for tenant-scoped tables before exposing API endpoints. Keep repository tenant filters mandatory, add a migration for RLS, and add live negative tests that prove cross-tenant reads are blocked when tenant context is set.
+> Start Milestone 3 by creating the backend API skeleton with auth and tenant-context middleware placeholders, health/readiness endpoints preserved, typed contract tests, and database transaction helpers that set `app.current_tenant_id` before tenant-scoped operations.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat/db-rls-policies` from updated `main` after the repository integration branch was merged.
+- Added `packages/db/migrations/0002_tenant_rls.sql`, which defines `support_current_tenant_id()`, creates/grants the non-owner `support_app` role for application access, enables RLS on tenant-scoped tables, rejects missing tenant context, and keeps global tool definitions visible.
+- Added `packages/db/src/rls.ts` with a transaction-local tenant-context helper for `app.current_tenant_id`.
+- Added `packages/db/src/rls.integration.test.ts`, which proves raw SQL under `support_app` rejects missing tenant context, hides cross-tenant customers, tickets, KB chunks, integrations, audit events, and tenant rows, preserves global tool-definition visibility, and blocks cross-tenant writes.
+- Added a PostgreSQL advisory lock to the migration runner so parallel live integration suites do not race migration application.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/DECISIONS.md`, and `docs/PROJECT_HISTORY.md` for the RLS contract and verification.
 - Created feature branch `feat/db-repository-integration-tests`.
 - Replaced the root integration-test placeholder with `pnpm test:integration`.
 - Added `packages/db/src/repositories.integration.test.ts`, which applies pending migrations, seeds two synthetic tenants, executes repository helpers against PostgreSQL, verifies tenant isolation for customers, tickets, KB chunks, integrations, tool definitions, and audit events, then cleans up fixture rows.
@@ -58,11 +64,11 @@ The next implementation task is:
 - `pnpm typecheck` passes.
 - `pnpm test` passes.
 - `pnpm build` passes.
-- `pnpm --filter @support/db test` passes, including 14 normal tests with the 6 live integration cases skipped unless explicitly enabled.
+- `pnpm --filter @support/db test` passes, including 16 normal tests with the 10 live integration cases skipped unless explicitly enabled.
 - `pnpm --filter @support/db typecheck` passes.
-- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes against the local Compose PostgreSQL database with 6 live repository execution tests.
-- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` applied `0001_initial_core`.
-- A second `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` returned no pending migrations.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes against the local Compose PostgreSQL database with 10 live repository and RLS execution tests.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` applied and verified `0002_tenant_rls` locally.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` returns no pending migrations after RLS migration application.
 - `pnpm infra:up` starts the Docker Compose stack successfully.
 - API `/health` and `/ready` respond correctly under `pnpm dev`.
 - `docs/PROJECT_HISTORY.md` documents what has happened so far, pivots, errors, and fixes.
@@ -71,7 +77,7 @@ The next implementation task is:
 
 ### Active Blockers
 
-- GitHub Actions includes the live PostgreSQL repository integration test step, but it has not run remotely yet.
+- GitHub Actions includes the live PostgreSQL repository/RLS integration test step, but the RLS branch workflow has not run remotely yet.
 - Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
 - No real client/pilot data exists yet.
 - No OpenAI/model provider credentials configured yet.
@@ -192,7 +198,7 @@ Checklist:
 - [x] Add tenant isolation tests.
 - [x] Add live PostgreSQL repository execution tests.
 - [x] Decide whether PostgreSQL RLS is required before tenant-scoped API endpoints.
-- [ ] Add PostgreSQL RLS policies and live RLS negative tests.
+- [x] Add PostgreSQL RLS policies and live RLS negative tests.
 
 Acceptance criteria:
 
@@ -200,7 +206,7 @@ Acceptance criteria:
 - [x] Migrations can be rolled back or compatibility path is documented.
 - [x] Core repository tests pass.
 - [x] Tenant-scoped query tests prove no cross-tenant reads.
-- [ ] PostgreSQL RLS blocks cross-tenant reads before tenant-scoped API endpoints are exposed.
+- [x] PostgreSQL RLS blocks cross-tenant reads before tenant-scoped API endpoints are exposed.
 
 ## Milestone 3: Backend API Skeleton
 
