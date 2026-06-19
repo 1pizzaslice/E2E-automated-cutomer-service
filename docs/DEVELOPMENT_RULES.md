@@ -340,6 +340,7 @@ pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:integration
 pnpm dev
 pnpm infra:up
 pnpm infra:down
@@ -352,6 +353,7 @@ Current command meanings:
 - `pnpm format:check`: Prettier formatting check across repo text/code files.
 - `pnpm typecheck`: TypeScript typechecking across packages.
 - `pnpm test`: TypeScript package tests plus Python scaffold tests.
+- `pnpm test:integration`: opt-in live integration tests. Currently requires `DATABASE_URL`, for example `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` after `pnpm infra:up`.
 - `pnpm test:py`: Python stdlib `unittest` discovery under `ai/`.
 - `pnpm dev`: API service in watch mode.
 

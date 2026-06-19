@@ -15,7 +15,7 @@
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "lint": "pnpm -r lint && python3 -m compileall ai",
     "test": "pnpm -r test && pnpm test:py",
-    "test:integration": "echo \"integration tests are not implemented yet\"",
+    "test:integration": "pnpm --filter @support/db test:integration",
     "test:py": "python3 -m unittest discover -s ai -p '*_test.py'",
     "typecheck": "pnpm -r typecheck"
   },

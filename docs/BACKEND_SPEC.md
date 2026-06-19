@@ -1005,12 +1005,14 @@ Implemented artifacts:
 - Reviewed SQL migration: `packages/db/migrations/0001_initial_core.sql`.
 - Migration runner: `packages/db/src/migrations.ts` and `packages/db/src/migrate.ts`.
 - Repository query helpers: `packages/db/src/repositories.ts`.
+- Live repository execution tests: `packages/db/src/repositories.integration.test.ts`.
 - Drizzle config for future migration drafts: `packages/db/drizzle.config.ts`.
 
 Commands:
 
 - Apply local migrations: `pnpm db:migrate`.
 - Generate future migration drafts: `pnpm --filter @support/db generate:migration`.
+- Run live repository integration tests: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
 
 Initial schema choices:
 
@@ -1020,6 +1022,8 @@ Initial schema choices:
 - Tenant-scoped entities have `tenant_id` columns and tenant indexes. Repository query helpers currently enforce tenant filters for customers, tickets, KB chunks, integrations, audit events, and tool definitions.
 - Tool definitions may be global when `tenant_id is null`; tenant query helpers allow global active tools while excluding other tenants.
 - Idempotency support starts with the `idempotency_keys` table and operation/key uniqueness per tenant.
+- Live repository execution tests seed two synthetic tenants and prove the tenant-scoped helpers execute against PostgreSQL without returning cross-tenant customers, tickets, KB chunks, integrations, tool definitions, or audit events.
+- PostgreSQL row-level security is not implemented yet. Per ADR-0013, add RLS policies before exposing tenant-scoped API endpoints.
 
 Rollback and compatibility:
 

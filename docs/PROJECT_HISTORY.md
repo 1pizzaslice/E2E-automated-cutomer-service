@@ -12,7 +12,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - No business workflows have been implemented yet.
 - Milestone 0 documentation harness is complete.
 - Milestone 1 backend scaffold is complete and locally verified.
-- Milestone 2 database foundation has started.
+- Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests.
 
 ## Product Direction
 
@@ -114,6 +114,7 @@ Database foundation:
 - `packages/db/migrations/0001_initial_core.sql`
 - `packages/db/src/migrations.ts`
 - `packages/db/src/repositories.ts`
+- `packages/db/src/repositories.integration.test.ts`
 - `packages/db/drizzle.config.ts`
 
 ## Verification Completed
@@ -132,6 +133,13 @@ The following passed locally in the cloned repo:
 - `pnpm infra:down`
 - `pnpm --filter @support/db test`
 - `pnpm --filter @support/db typecheck`
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`
+
+## Current Architecture Follow-Ups
+
+- PostgreSQL row-level security should be added before exposing tenant-scoped API endpoints.
+- Repository tenant filters remain mandatory even after RLS is added.
+- CI includes a live PostgreSQL integration test job step, but the remote workflow result has not been observed yet.
 
 ## Errors Encountered And Fixes
 
@@ -217,7 +225,7 @@ Fix:
 
 Continue Milestone 2:
 
-1. Run the initial migration against a clean local PostgreSQL database if not already verified in the latest session.
-2. Add repository execution tests with real PostgreSQL fixtures.
-3. Add seed/test fixtures for tenant isolation across customers, tickets, KB chunks, integrations, tool definitions, and audit events.
-4. Decide whether to add PostgreSQL row-level security before API endpoints are exposed.
+1. Add PostgreSQL row-level security migration and policies for tenant-scoped tables.
+2. Add live negative tests that set tenant context and prove RLS blocks cross-tenant reads.
+3. Preserve the existing repository tenant filters as application-level enforcement.
+4. Update `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, and `TODO.md` with the RLS contract and verification.

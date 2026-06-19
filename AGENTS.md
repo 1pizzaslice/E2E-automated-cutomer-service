@@ -61,6 +61,7 @@ Use these commands from the repository root:
 - Apply formatting: `pnpm format`
 - Typecheck: `pnpm typecheck`
 - Run tests: `pnpm test`
+- Run live PostgreSQL integration tests: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`
 - Run TypeScript package tests: `pnpm -r test`
 - Run Python scaffold tests: `pnpm test:py`
 - Build TypeScript packages: `pnpm build`

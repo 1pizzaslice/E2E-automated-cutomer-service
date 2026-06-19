@@ -9,6 +9,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: support
+          POSTGRES_USER: support
+          POSTGRES_PASSWORD: support
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U support -d support"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +53,11 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Integration test
+        run: pnpm test:integration
+        env:
+          DATABASE_URL: postgres://support:support@localhost:5432/support
 
       - name: Build
         run: pnpm build
