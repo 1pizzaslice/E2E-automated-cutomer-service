@@ -197,6 +197,10 @@ V1 allows AI to call `read_only` and selected `draft_side_effect` tools. Human a
 ## 10. Database Rules
 
 - Use migrations for schema changes.
+- Use Drizzle as the TypeScript schema/query layer.
+- Keep reviewed SQL migrations under `packages/db/migrations/`.
+- Apply local migrations with `pnpm db:migrate`.
+- Generate future migration drafts with `pnpm --filter @support/db generate:migration`, then review and edit the SQL before committing.
 - Never modify production schema manually.
 - Prefer explicit foreign keys and indexes.
 - Add tenant-scoped indexes for common queries.

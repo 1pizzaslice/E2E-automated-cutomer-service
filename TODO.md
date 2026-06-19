@@ -6,21 +6,29 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Backend foundation scaffold verified.
+- Project phase: Milestone 2 database foundation implemented and locally verified.
 - Current milestone: Milestone 2 - database and core models.
-- Current scope: Backend scaffold only, no business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, and tenant-scoped repository query helpers. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Start Milestone 2 by choosing Drizzle vs Prisma, then implement the initial PostgreSQL migration package for tenants, users/roles, customers, customer identities, conversations, messages, tickets, ticket events, SLA policies, policy versions, KB documents/chunks, integrations, tool definitions/calls, AI runs, approvals, audit events, and QA reviews. Add migration/repository tests and update `docs/BACKEND_SPEC.md`.
+> Continue Milestone 2 by adding live PostgreSQL repository execution tests with fixtures for tenant isolation across customers, tickets, KB chunks, integrations, tool definitions, and audit events. Then decide whether to add PostgreSQL row-level security before exposing API endpoints.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Selected Drizzle for the TypeScript PostgreSQL schema/query layer.
+- Added `@support/db` Drizzle schema for the Milestone 2 core tables.
+- Added reviewed SQL migration `packages/db/migrations/0001_initial_core.sql`.
+- Added migration runner and root command `pnpm db:migrate`.
+- Added tenant-scoped repository query helpers for customers, tickets, KB chunks, integrations, audit events, and tool definitions.
+- Added migration/schema/repository tests.
+- Applied the initial migration to the local Compose PostgreSQL database and reran it to verify idempotency.
+- Updated `docs/BACKEND_SPEC.md`, `docs/DECISIONS.md`, `docs/DEVELOPMENT_RULES.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, `AGENTS.md`, and `README.md`.
 - Created the initial documentation harness plan.
 - Added backend scaffold files for TypeScript packages, Python AI runtime placeholder, Docker Compose infra, and CI.
 - Moved scaffold into cloned GitHub repo at `/home/anish/CODE01/STARTUPS/E2E-automated-cutomer-service`.
@@ -43,6 +51,10 @@ The next implementation task is:
 - `pnpm typecheck` passes.
 - `pnpm test` passes.
 - `pnpm build` passes.
+- `pnpm --filter @support/db test` passes.
+- `pnpm --filter @support/db typecheck` passes.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` applied `0001_initial_core`.
+- A second `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` returned no pending migrations.
 - `pnpm infra:up` starts the Docker Compose stack successfully.
 - API `/health` and `/ready` respond correctly under `pnpm dev`.
 - `docs/PROJECT_HISTORY.md` documents what has happened so far, pivots, errors, and fixes.
@@ -52,6 +64,7 @@ The next implementation task is:
 ### Active Blockers
 
 - GitHub Actions has been added but has not run remotely yet.
+- CI does not yet run live PostgreSQL migration/repository integration tests.
 - Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
 - No real client/pilot data exists yet.
 - No OpenAI/model provider credentials configured yet.
@@ -59,7 +72,8 @@ The next implementation task is:
 ### Open Questions
 
 - Which Python package manager to use for the full AI runtime: recommended default remains `uv`, but local machine currently lacks `uv`.
-- Whether to use Prisma or Drizzle: recommended default is Drizzle for explicit SQL-like control; Prisma is acceptable if faster team velocity is preferred.
+- Whether to add PostgreSQL row-level security before API endpoints are exposed.
+- Which embedding model/dimension to standardize before production KB ingestion; current initial column is `vector(1536)`.
 
 ## Global Completion Checklist
 
@@ -145,38 +159,38 @@ Goal: Implement source-of-truth schema and migrations.
 
 Checklist:
 
-- [ ] Create tenants table.
-- [ ] Create users and roles tables.
-- [ ] Create customers table.
-- [ ] Create customer identities table.
-- [ ] Create channels table.
-- [ ] Create conversations table.
-- [ ] Create messages table.
-- [ ] Create tickets table.
-- [ ] Create ticket events/state transition table.
-- [ ] Create assignments table.
-- [ ] Create SLA policies table.
-- [ ] Create tenant policies table with versions.
-- [ ] Create KB document table.
-- [ ] Create KB chunk table with vector column.
-- [ ] Create integrations table.
-- [ ] Create tool definitions table.
-- [ ] Create tool calls table.
-- [ ] Create AI runs table.
-- [ ] Create approvals table.
-- [ ] Create audit events table.
-- [ ] Create QA review table.
-- [ ] Add tenant-scoped indexes.
-- [ ] Add idempotency key support.
-- [ ] Add migration test.
-- [ ] Add tenant isolation tests.
+- [x] Create tenants table.
+- [x] Create users and roles tables.
+- [x] Create customers table.
+- [x] Create customer identities table.
+- [x] Create channels table.
+- [x] Create conversations table.
+- [x] Create messages table.
+- [x] Create tickets table.
+- [x] Create ticket events/state transition table.
+- [x] Create assignments table.
+- [x] Create SLA policies table.
+- [x] Create tenant policies table with versions.
+- [x] Create KB document table.
+- [x] Create KB chunk table with vector column.
+- [x] Create integrations table.
+- [x] Create tool definitions table.
+- [x] Create tool calls table.
+- [x] Create AI runs table.
+- [x] Create approvals table.
+- [x] Create audit events table.
+- [x] Create QA review table.
+- [x] Add tenant-scoped indexes.
+- [x] Add idempotency key support.
+- [x] Add migration test.
+- [x] Add tenant isolation tests.
 
 Acceptance criteria:
 
-- [ ] Migrations apply cleanly to empty DB.
-- [ ] Migrations can be rolled back or compatibility path is documented.
-- [ ] Core repository tests pass.
-- [ ] Tenant-scoped query tests prove no cross-tenant reads.
+- [x] Migrations apply cleanly to empty DB.
+- [x] Migrations can be rolled back or compatibility path is documented.
+- [x] Core repository tests pass.
+- [x] Tenant-scoped query tests prove no cross-tenant reads.
 
 ## Milestone 3: Backend API Skeleton
 

@@ -7,12 +7,12 @@ This file records what has happened so far so a new human or AI agent can unders
 ## Current State
 
 - GitHub repo cloned at `/home/anish/CODE01/STARTUPS/E2E-automated-cutomer-service`.
-- Backend scaffold exists locally but has not been committed or pushed yet.
+- Backend scaffold has a local `main` commit.
 - No frontend has been implemented.
 - No business workflows have been implemented yet.
 - Milestone 0 documentation harness is complete.
 - Milestone 1 backend scaffold is complete and locally verified.
-- Next milestone is Milestone 2: database and core models.
+- Milestone 2 database foundation has started.
 
 ## Product Direction
 
@@ -107,6 +107,15 @@ Backend scaffold:
 - `infra/docker-compose.yml`
 - `infra/otel/otel-collector-config.yaml`
 
+Database foundation:
+
+- Drizzle selected for the TypeScript schema/query layer.
+- `packages/db/src/schema.ts`
+- `packages/db/migrations/0001_initial_core.sql`
+- `packages/db/src/migrations.ts`
+- `packages/db/src/repositories.ts`
+- `packages/db/drizzle.config.ts`
+
 ## Verification Completed
 
 The following passed locally in the cloned repo:
@@ -121,6 +130,8 @@ The following passed locally in the cloned repo:
 - API `/health`
 - API `/ready`
 - `pnpm infra:down`
+- `pnpm --filter @support/db test`
+- `pnpm --filter @support/db typecheck`
 
 ## Errors Encountered And Fixes
 
@@ -195,21 +206,18 @@ Fix:
 
 ## Current Risks And Follow-Ups
 
-- The scaffold has not been committed or pushed yet.
 - GitHub Actions has not run remotely yet.
 - Python `uv` is not installed locally; current Python scaffold uses standard library `unittest`.
 - Docker image tags use `latest` for some services; pin known-good versions later.
-- Database ORM/query builder is not chosen yet. Current recommendation remains Drizzle unless the team prefers Prisma.
+- Database ORM/query builder is Drizzle.
 - No real tenant/client data exists.
 - No OpenAI/model credentials are configured.
 
 ## Next Recommended Task
 
-Commit and push the verified scaffold.
+Continue Milestone 2:
 
-After that, start Milestone 2:
-
-1. Choose Drizzle vs Prisma.
-2. Implement initial database package and migration workflow.
-3. Add schemas and repository tests for core entities.
-4. Update `docs/BACKEND_SPEC.md`, `docs/DECISIONS.md`, and `TODO.md`.
+1. Run the initial migration against a clean local PostgreSQL database if not already verified in the latest session.
+2. Add repository execution tests with real PostgreSQL fixtures.
+3. Add seed/test fixtures for tenant isolation across customers, tickets, KB chunks, integrations, tool definitions, and audit events.
+4. Decide whether to add PostgreSQL row-level security before API endpoints are exposed.

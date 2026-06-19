@@ -3,13 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "generate:migration": "drizzle-kit generate --config drizzle.config.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "migrate": "tsx src/migrate.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@support/shared-schemas": "workspace:*"
+    "@support/shared-schemas": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.10"
   }
 }

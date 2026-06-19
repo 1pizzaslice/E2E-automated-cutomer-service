@@ -32,6 +32,7 @@ pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm db:migrate
 pnpm dev
 pnpm infra:up
 pnpm infra:down

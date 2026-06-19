@@ -108,3 +108,12 @@ Use this format:
 - Decision: V1 AI may use read-only tools and draft side-effect recommendations. Human approval is required for write-capable actions.
 - Consequences: Tool schema must include side-effect class and approval requirement. Workflows must enforce the policy outside the AI runtime.
 - Follow-up: Add reversible write support only after policy, audit, and approval tests are mature.
+
+## ADR-0011: Drizzle For PostgreSQL Schema And Queries
+
+- Date: 2026-06-19
+- Status: Accepted
+- Context: Milestone 2 needs explicit PostgreSQL control for tenant-scoped indexes, partial unique indexes, pgvector columns, reviewed SQL migrations, and typed TypeScript data access. Prisma would improve some CRUD velocity but abstracts more of the SQL surface this project needs to inspect.
+- Decision: Use Drizzle for the TypeScript database schema/query layer. Keep reviewed SQL migrations in `packages/db/migrations/`, with Drizzle config available for generating future migration drafts.
+- Consequences: Engineers and agents must understand SQL and review generated migrations. Repository helpers should enforce tenant scope instead of exposing unscoped table access by default.
+- Follow-up: Add live migration verification to CI once integration infrastructure is available in CI.

@@ -994,3 +994,34 @@ V1 placeholders:
 - Prompt-injection eval cases exist.
 - SLA timers can breach and escalate.
 - Pilot metrics can be queried.
+
+## 24. Current Database Implementation
+
+Milestone 2 starts with `@support/db` as the TypeScript database package.
+
+Implemented artifacts:
+
+- Drizzle schema: `packages/db/src/schema.ts`.
+- Reviewed SQL migration: `packages/db/migrations/0001_initial_core.sql`.
+- Migration runner: `packages/db/src/migrations.ts` and `packages/db/src/migrate.ts`.
+- Repository query helpers: `packages/db/src/repositories.ts`.
+- Drizzle config for future migration drafts: `packages/db/drizzle.config.ts`.
+
+Commands:
+
+- Apply local migrations: `pnpm db:migrate`.
+- Generate future migration drafts: `pnpm --filter @support/db generate:migration`.
+
+Initial schema choices:
+
+- Domain IDs are application-generated text IDs, matching the contract style such as `ten_...`, `ticket_...`, and `kb_chunk_...`.
+- PostgreSQL remains the source of truth.
+- The first KB embedding column is `vector(1536)` using `pgvector`; choose and document a production embedding model before relying on this dimension for real client data.
+- Tenant-scoped entities have `tenant_id` columns and tenant indexes. Repository query helpers currently enforce tenant filters for customers, tickets, KB chunks, integrations, audit events, and tool definitions.
+- Tool definitions may be global when `tenant_id is null`; tenant query helpers allow global active tools while excluding other tenants.
+- Idempotency support starts with the `idempotency_keys` table and operation/key uniqueness per tenant.
+
+Rollback and compatibility:
+
+- The initial migration is intended for empty development and pilot databases.
+- There is no automated down migration yet. Before production data exists, rollback is drop-and-recreate. After production data exists, every schema change must include a compatibility or data migration plan.

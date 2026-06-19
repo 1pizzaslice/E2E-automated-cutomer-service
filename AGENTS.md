@@ -54,6 +54,8 @@ Use these commands from the repository root:
 - Run API in watch mode: `pnpm dev`
 - Start local infrastructure: `pnpm infra:up`
 - Stop local infrastructure: `pnpm infra:down`
+- Apply database migrations: `pnpm db:migrate`
+- Generate a Drizzle migration draft: `pnpm --filter @support/db generate:migration`
 - Lint/static checks: `pnpm lint`
 - Format check: `pnpm format:check`
 - Apply formatting: `pnpm format`

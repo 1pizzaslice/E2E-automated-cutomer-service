@@ -249,6 +249,23 @@ Required tests:
 - Policy activation audited.
 - Integration config update audited.
 
+### 3.13 Database And Repositories
+
+Required tests:
+
+- Migration inventory includes every Milestone 2 core table.
+- Migration inventory includes tenant-scoped indexes and idempotency uniqueness.
+- Drizzle schema compiles against the checked-in SQL contract.
+- Repository query helpers include tenant filters for tenant-scoped reads.
+- Global tool-definition reads allow `tenant_id is null` but must not allow other tenants.
+- Live migration verification should run against the local PostgreSQL service before database changes are considered complete.
+
+Current Milestone 2 coverage:
+
+- `packages/db/src/migrations.test.ts` checks the initial SQL migration inventory.
+- `packages/db/src/schema.test.ts` checks core schema constants such as the KB embedding vector dimension.
+- `packages/db/src/repositories.test.ts` compiles repository queries and asserts tenant filters in generated SQL.
+
 ## 4. Golden Dataset
 
 Create the first golden dataset under the future AI package.
