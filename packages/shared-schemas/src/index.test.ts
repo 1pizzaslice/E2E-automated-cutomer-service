@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { HealthResponseSchema, createHealthResponse } from "./index.js";
+import {
+  ApiErrorResponseSchema,
+  CustomerResourceResponseSchema,
+  HealthResponseSchema,
+  TicketResourceResponseSchema,
+  createHealthResponse,
+} from "./index.js";
 
 describe("shared health schema", () => {
   it("creates a valid health response", () => {
@@ -18,5 +24,70 @@ describe("shared health schema", () => {
         version: "0.1.0",
       }),
     ).toThrow();
+  });
+});
+
+describe("shared API contract schemas", () => {
+  it("validates structured error responses", () => {
+    const parsed = ApiErrorResponseSchema.parse({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Authentication is required.",
+        request_id: "req_test",
+      },
+    });
+
+    expect(parsed.error.details).toEqual([]);
+  });
+
+  it("validates customer resource responses", () => {
+    const response = {
+      customer: {
+        customer_id: "cus_test",
+        tenant_id: "ten_test",
+        display_name: "Test Customer",
+        email: "customer@example.test",
+        phone: null,
+        external_customer_ref: null,
+        metadata: {},
+        created_at: "2026-06-19T00:00:00.000Z",
+        updated_at: "2026-06-19T00:00:00.000Z",
+      },
+    };
+
+    expect(CustomerResourceResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("validates ticket resource responses", () => {
+    const response = {
+      ticket: {
+        ticket_id: "ticket_test",
+        tenant_id: "ten_test",
+        conversation_id: "cnv_test",
+        customer_id: "cus_test",
+        status: "new",
+        priority: "p2",
+        topic: null,
+        subtopic: null,
+        language: null,
+        sentiment: null,
+        urgency_score: null,
+        automation_mode: "human_approve",
+        assigned_queue: null,
+        assigned_user_id: null,
+        sla_policy_id: null,
+        policy_version_id: null,
+        opened_at: "2026-06-19T00:00:00.000Z",
+        first_response_due_at: null,
+        next_response_due_at: null,
+        resolution_due_at: null,
+        resolved_at: null,
+        closed_at: null,
+        created_at: "2026-06-19T00:00:00.000Z",
+        updated_at: "2026-06-19T00:00:00.000Z",
+      },
+    };
+
+    expect(TicketResourceResponseSchema.parse(response)).toEqual(response);
   });
 });

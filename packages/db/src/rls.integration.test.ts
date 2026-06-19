@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { createDatabase, type PostgresClient } from "./client.js";
 import { migrateDatabase } from "./migrations.js";
-import { APPLICATION_DATABASE_ROLE, setLocalTenantContext } from "./rls.js";
+import {
+  APPLICATION_DATABASE_ROLE,
+  setLocalTenantContext,
+  withTenantTransaction,
+} from "./rls.js";
+import { customerByIdQuery } from "./repositories.js";
 import {
   auditEvents,
   channels,
@@ -176,6 +181,40 @@ describeLive("PostgreSQL row-level security", () => {
     `;
 
     expect(rows).toEqual([]);
+  });
+
+  it("sets application role and tenant context for repository work", async () => {
+    if (!client) {
+      throw new Error("PostgreSQL client was not initialized");
+    }
+
+    const rows = await withTenantTransaction(
+      client,
+      { tenantId: ids.tenantA },
+      async (transactionDb, transaction) => ({
+        currentRole: await transaction<{ current_role: string }[]>`
+          select current_role
+        `,
+        ownCustomer: await customerByIdQuery(
+          transactionDb,
+          { tenantId: ids.tenantA },
+          ids.customerA,
+        ),
+        otherTenantCustomer: await customerByIdQuery(
+          transactionDb,
+          { tenantId: ids.tenantA },
+          ids.customerB,
+        ),
+      }),
+    );
+
+    expect(rows.currentRole.map((row) => row.current_role)).toEqual([
+      APPLICATION_DATABASE_ROLE,
+    ]);
+    expect(rows.ownCustomer.map((row) => row.customerId)).toEqual([
+      ids.customerA,
+    ]);
+    expect(rows.otherTenantCustomer).toEqual([]);
   });
 
   async function withApplicationRole<T>(

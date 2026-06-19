@@ -11,7 +11,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@support/db": "workspace:*",
     "@support/shared-schemas": "workspace:*",
-    "fastify": "^5.0.0"
+    "fastify": "^5.0.0",
+    "zod": "^4.0.0"
   }
 }

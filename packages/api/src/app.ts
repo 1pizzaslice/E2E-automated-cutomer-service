@@ -1,15 +1,28 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import { createHealthResponse } from "@support/shared-schemas";
+import { registerErrorHandler } from "./errors.js";
+import { registerRequestContext } from "./request-context.js";
+import { registerRoutes } from "./routes.js";
+import { createDatabaseApiServices, type ApiServices } from "./services.js";
 
-export function buildApp(): FastifyInstance {
+export interface BuildAppOptions {
+  readonly services?: ApiServices;
+}
+
+export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
     },
   });
+  const services = options.services ?? createDatabaseApiServices();
 
-  app.get("/health", async () => createHealthResponse("api"));
-  app.get("/ready", async () => createHealthResponse("api"));
+  registerErrorHandler(app);
+  registerRequestContext(app);
+  registerRoutes(app, services);
+
+  app.addHook("onClose", async () => {
+    await services.close?.();
+  });
 
   return app;
 }
