@@ -6,21 +6,33 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 2 database foundation and RLS hardening are implemented and locally verified; Milestone 3 API skeleton is next.
+- Project phase: Milestone 3 API skeleton initial pass is implemented with focused local verification; endpoint expansion and RBAC are next.
 - Current milestone: Milestone 3 - backend API skeleton.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, and live PostgreSQL repository/RLS execution tests. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, and read-only tenant/customer/ticket contract endpoints. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Start Milestone 3 by creating the backend API skeleton with auth and tenant-context middleware placeholders, health/readiness endpoints preserved, typed contract tests, and database transaction helpers that set `app.current_tenant_id` before tenant-scoped operations.
+> Continue Milestone 3 by adding real RBAC checks and PostgreSQL-backed API integration tests for the existing tenant/customer/ticket read endpoints, then expand list/create/update contracts where the schema already supports them.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat/api-skeleton`.
+- Added shared API schemas for structured errors plus tenant, customer, and ticket resource responses.
+- Added API request context middleware for request ID, correlation ID, placeholder bearer auth, placeholder actor headers, role parsing, and tenant context headers for `/v1/*`.
+- Added structured API error handling and `TENANT_CONTEXT_REQUIRED`.
+- Added `GET /openapi.json` from a generated OpenAPI document builder.
+- Preserved public `GET /health` and `GET /ready`.
+- Added read-only `GET /v1/tenants/{tenant_id}`, `GET /v1/customers/{customer_id}`, and `GET /v1/tickets/{ticket_id}` skeleton handlers with shared-schema response validation.
+- Added DB-backed API service adapters that lazily open PostgreSQL and run tenant-scoped reads through `withTenantTransaction`.
+- Added `tenantByIdQuery` and `withTenantTransaction`; the helper sets local role `support_app`, then transaction-local `app.current_tenant_id`, then exposes a transaction-bound Drizzle database.
+- Fixed `withTenantTransaction` to carry the parent postgres-js parser/serializer options into the transaction-scoped client before constructing Drizzle.
+- Updated API, shared-schema, DB helper, and RLS integration tests for the new contracts and transaction helper.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, and `docs/PROJECT_HISTORY.md` for the API skeleton and helper behavior.
 - Created feature branch `feat/db-rls-policies` from updated `main` after the repository integration branch was merged.
 - Added `packages/db/migrations/0002_tenant_rls.sql`, which defines `support_current_tenant_id()`, creates/grants the non-owner `support_app` role for application access, enables RLS on tenant-scoped tables, rejects missing tenant context, and keeps global tool definitions visible.
 - Added `packages/db/src/rls.ts` with a transaction-local tenant-context helper for `app.current_tenant_id`.
@@ -64,9 +76,19 @@ The next implementation task is:
 - `pnpm typecheck` passes.
 - `pnpm test` passes.
 - `pnpm build` passes.
-- `pnpm --filter @support/db test` passes, including 16 normal tests with the 10 live integration cases skipped unless explicitly enabled.
-- `pnpm --filter @support/db typecheck` passes.
-- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes against the local Compose PostgreSQL database with 10 live repository and RLS execution tests.
+- `pnpm install` completed for the API workspace dependency updates.
+- `pnpm --filter @support/shared-schemas test` passes with 5 tests.
+- `pnpm --filter @support/shared-schemas typecheck` passes.
+- `pnpm --filter @support/api test` passes with 10 API contract tests.
+- `pnpm --filter @support/api typecheck` passes.
+- `pnpm --filter @support/db test` passes with 19 normal tests and 11 live integration tests skipped unless explicitly enabled.
+- `pnpm --filter @support/db typecheck` passes after the tenant transaction helper fix.
+- `pnpm format:check` passes after the API skeleton changes.
+- `pnpm lint` passes after the API skeleton changes.
+- `pnpm typecheck` passes after the API skeleton changes.
+- `pnpm test` passes after the API skeleton changes.
+- `pnpm build` passes after the API skeleton changes.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes against the local Compose PostgreSQL database with 11 live repository and RLS execution tests.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` applied and verified `0002_tenant_rls` locally.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` returns no pending migrations after RLS migration application.
 - `pnpm infra:up` starts the Docker Compose stack successfully.
@@ -78,6 +100,8 @@ The next implementation task is:
 ### Active Blockers
 
 - GitHub Actions includes the live PostgreSQL repository/RLS integration test step, but the RLS branch workflow has not run remotely yet.
+- API auth is still a placeholder header contract; no real identity provider or RBAC enforcement exists yet.
+- API handlers have fast contract tests, but PostgreSQL-backed API integration tests have not been added yet.
 - Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
 - No real client/pilot data exists yet.
 - No OpenAI/model provider credentials configured yet.
@@ -214,24 +238,24 @@ Goal: Expose typed backend APIs without full business automation.
 
 Checklist:
 
-- [ ] Create API service.
-- [ ] Add auth placeholder/middleware.
-- [ ] Add tenant context middleware.
-- [ ] Add request ID/correlation ID middleware.
-- [ ] Add structured error format.
-- [ ] Add OpenAPI generation.
-- [ ] Add health endpoint.
-- [ ] Add readiness endpoint.
-- [ ] Add tenant endpoints.
-- [ ] Add customer endpoints.
+- [x] Create API service.
+- [x] Add auth placeholder/middleware.
+- [x] Add tenant context middleware.
+- [x] Add request ID/correlation ID middleware.
+- [x] Add structured error format.
+- [x] Add OpenAPI generation.
+- [x] Add health endpoint.
+- [x] Add readiness endpoint.
+- [ ] Add tenant endpoints. Current: by-id read skeleton only.
+- [ ] Add customer endpoints. Current: by-id read skeleton only.
 - [ ] Add conversation endpoints.
-- [ ] Add ticket endpoints.
+- [ ] Add ticket endpoints. Current: by-id read skeleton only.
 - [ ] Add message endpoints.
 - [ ] Add policy endpoints.
 - [ ] Add KB metadata endpoints.
 - [ ] Add approval endpoints.
 - [ ] Add audit read endpoints.
-- [ ] Add contract tests.
+- [x] Add contract tests for current API skeleton.
 
 Acceptance criteria:
 
@@ -481,6 +505,21 @@ Acceptance criteria:
 
 Use reverse chronological order.
 
+### 2026-06-19
+
+- Started Milestone 3 API skeleton:
+  - Added placeholder auth, actor, role, tenant, request ID, and correlation ID middleware.
+  - Added structured error responses with shared schema validation.
+  - Added generated OpenAPI document endpoint.
+  - Added read-only tenant/customer/ticket by-id skeleton endpoints.
+  - Added DB-backed service adapters using the new tenant transaction helper.
+- Extended DB RLS helpers:
+  - Added `withTenantTransaction`.
+  - Added tenant repository query helper.
+  - Verified helper ordering in unit tests and helper behavior in live RLS integration coverage.
+- Added shared API contract schemas for structured errors and first resource responses.
+- Updated API, backend, testing, project history, README, and TODO documentation for the new API skeleton.
+
 ### 2026-06-18
 
 - Completed and verified Milestone 1 backend scaffold:
@@ -509,6 +548,21 @@ Use reverse chronological order.
 ## Verification Log
 
 Use reverse chronological order.
+
+### 2026-06-19
+
+- Updated workspace dependencies with `pnpm install`.
+- Verified shared schema tests with `pnpm --filter @support/shared-schemas test`.
+- Verified shared schema typecheck with `pnpm --filter @support/shared-schemas typecheck`.
+- Verified DB tests with `pnpm --filter @support/db test`.
+- Verified API contract tests with `pnpm --filter @support/api test`.
+- Verified API typecheck with `pnpm --filter @support/api typecheck`.
+- Verified repo formatting with `pnpm format:check`.
+- Verified repo lint with `pnpm lint`.
+- Verified repo typecheck with `pnpm typecheck`.
+- Verified repo tests with `pnpm test`.
+- Verified repo build with `pnpm build`.
+- Verified live PostgreSQL repository/RLS integration tests with `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
 
 ### 2026-06-18
 

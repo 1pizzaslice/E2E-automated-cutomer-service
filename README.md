@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness plus backend scaffold. No business workflow implementation yet.
+Current status: documentation harness, backend scaffold, database/RLS foundation, and first Milestone 3 API skeleton. No business workflow implementation yet.
 
 ## Start Here
 
@@ -86,6 +86,19 @@ Services:
 - MinIO API: `http://localhost:9000`
 - MinIO console: `http://localhost:9001`
 - OpenTelemetry collector: `localhost:4317` and `localhost:4318`
+
+## Current API Skeleton
+
+Implemented endpoints:
+
+- `GET /health`
+- `GET /ready`
+- `GET /openapi.json`
+- `GET /v1/tenants/{tenant_id}`
+- `GET /v1/customers/{customer_id}`
+- `GET /v1/tickets/{ticket_id}`
+
+Non-health endpoints require placeholder auth headers. `/v1/*` endpoints also require `x-tenant-id`; tenant-scoped DB work uses the DB package RLS transaction helper.
 
 ## Scope
 

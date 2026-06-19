@@ -723,12 +723,43 @@ Rules:
 
 ## 17. API Endpoint Families
 
-Current scaffold implements only:
+Current API skeleton implements:
 
 - `GET /health`
 - `GET /ready`
+- `GET /openapi.json`
+- `GET /v1/tenants/{tenant_id}`
+- `GET /v1/customers/{customer_id}`
+- `GET /v1/tickets/{ticket_id}`
+
+The current tenant, customer, and ticket endpoints are read-only skeleton
+contracts. They validate headers, path params, and response bodies, then use the
+DB package tenant transaction helper for data access. They do not yet implement
+list, create, update, workflow, RBAC permission, idempotency, or audit behavior.
 
 The remaining endpoint families below are the target contract for future milestones.
+
+### 17.0 Common API Contract
+
+Required on every non-health endpoint:
+
+- `Authorization: Bearer <token>` placeholder auth header.
+- `x-user-id` placeholder actor identifier.
+- `x-user-email` optional actor email.
+- `x-user-roles` optional comma-separated role list, defaulting to `support_agent`.
+- `x-request-id` optional request ID. If omitted, the API generates one.
+- `x-correlation-id` optional correlation ID. If omitted, it defaults to the request ID.
+
+Required on `/v1/*` tenant-scoped endpoints:
+
+- `x-tenant-id`
+
+Response rules:
+
+- `x-request-id` and `x-correlation-id` are echoed on responses.
+- Health and readiness do not require auth.
+- `GET /openapi.json` requires auth but no tenant context because it is a global contract document.
+- `/v1/tenants/{tenant_id}` currently requires `{tenant_id}` to match `x-tenant-id`; broader platform-admin tenant access is deferred until RBAC is implemented.
 
 ### 17.1 Health
 
@@ -736,6 +767,12 @@ The remaining endpoint families below are the target contract for future milesto
 - `GET /ready`
 
 No auth required.
+
+### 17.1.1 OpenAPI
+
+- `GET /openapi.json`
+
+Auth required. Tenant context not required.
 
 ### 17.2 Tenants
 
@@ -946,6 +983,7 @@ Error codes:
 - `VALIDATION_ERROR`
 - `AUTH_REQUIRED`
 - `FORBIDDEN`
+- `TENANT_CONTEXT_REQUIRED`
 - `TENANT_NOT_FOUND`
 - `RESOURCE_NOT_FOUND`
 - `CONFLICT`
@@ -1007,9 +1045,11 @@ Implemented artifacts:
 - Migration runner: `packages/db/src/migrations.ts` and `packages/db/src/migrate.ts`.
 - Repository query helpers: `packages/db/src/repositories.ts`.
 - Tenant context helper: `packages/db/src/rls.ts`.
+- Tenant transaction helper: `packages/db/src/rls.ts`.
 - Live repository execution tests: `packages/db/src/repositories.integration.test.ts`.
 - Live RLS negative tests: `packages/db/src/rls.integration.test.ts`.
 - Drizzle config for future migration drafts: `packages/db/drizzle.config.ts`.
+- API skeleton and contract tests: `packages/api/src/app.ts` and `packages/api/src/app.test.ts`.
 
 Commands:
 
@@ -1029,6 +1069,7 @@ Initial schema choices:
 - PostgreSQL row-level security is enabled for tenant-scoped tables before tenant-scoped API endpoints are exposed.
 - Runtime tenant access uses the `app.current_tenant_id` PostgreSQL setting. API and worker code must set it transaction-locally through the DB package helper before tenant-scoped reads or writes.
 - The `support_app` database role is the non-owner application role used for RLS enforcement. The local migration grants it DML access to current domain tables for runtime and test verification.
+- `withTenantTransaction` sets `set local role support_app`, sets `app.current_tenant_id`, and exposes a transaction-bound Drizzle database to the caller before tenant-scoped repository work runs.
 - RLS rejects missing tenant context, hides cross-tenant rows from raw SQL reads, blocks cross-tenant writes, and still allows global `tool_definitions` where `tenant_id is null`.
 - The migration runner takes a PostgreSQL advisory lock before applying migrations so parallel live integration suites do not race schema changes.
 

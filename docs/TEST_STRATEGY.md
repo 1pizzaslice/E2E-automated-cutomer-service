@@ -270,8 +270,14 @@ Current Milestone 2 coverage:
 - `packages/db/src/migrations.test.ts` checks the initial SQL migration inventory.
 - `packages/db/src/schema.test.ts` checks core schema constants such as the KB embedding vector dimension.
 - `packages/db/src/repositories.test.ts` compiles repository queries and asserts tenant filters in generated SQL.
+- `packages/db/src/rls.test.ts` checks tenant context helpers and verifies `withTenantTransaction` sets the application role before scoped work in unit tests.
 - `packages/db/src/repositories.integration.test.ts` applies pending SQL migrations, inserts synthetic tenant A/B fixtures, executes repository helpers against PostgreSQL, verifies no cross-tenant rows are returned, and cleans up fixture rows.
-- `packages/db/src/rls.integration.test.ts` applies pending SQL migrations, uses `support_app` with transaction-local tenant context, verifies raw SQL cannot read cross-tenant rows, verifies missing context is rejected, verifies cross-tenant writes are blocked, and verifies global tool definitions remain visible.
+- `packages/db/src/rls.integration.test.ts` applies pending SQL migrations, uses `support_app` with transaction-local tenant context, verifies raw SQL cannot read cross-tenant rows, verifies missing context is rejected, verifies cross-tenant writes are blocked, verifies global tool definitions remain visible, and verifies the tenant transaction helper runs repository work under the application role.
+
+Current Milestone 3 API skeleton coverage:
+
+- `packages/shared-schemas/src/index.test.ts` validates structured API errors and the first tenant/customer/ticket resource response schemas.
+- `packages/api/src/app.test.ts` covers public health/readiness, auth-required errors, tenant-context-required errors, authenticated OpenAPI document access, request ID echoing, tenant path mismatch rejection, tenant/customer/ticket response schemas, and structured not-found errors.
 
 ## 4. Golden Dataset
 

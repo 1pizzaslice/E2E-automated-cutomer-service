@@ -6,6 +6,7 @@ import {
   auditEventsForEntityQuery,
   customerByIdQuery,
   integrationByIdQuery,
+  tenantByIdQuery,
   ticketByIdQuery,
   visibleToolDefinitionByNameQuery,
 } from "./repositories.js";
@@ -29,6 +30,15 @@ afterEach(async () => {
 });
 
 describe("tenant-scoped repository queries", () => {
+  it("scopes tenant reads by the current tenant", () => {
+    const query = tenantByIdQuery(makeDb(), { tenantId: "ten_a" }, "ten_a");
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"tenants"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"tenants"."tenant_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "ten_a", 1]);
+  });
+
   it("scopes customer reads by tenant", () => {
     const query = customerByIdQuery(makeDb(), { tenantId: "ten_a" }, "cus_a");
     const compiled = query.toSQL();

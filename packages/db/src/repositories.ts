@@ -5,12 +5,27 @@ import {
   customers,
   integrations,
   kbChunks,
+  tenants,
   tickets,
   toolDefinitions,
 } from "./schema.js";
 
 export interface TenantScope {
   readonly tenantId: string;
+}
+
+export function tenantByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  tenantId: string,
+) {
+  return db
+    .select()
+    .from(tenants)
+    .where(
+      and(eq(tenants.tenantId, scope.tenantId), eq(tenants.tenantId, tenantId)),
+    )
+    .limit(1);
 }
 
 export function customerByIdQuery(
