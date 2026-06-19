@@ -117,6 +117,8 @@ Required tests:
 - Tenant A cannot execute tools with Tenant B credentials.
 - Tenant A cannot read Tenant B audit events.
 - Missing tenant context is rejected.
+- PostgreSQL RLS hides cross-tenant rows even for raw SQL when the application role is used.
+- PostgreSQL RLS blocks cross-tenant writes under the current tenant context.
 
 ### 3.2 Auth And RBAC
 
@@ -255,11 +257,13 @@ Required tests:
 
 - Migration inventory includes every Milestone 2 core table.
 - Migration inventory includes tenant-scoped indexes and idempotency uniqueness.
+- Migration inventory includes the RLS migration, tenant-context function, application role, and tenant-scoped policy coverage.
 - Drizzle schema compiles against the checked-in SQL contract.
 - Repository query helpers include tenant filters for tenant-scoped reads.
 - Global tool-definition reads allow `tenant_id is null` but must not allow other tenants.
 - Live migration verification should run against the local PostgreSQL service before database changes are considered complete.
 - Live repository execution tests should use real PostgreSQL fixtures for customers, tickets, KB chunks, integrations, tool definitions, and audit events.
+- Live RLS tests should use the non-owner `support_app` role, set `app.current_tenant_id` transaction-locally, and prove missing context, cross-tenant reads, cross-tenant writes, and global tool visibility behavior.
 
 Current Milestone 2 coverage:
 
@@ -267,6 +271,7 @@ Current Milestone 2 coverage:
 - `packages/db/src/schema.test.ts` checks core schema constants such as the KB embedding vector dimension.
 - `packages/db/src/repositories.test.ts` compiles repository queries and asserts tenant filters in generated SQL.
 - `packages/db/src/repositories.integration.test.ts` applies pending SQL migrations, inserts synthetic tenant A/B fixtures, executes repository helpers against PostgreSQL, verifies no cross-tenant rows are returned, and cleans up fixture rows.
+- `packages/db/src/rls.integration.test.ts` applies pending SQL migrations, uses `support_app` with transaction-local tenant context, verifies raw SQL cannot read cross-tenant rows, verifies missing context is rejected, verifies cross-tenant writes are blocked, and verifies global tool definitions remain visible.
 
 ## 4. Golden Dataset
 

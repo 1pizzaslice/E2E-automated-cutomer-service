@@ -1003,16 +1003,19 @@ Implemented artifacts:
 
 - Drizzle schema: `packages/db/src/schema.ts`.
 - Reviewed SQL migration: `packages/db/migrations/0001_initial_core.sql`.
+- Row-level security migration: `packages/db/migrations/0002_tenant_rls.sql`.
 - Migration runner: `packages/db/src/migrations.ts` and `packages/db/src/migrate.ts`.
 - Repository query helpers: `packages/db/src/repositories.ts`.
+- Tenant context helper: `packages/db/src/rls.ts`.
 - Live repository execution tests: `packages/db/src/repositories.integration.test.ts`.
+- Live RLS negative tests: `packages/db/src/rls.integration.test.ts`.
 - Drizzle config for future migration drafts: `packages/db/drizzle.config.ts`.
 
 Commands:
 
 - Apply local migrations: `pnpm db:migrate`.
 - Generate future migration drafts: `pnpm --filter @support/db generate:migration`.
-- Run live repository integration tests: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
+- Run live PostgreSQL integration tests: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
 
 Initial schema choices:
 
@@ -1023,9 +1026,13 @@ Initial schema choices:
 - Tool definitions may be global when `tenant_id is null`; tenant query helpers allow global active tools while excluding other tenants.
 - Idempotency support starts with the `idempotency_keys` table and operation/key uniqueness per tenant.
 - Live repository execution tests seed two synthetic tenants and prove the tenant-scoped helpers execute against PostgreSQL without returning cross-tenant customers, tickets, KB chunks, integrations, tool definitions, or audit events.
-- PostgreSQL row-level security is not implemented yet. Per ADR-0013, add RLS policies before exposing tenant-scoped API endpoints.
+- PostgreSQL row-level security is enabled for tenant-scoped tables before tenant-scoped API endpoints are exposed.
+- Runtime tenant access uses the `app.current_tenant_id` PostgreSQL setting. API and worker code must set it transaction-locally through the DB package helper before tenant-scoped reads or writes.
+- The `support_app` database role is the non-owner application role used for RLS enforcement. The local migration grants it DML access to current domain tables for runtime and test verification.
+- RLS rejects missing tenant context, hides cross-tenant rows from raw SQL reads, blocks cross-tenant writes, and still allows global `tool_definitions` where `tenant_id is null`.
+- The migration runner takes a PostgreSQL advisory lock before applying migrations so parallel live integration suites do not race schema changes.
 
 Rollback and compatibility:
 
-- The initial migration is intended for empty development and pilot databases.
+- The initial and RLS migrations are intended for empty development and pilot databases.
 - There is no automated down migration yet. Before production data exists, rollback is drop-and-recreate. After production data exists, every schema change must include a compatibility or data migration plan.

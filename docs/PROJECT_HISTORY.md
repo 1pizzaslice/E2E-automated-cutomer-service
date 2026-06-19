@@ -12,7 +12,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - No business workflows have been implemented yet.
 - Milestone 0 documentation harness is complete.
 - Milestone 1 backend scaffold is complete and locally verified.
-- Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests.
+- Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
 
 ## Product Direction
 
@@ -112,9 +112,12 @@ Database foundation:
 - Drizzle selected for the TypeScript schema/query layer.
 - `packages/db/src/schema.ts`
 - `packages/db/migrations/0001_initial_core.sql`
+- `packages/db/migrations/0002_tenant_rls.sql`
 - `packages/db/src/migrations.ts`
 - `packages/db/src/repositories.ts`
+- `packages/db/src/rls.ts`
 - `packages/db/src/repositories.integration.test.ts`
+- `packages/db/src/rls.integration.test.ts`
 - `packages/db/drizzle.config.ts`
 
 ## Verification Completed
@@ -137,8 +140,8 @@ The following passed locally in the cloned repo:
 
 ## Current Architecture Follow-Ups
 
-- PostgreSQL row-level security should be added before exposing tenant-scoped API endpoints.
-- Repository tenant filters remain mandatory even after RLS is added.
+- Repository tenant filters remain mandatory even with PostgreSQL row-level security.
+- API and worker database code must set transaction-local `app.current_tenant_id` before tenant-scoped operations.
 - CI includes a live PostgreSQL integration test job step, but the remote workflow result has not been observed yet.
 
 ## Errors Encountered And Fixes
@@ -223,9 +226,8 @@ Fix:
 
 ## Next Recommended Task
 
-Continue Milestone 2:
+Start Milestone 3 by creating the backend API skeleton:
 
-1. Add PostgreSQL row-level security migration and policies for tenant-scoped tables.
-2. Add live negative tests that set tenant context and prove RLS blocks cross-tenant reads.
-3. Preserve the existing repository tenant filters as application-level enforcement.
-4. Update `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, and `TODO.md` with the RLS contract and verification.
+1. Add auth and tenant-context middleware placeholders.
+2. Ensure tenant-scoped handlers run database work inside transactions that set `app.current_tenant_id`.
+3. Add health/readiness plus first typed tenant/customer/ticket contract tests.

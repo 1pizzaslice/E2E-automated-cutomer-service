@@ -10,6 +10,7 @@ export interface SqlMigration {
 }
 
 export const MIGRATIONS_TABLE = "schema_migrations";
+export const MIGRATIONS_ADVISORY_LOCK_ID = 513248771777;
 
 export function migrationIdFromFilename(filename: string): string {
   const match = /^(?<id>\d{4,}_[a-z0-9_]+)\.sql$/.exec(filename);
@@ -68,26 +69,32 @@ export async function applySqlMigrations(
   client: PostgresClient,
   migrations: readonly SqlMigration[],
 ): Promise<string[]> {
-  const applied = await appliedMigrationIds(client);
-  const newlyApplied: string[] = [];
+  await client`select pg_advisory_lock(${MIGRATIONS_ADVISORY_LOCK_ID})`;
 
-  for (const migration of migrations) {
-    if (applied.has(migration.id)) {
-      continue;
+  try {
+    const applied = await appliedMigrationIds(client);
+    const newlyApplied: string[] = [];
+
+    for (const migration of migrations) {
+      if (applied.has(migration.id)) {
+        continue;
+      }
+
+      await client.begin(async (transaction) => {
+        await transaction.unsafe(migration.sql);
+        await transaction`
+          insert into schema_migrations (id, filename)
+          values (${migration.id}, ${migration.filename})
+        `;
+      });
+
+      newlyApplied.push(migration.id);
     }
 
-    await client.begin(async (transaction) => {
-      await transaction.unsafe(migration.sql);
-      await transaction`
-        insert into schema_migrations (id, filename)
-        values (${migration.id}, ${migration.filename})
-      `;
-    });
-
-    newlyApplied.push(migration.id);
+    return newlyApplied;
+  } finally {
+    await client`select pg_advisory_unlock(${MIGRATIONS_ADVISORY_LOCK_ID})`;
   }
-
-  return newlyApplied;
 }
 
 export async function migrateDatabase(

@@ -69,7 +69,7 @@ pnpm test:py
 pnpm infra:up
 ```
 
-Live PostgreSQL integration tests require the local PostgreSQL service:
+Live PostgreSQL integration tests require the local PostgreSQL service and cover repository tenant filters plus PostgreSQL RLS:
 
 ```bash
 DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
