@@ -259,12 +259,14 @@ Required tests:
 - Repository query helpers include tenant filters for tenant-scoped reads.
 - Global tool-definition reads allow `tenant_id is null` but must not allow other tenants.
 - Live migration verification should run against the local PostgreSQL service before database changes are considered complete.
+- Live repository execution tests should use real PostgreSQL fixtures for customers, tickets, KB chunks, integrations, tool definitions, and audit events.
 
 Current Milestone 2 coverage:
 
 - `packages/db/src/migrations.test.ts` checks the initial SQL migration inventory.
 - `packages/db/src/schema.test.ts` checks core schema constants such as the KB embedding vector dimension.
 - `packages/db/src/repositories.test.ts` compiles repository queries and asserts tenant filters in generated SQL.
+- `packages/db/src/repositories.integration.test.ts` applies pending SQL migrations, inserts synthetic tenant A/B fixtures, executes repository helpers against PostgreSQL, verifies no cross-tenant rows are returned, and cleans up fixture rows.
 
 ## 4. Golden Dataset
 
@@ -381,6 +383,15 @@ pnpm build
 pnpm test:integration
 pnpm test:py
 ```
+
+Run live database integration tests with the local infrastructure database:
+
+```bash
+pnpm infra:up
+DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
+```
+
+CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service.
 
 Current Python tests use standard library `unittest` because `uv` is not installed locally. When the LangGraph AI runtime is implemented, add the chosen Python dependency manager and update this file with the real eval/test commands.
 

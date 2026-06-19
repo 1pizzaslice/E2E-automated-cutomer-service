@@ -32,6 +32,7 @@ pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:integration
 pnpm db:migrate
 pnpm dev
 pnpm infra:up
@@ -66,6 +67,12 @@ pnpm test:py
 
 ```bash
 pnpm infra:up
+```
+
+Live PostgreSQL integration tests require the local PostgreSQL service:
+
+```bash
+DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
 ```
 
 Services:

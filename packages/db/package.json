@@ -12,6 +12,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/migrate.ts",
     "test": "vitest run",
+    "test:integration": "RUN_DB_INTEGRATION_TESTS=true vitest run src/repositories.integration.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -6,21 +6,27 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 2 database foundation implemented and locally verified.
+- Project phase: Milestone 2 database foundation implemented and locally verified; RLS hardening is the final pre-API database task.
 - Current milestone: Milestone 2 - database and core models.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, and tenant-scoped repository query helpers. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, and live PostgreSQL repository execution tests. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Continue Milestone 2 by adding live PostgreSQL repository execution tests with fixtures for tenant isolation across customers, tickets, KB chunks, integrations, tool definitions, and audit events. Then decide whether to add PostgreSQL row-level security before exposing API endpoints.
+> Continue Milestone 2 by adding PostgreSQL row-level security policies for tenant-scoped tables before exposing API endpoints. Keep repository tenant filters mandatory, add a migration for RLS, and add live negative tests that prove cross-tenant reads are blocked when tenant context is set.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat/db-repository-integration-tests`.
+- Replaced the root integration-test placeholder with `pnpm test:integration`.
+- Added `packages/db/src/repositories.integration.test.ts`, which applies pending migrations, seeds two synthetic tenants, executes repository helpers against PostgreSQL, verifies tenant isolation for customers, tickets, KB chunks, integrations, tool definitions, and audit events, then cleans up fixture rows.
+- Added a CI PostgreSQL service and `pnpm test:integration` workflow step.
+- Recorded ADR-0013: PostgreSQL row-level security should be added before tenant-scoped API endpoints are exposed.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/DEVELOPMENT_RULES.md`, `docs/TEST_STRATEGY.md`, `docs/DECISIONS.md`, and `docs/PROJECT_HISTORY.md` for live repository tests and the RLS decision.
 - Selected Drizzle for the TypeScript PostgreSQL schema/query layer.
 - Added `@support/db` Drizzle schema for the Milestone 2 core tables.
 - Added reviewed SQL migration `packages/db/migrations/0001_initial_core.sql`.
@@ -52,8 +58,9 @@ The next implementation task is:
 - `pnpm typecheck` passes.
 - `pnpm test` passes.
 - `pnpm build` passes.
-- `pnpm --filter @support/db test` passes.
+- `pnpm --filter @support/db test` passes, including 14 normal tests with the 6 live integration cases skipped unless explicitly enabled.
 - `pnpm --filter @support/db typecheck` passes.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes against the local Compose PostgreSQL database with 6 live repository execution tests.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` applied `0001_initial_core`.
 - A second `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` returned no pending migrations.
 - `pnpm infra:up` starts the Docker Compose stack successfully.
@@ -64,8 +71,7 @@ The next implementation task is:
 
 ### Active Blockers
 
-- GitHub Actions has been added but has not run remotely yet.
-- CI does not yet run live PostgreSQL migration/repository integration tests.
+- GitHub Actions includes the live PostgreSQL repository integration test step, but it has not run remotely yet.
 - Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
 - No real client/pilot data exists yet.
 - No OpenAI/model provider credentials configured yet.
@@ -73,9 +79,7 @@ The next implementation task is:
 ### Open Questions
 
 - Which Python package manager to use for the full AI runtime: recommended default remains `uv`, but local machine currently lacks `uv`.
-- Whether to add PostgreSQL row-level security before API endpoints are exposed.
 - Which embedding model/dimension to standardize before production KB ingestion; current initial column is `vector(1536)`.
-- First branch to create after pushing `main`: recommended `feat/db-repository-integration-tests`.
 
 ## Global Completion Checklist
 
@@ -186,6 +190,9 @@ Checklist:
 - [x] Add idempotency key support.
 - [x] Add migration test.
 - [x] Add tenant isolation tests.
+- [x] Add live PostgreSQL repository execution tests.
+- [x] Decide whether PostgreSQL RLS is required before tenant-scoped API endpoints.
+- [ ] Add PostgreSQL RLS policies and live RLS negative tests.
 
 Acceptance criteria:
 
@@ -193,6 +200,7 @@ Acceptance criteria:
 - [x] Migrations can be rolled back or compatibility path is documented.
 - [x] Core repository tests pass.
 - [x] Tenant-scoped query tests prove no cross-tenant reads.
+- [ ] PostgreSQL RLS blocks cross-tenant reads before tenant-scoped API endpoints are exposed.
 
 ## Milestone 3: Backend API Skeleton
 
