@@ -92,6 +92,26 @@ Every non-trivial task should follow this loop:
 11. Update `TODO.md`.
 12. Summarize result, verification, and next step.
 
+## 2.1 Branching Strategy
+
+Use `main` as the stable checkpoint branch. Work directly on `main` only for baseline setup, documentation bootstrapping, and small emergency fixes.
+
+After the baseline is stable, use short-lived feature branches for each coherent concern. Branch names should describe the milestone slice, for example:
+
+- `feat/db-repository-integration-tests`
+- `feat/api-skeleton`
+- `feat/event-bus-foundation`
+- `feat/temporal-ticket-workflow`
+
+Before merging a feature branch back to `main`:
+
+- Relevant tests and checks must pass.
+- Concerned docs must be updated.
+- `TODO.md` must include the latest handoff.
+- The branch should contain one coherent reviewable change set, not unrelated work.
+
+This keeps AI coding sessions easier to review, roll back, and resume while preserving `main` as the source of stable handoffs.
+
 ## 3. Task Intake Template
 
 When starting a task, capture:
@@ -238,6 +258,7 @@ pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm db:migrate
 pnpm dev
 pnpm infra:up
 pnpm infra:down

@@ -117,3 +117,12 @@ Use this format:
 - Decision: Use Drizzle for the TypeScript database schema/query layer. Keep reviewed SQL migrations in `packages/db/migrations/`, with Drizzle config available for generating future migration drafts.
 - Consequences: Engineers and agents must understand SQL and review generated migrations. Repository helpers should enforce tenant scope instead of exposing unscoped table access by default.
 - Follow-up: Add live migration verification to CI once integration infrastructure is available in CI.
+
+## ADR-0012: Stable Main Plus Short-Lived Feature Branches
+
+- Date: 2026-06-19
+- Status: Accepted
+- Context: AI-first coding benefits from clear, resumable units of work. During the earliest scaffold phase, direct commits to `main` kept setup simple. As the baseline stabilizes, separate branches make review, rollback, and parallel concern tracking cleaner.
+- Decision: Keep `main` as the stable checkpoint branch. After baseline setup, prefer short-lived feature branches for separate concerns and merge back only after checks, docs, and `TODO.md` handoff updates are complete.
+- Consequences: Future agents should create branches such as `feat/api-skeleton` or `feat/db-repository-integration-tests` before substantial implementation work. `main` should remain green and understandable from repo docs alone.
+- Follow-up: Push the current baseline to `main`, then start the next implementation task from a feature branch.

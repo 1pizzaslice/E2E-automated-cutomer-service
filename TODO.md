@@ -29,6 +29,7 @@ The next implementation task is:
 - Added migration/schema/repository tests.
 - Applied the initial migration to the local Compose PostgreSQL database and reran it to verify idempotency.
 - Updated `docs/BACKEND_SPEC.md`, `docs/DECISIONS.md`, `docs/DEVELOPMENT_RULES.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, `AGENTS.md`, and `README.md`.
+- Accepted a branching workflow: keep `main` stable, then use short-lived feature branches for separate concerns after the baseline checkpoint is pushed.
 - Created the initial documentation harness plan.
 - Added backend scaffold files for TypeScript packages, Python AI runtime placeholder, Docker Compose infra, and CI.
 - Moved scaffold into cloned GitHub repo at `/home/anish/CODE01/STARTUPS/E2E-automated-cutomer-service`.
@@ -74,6 +75,7 @@ The next implementation task is:
 - Which Python package manager to use for the full AI runtime: recommended default remains `uv`, but local machine currently lacks `uv`.
 - Whether to add PostgreSQL row-level security before API endpoints are exposed.
 - Which embedding model/dimension to standardize before production KB ingestion; current initial column is `vector(1536)`.
+- First branch to create after pushing `main`: recommended `feat/db-repository-integration-tests`.
 
 ## Global Completion Checklist
 
