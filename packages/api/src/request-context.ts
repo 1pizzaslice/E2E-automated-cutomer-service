@@ -20,6 +20,10 @@ export interface RequestContext {
   readonly tenant?: TenantContext;
 }
 
+export interface AuthenticatedRequestContext extends RequestContext {
+  readonly actor: AuthContext;
+}
+
 export interface TenantRequestContext extends RequestContext {
   readonly actor: AuthContext;
   readonly tenant: TenantContext;
@@ -64,11 +68,7 @@ export function registerRequestContext(app: FastifyInstance): void {
 export function requireTenantRequestContext(
   request: FastifyRequest,
 ): TenantRequestContext {
-  const context = request.requestContext;
-
-  if (!context?.actor) {
-    throw new HttpError(401, "AUTH_REQUIRED", "Authentication is required.");
-  }
+  const context = requireAuthenticatedRequestContext(request);
 
   if (!context.tenant) {
     throw new HttpError(
@@ -79,6 +79,18 @@ export function requireTenantRequestContext(
   }
 
   return context as TenantRequestContext;
+}
+
+export function requireAuthenticatedRequestContext(
+  request: FastifyRequest,
+): AuthenticatedRequestContext {
+  const context = request.requestContext;
+
+  if (!context?.actor) {
+    throw new HttpError(401, "AUTH_REQUIRED", "Authentication is required.");
+  }
+
+  return context as AuthenticatedRequestContext;
 }
 
 function readAuthContext(request: FastifyRequest): AuthContext {

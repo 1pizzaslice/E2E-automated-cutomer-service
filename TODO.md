@@ -6,21 +6,28 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton initial pass is implemented with focused local verification; endpoint expansion and RBAC are next.
+- Project phase: Milestone 3 API skeleton initial pass is implemented with RBAC checks and PostgreSQL-backed API read integration coverage; endpoint expansion is next.
 - Current milestone: Milestone 3 - backend API skeleton.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, and read-only tenant/customer/ticket contract endpoints. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current read endpoints, PostgreSQL-backed API read integration tests, and read-only tenant/customer/ticket contract endpoints. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Continue Milestone 3 by adding real RBAC checks and PostgreSQL-backed API integration tests for the existing tenant/customer/ticket read endpoints, then expand list/create/update contracts where the schema already supports them.
+> Continue Milestone 3 by expanding tenant/customer/ticket list/create/update contracts where the schema already supports them, extending RBAC per endpoint, and keeping PostgreSQL-backed API integration coverage for tenant isolation.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat/api-rbac-integration-tests` from `main` for the current Milestone 3 continuation.
+- Added `packages/api/src/rbac.ts` with a current role-to-permission matrix for `openapi:read`, `tenants:read`, `customers:read`, and `tickets:read`.
+- Added authenticated-context access for non-tenant global endpoints and enforced RBAC on `GET /openapi.json`, `GET /v1/tenants/{tenant_id}`, `GET /v1/customers/{customer_id}`, and `GET /v1/tickets/{ticket_id}` before service/data access.
+- Updated API contract tests to require `ops_admin` for tenant reads and to reject `support_agent` tenant reads with structured `FORBIDDEN`.
+- Added `packages/api/src/app.integration.test.ts`, which applies migrations, seeds tenant A/B PostgreSQL fixtures, exercises tenant/customer/ticket read endpoints over HTTP, verifies tenant isolation for customer/ticket IDs, verifies tenant-read RBAC denial, and cleans up fixtures.
+- Added `pnpm --filter @support/api test:integration` and expanded root `pnpm test:integration` to run DB/RLS integration tests plus API PostgreSQL-backed read integration tests.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/DEVELOPMENT_RULES.md`, and `docs/PROJECT_HISTORY.md` for the current RBAC and API integration test behavior.
 - Created feature branch `feat/api-skeleton`.
 - Added shared API schemas for structured errors plus tenant, customer, and ticket resource responses.
 - Added API request context middleware for request ID, correlation ID, placeholder bearer auth, placeholder actor headers, role parsing, and tenant context headers for `/v1/*`.
@@ -79,16 +86,18 @@ The next implementation task is:
 - `pnpm install` completed for the API workspace dependency updates.
 - `pnpm --filter @support/shared-schemas test` passes with 5 tests.
 - `pnpm --filter @support/shared-schemas typecheck` passes.
-- `pnpm --filter @support/api test` passes with 10 API contract tests.
+- `pnpm --filter @support/api test` passes with 11 API contract tests and the live API integration suite skipped by default.
 - `pnpm --filter @support/api typecheck` passes.
 - `pnpm --filter @support/db test` passes with 19 normal tests and 11 live integration tests skipped unless explicitly enabled.
 - `pnpm --filter @support/db typecheck` passes after the tenant transaction helper fix.
-- `pnpm format:check` passes after the API skeleton changes.
-- `pnpm lint` passes after the API skeleton changes.
-- `pnpm typecheck` passes after the API skeleton changes.
-- `pnpm test` passes after the API skeleton changes.
+- `pnpm format:check` passes after the RBAC/API integration changes.
+- `pnpm lint` passes after the RBAC/API integration changes.
+- `pnpm typecheck` passes after the RBAC/API integration changes.
+- `pnpm test` passes after the RBAC/API integration changes.
 - `pnpm build` passes after the API skeleton changes.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes against the local Compose PostgreSQL database with 11 live repository and RLS execution tests.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm --filter @support/api test:integration` passes with 4 live PostgreSQL-backed API read tests after `pnpm infra:up`.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes with DB/RLS integration tests plus API PostgreSQL-backed read integration tests after `pnpm infra:up`.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` applied and verified `0002_tenant_rls` locally.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm db:migrate` returns no pending migrations after RLS migration application.
 - `pnpm infra:up` starts the Docker Compose stack successfully.
@@ -99,9 +108,9 @@ The next implementation task is:
 
 ### Active Blockers
 
-- GitHub Actions includes the live PostgreSQL repository/RLS integration test step, but the RLS branch workflow has not run remotely yet.
-- API auth is still a placeholder header contract; no real identity provider or RBAC enforcement exists yet.
-- API handlers have fast contract tests, but PostgreSQL-backed API integration tests have not been added yet.
+- GitHub Actions includes the live PostgreSQL integration test step, but the latest workflow with DB/RLS plus API integration coverage has not run remotely yet.
+- API auth is still a placeholder header contract; no real identity provider exists yet.
+- RBAC exists only for the current skeleton OpenAPI/tenant/customer/ticket read endpoints and must be extended as new endpoint families are added.
 - Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
 - No real client/pilot data exists yet.
 - No OpenAI/model provider credentials configured yet.
@@ -256,13 +265,15 @@ Checklist:
 - [ ] Add approval endpoints.
 - [ ] Add audit read endpoints.
 - [x] Add contract tests for current API skeleton.
+- [x] Add RBAC checks for current API skeleton endpoints.
+- [x] Add PostgreSQL-backed API integration tests for current read endpoints.
 
 Acceptance criteria:
 
 - [ ] All request/response schemas are validated.
-- [ ] OpenAPI spec is generated.
+- [x] OpenAPI spec is generated.
 - [ ] Contract tests cover happy and unhappy paths.
-- [ ] Auth and tenant context are required except health endpoints.
+- [x] Auth and tenant context are required except health endpoints.
 
 ## Milestone 4: Event Bus Foundation
 
@@ -504,6 +515,14 @@ Acceptance criteria:
 ## Completed Log
 
 Use reverse chronological order.
+
+### 2026-06-20
+
+- Continued Milestone 3 API skeleton:
+  - Added role-to-permission checks for the current OpenAPI, tenant, customer, and ticket read endpoints.
+  - Added PostgreSQL-backed API integration tests for tenant/customer/ticket read handlers and tenant isolation.
+  - Expanded root `pnpm test:integration` to run DB/RLS integration tests and API integration tests.
+- Updated README, backend spec, development rules, test strategy, project history, and TODO handoff for RBAC and API integration coverage.
 
 ### 2026-06-19
 
