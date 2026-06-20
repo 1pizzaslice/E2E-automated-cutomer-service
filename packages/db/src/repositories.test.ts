@@ -4,10 +4,15 @@ import { createDatabase, type PostgresClient } from "./client.js";
 import {
   activeKbChunksForDocumentQuery,
   auditEventsForEntityQuery,
+  customersListQuery,
   customerByIdQuery,
   integrationByIdQuery,
+  tenantsListQuery,
   tenantByIdQuery,
+  ticketsListQuery,
   ticketByIdQuery,
+  updateCustomerByIdQuery,
+  updateTicketByIdQuery,
   visibleToolDefinitionByNameQuery,
 } from "./repositories.js";
 
@@ -30,6 +35,15 @@ afterEach(async () => {
 });
 
 describe("tenant-scoped repository queries", () => {
+  it("builds tenant list reads with a bounded limit", () => {
+    const query = tenantsListQuery(makeDb(), { limit: 25 });
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('from "tenants"');
+    expect(compiled.sql).toContain("limit $1");
+    expect(compiled.params).toEqual([25]);
+  });
+
   it("scopes tenant reads by the current tenant", () => {
     const query = tenantByIdQuery(makeDb(), { tenantId: "ten_a" }, "ten_a");
     const compiled = query.toSQL();
@@ -48,6 +62,43 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.params).toEqual(["ten_a", "cus_a", 1]);
   });
 
+  it("scopes customer list reads by tenant and filters", () => {
+    const query = customersListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        limit: 10,
+        email: "customer@example.test",
+        externalCustomerRef: "external-a",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"customers"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"customers"."email" = $2');
+    expect(compiled.sql).toContain('"customers"."external_customer_ref" = $3');
+    expect(compiled.params).toEqual([
+      "ten_a",
+      "customer@example.test",
+      "external-a",
+      10,
+    ]);
+  });
+
+  it("scopes customer updates by tenant and id", () => {
+    const query = updateCustomerByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "cus_a",
+      { displayName: "Updated Customer" },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"customers"."tenant_id" = $2');
+    expect(compiled.sql).toContain('"customers"."customer_id" = $3');
+    expect(compiled.params).toEqual(["Updated Customer", "ten_a", "cus_a"]);
+  });
+
   it("scopes ticket reads by tenant", () => {
     const query = ticketByIdQuery(makeDb(), { tenantId: "ten_a" }, "tic_a");
     const compiled = query.toSQL();
@@ -55,6 +106,40 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain('"tickets"."tenant_id" = $1');
     expect(compiled.sql).toContain('"tickets"."ticket_id" = $2');
     expect(compiled.params).toEqual(["ten_a", "tic_a", 1]);
+  });
+
+  it("scopes ticket list reads by tenant and filters", () => {
+    const query = ticketsListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        limit: 10,
+        status: "new",
+        customerId: "cus_a",
+        assignedQueue: "tier-1",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"tickets"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"tickets"."status" = $2');
+    expect(compiled.sql).toContain('"tickets"."customer_id" = $3');
+    expect(compiled.sql).toContain('"tickets"."assigned_queue" = $4');
+    expect(compiled.params).toEqual(["ten_a", "new", "cus_a", "tier-1", 10]);
+  });
+
+  it("scopes ticket updates by tenant and id", () => {
+    const query = updateTicketByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "tic_a",
+      { priority: "p1" },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"tickets"."tenant_id" = $2');
+    expect(compiled.sql).toContain('"tickets"."ticket_id" = $3');
+    expect(compiled.params).toEqual(["p1", "ten_a", "tic_a"]);
   });
 
   it("scopes active KB chunk retrieval by tenant and document", () => {

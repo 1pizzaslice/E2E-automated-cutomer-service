@@ -38,6 +38,51 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/tenants": {
+        get: {
+          summary: "List tenants",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/LimitQuery" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Tenant list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TenantList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+        post: {
+          summary: "Create a tenant",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ $ref: "#/components/parameters/RequestIdHeader" }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TenantCreateRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Tenant resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TenantResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/tenants/{tenant_id}": {
         get: {
           summary: "Read the current tenant",
@@ -58,6 +103,100 @@ export function buildOpenApiDocument() {
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/TenantResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+        patch: {
+          summary: "Update a tenant",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "tenant_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TenantUpdateRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Tenant resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TenantResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/customers": {
+        get: {
+          summary: "List tenant-scoped customers",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "email",
+              in: "query",
+              required: false,
+              schema: { type: "string", format: "email" },
+            },
+            {
+              name: "external_customer_ref",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Customer list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CustomerList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+        post: {
+          summary: "Create a tenant-scoped customer",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/CustomerCreateRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Customer resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CustomerResource" },
                 },
               },
             },
@@ -91,6 +230,106 @@ export function buildOpenApiDocument() {
             default: { $ref: "#/components/responses/Error" },
           },
         },
+        patch: {
+          summary: "Update a tenant-scoped customer",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "customer_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/CustomerUpdateRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Customer resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CustomerResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/tickets": {
+        get: {
+          summary: "List tenant-scoped tickets",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "status",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/TicketStatus" },
+            },
+            {
+              name: "customer_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "assigned_queue",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Ticket list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TicketList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+        post: {
+          summary: "Create a tenant-scoped ticket",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TicketCreateRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Ticket resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TicketResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
       },
       "/v1/tickets/{ticket_id}": {
         get: {
@@ -106,6 +345,39 @@ export function buildOpenApiDocument() {
             { $ref: "#/components/parameters/TenantHeader" },
             { $ref: "#/components/parameters/RequestIdHeader" },
           ],
+          responses: {
+            "200": {
+              description: "Ticket resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TicketResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+        patch: {
+          summary: "Update tenant-scoped ticket triage fields",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "ticket_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TicketUpdateRequest" },
+              },
+            },
+          },
           responses: {
             "200": {
               description: "Ticket resource",
@@ -139,6 +411,17 @@ export function buildOpenApiDocument() {
           in: "header",
           required: false,
           schema: { type: "string", minLength: 1 },
+        },
+        LimitQuery: {
+          name: "limit",
+          in: "query",
+          required: false,
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: 100,
+            default: 50,
+          },
         },
       },
       responses: {
@@ -180,6 +463,14 @@ export function buildOpenApiDocument() {
             },
           },
         },
+        ListPage: {
+          type: "object",
+          required: ["count", "limit"],
+          properties: {
+            count: { type: "integer", minimum: 0 },
+            limit: { type: "integer", minimum: 1 },
+          },
+        },
         TenantResource: {
           type: "object",
           required: ["tenant"],
@@ -204,6 +495,38 @@ export function buildOpenApiDocument() {
             default_timezone: { type: "string" },
             created_at: { type: "string", format: "date-time" },
             updated_at: { type: "string", format: "date-time" },
+          },
+        },
+        TenantList: {
+          type: "object",
+          required: ["tenants", "page"],
+          properties: {
+            tenants: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Tenant" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        TenantCreateRequest: {
+          type: "object",
+          required: ["name"],
+          additionalProperties: false,
+          properties: {
+            tenant_id: { type: "string", minLength: 1 },
+            name: { type: "string", minLength: 1 },
+            status: { enum: ["active", "suspended", "archived"] },
+            default_timezone: { type: "string", minLength: 1 },
+          },
+        },
+        TenantUpdateRequest: {
+          type: "object",
+          minProperties: 1,
+          additionalProperties: false,
+          properties: {
+            name: { type: "string", minLength: 1 },
+            status: { enum: ["active", "suspended", "archived"] },
+            default_timezone: { type: "string", minLength: 1 },
           },
         },
         CustomerResource: {
@@ -238,12 +561,72 @@ export function buildOpenApiDocument() {
             updated_at: { type: "string", format: "date-time" },
           },
         },
+        CustomerList: {
+          type: "object",
+          required: ["customers", "page"],
+          properties: {
+            customers: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Customer" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        CustomerCreateRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            customer_id: { type: "string", minLength: 1 },
+            display_name: { type: ["string", "null"], minLength: 1 },
+            email: { type: ["string", "null"], format: "email" },
+            phone: { type: ["string", "null"], minLength: 1 },
+            external_customer_ref: {
+              type: ["string", "null"],
+              minLength: 1,
+            },
+            metadata: { type: "object", additionalProperties: true },
+          },
+        },
+        CustomerUpdateRequest: {
+          type: "object",
+          minProperties: 1,
+          additionalProperties: false,
+          properties: {
+            display_name: { type: ["string", "null"], minLength: 1 },
+            email: { type: ["string", "null"], format: "email" },
+            phone: { type: ["string", "null"], minLength: 1 },
+            external_customer_ref: {
+              type: ["string", "null"],
+              minLength: 1,
+            },
+            metadata: { type: "object", additionalProperties: true },
+          },
+        },
         TicketResource: {
           type: "object",
           required: ["ticket"],
           properties: {
             ticket: { $ref: "#/components/schemas/Ticket" },
           },
+        },
+        TicketStatus: {
+          enum: [
+            "new",
+            "triaged",
+            "waiting_ai",
+            "waiting_human",
+            "waiting_customer",
+            "resolved",
+            "closed",
+            "reopened",
+            "failed",
+          ],
+        },
+        TicketPriority: {
+          enum: ["p0", "p1", "p2", "p3"],
+        },
+        AutomationMode: {
+          enum: ["auto_send", "human_approve", "human_only"],
         },
         Ticket: {
           type: "object",
@@ -264,28 +647,14 @@ export function buildOpenApiDocument() {
             tenant_id: { type: "string" },
             conversation_id: { type: "string" },
             customer_id: { type: "string" },
-            status: {
-              enum: [
-                "new",
-                "triaged",
-                "waiting_ai",
-                "waiting_human",
-                "waiting_customer",
-                "resolved",
-                "closed",
-                "reopened",
-                "failed",
-              ],
-            },
-            priority: { enum: ["p0", "p1", "p2", "p3"] },
+            status: { $ref: "#/components/schemas/TicketStatus" },
+            priority: { $ref: "#/components/schemas/TicketPriority" },
             topic: { type: ["string", "null"] },
             subtopic: { type: ["string", "null"] },
             language: { type: ["string", "null"] },
             sentiment: { type: ["string", "null"] },
             urgency_score: { type: ["integer", "null"] },
-            automation_mode: {
-              enum: ["auto_send", "human_approve", "human_only"],
-            },
+            automation_mode: { $ref: "#/components/schemas/AutomationMode" },
             assigned_queue: { type: ["string", "null"] },
             assigned_user_id: { type: ["string", "null"] },
             sla_policy_id: { type: ["string", "null"] },
@@ -307,6 +676,81 @@ export function buildOpenApiDocument() {
             closed_at: { type: ["string", "null"], format: "date-time" },
             created_at: { type: "string", format: "date-time" },
             updated_at: { type: "string", format: "date-time" },
+          },
+        },
+        TicketList: {
+          type: "object",
+          required: ["tickets", "page"],
+          properties: {
+            tickets: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Ticket" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        TicketCreateRequest: {
+          type: "object",
+          required: ["conversation_id", "customer_id"],
+          additionalProperties: false,
+          properties: {
+            ticket_id: { type: "string", minLength: 1 },
+            conversation_id: { type: "string", minLength: 1 },
+            customer_id: { type: "string", minLength: 1 },
+            priority: { $ref: "#/components/schemas/TicketPriority" },
+            topic: { type: ["string", "null"], minLength: 1 },
+            subtopic: { type: ["string", "null"], minLength: 1 },
+            language: { type: ["string", "null"], minLength: 1 },
+            sentiment: { type: ["string", "null"], minLength: 1 },
+            urgency_score: { type: ["integer", "null"] },
+            automation_mode: { $ref: "#/components/schemas/AutomationMode" },
+            assigned_queue: { type: ["string", "null"], minLength: 1 },
+            assigned_user_id: { type: ["string", "null"], minLength: 1 },
+            sla_policy_id: { type: ["string", "null"], minLength: 1 },
+            policy_version_id: { type: ["string", "null"], minLength: 1 },
+            opened_at: { type: "string", format: "date-time" },
+            first_response_due_at: {
+              type: ["string", "null"],
+              format: "date-time",
+            },
+            next_response_due_at: {
+              type: ["string", "null"],
+              format: "date-time",
+            },
+            resolution_due_at: {
+              type: ["string", "null"],
+              format: "date-time",
+            },
+          },
+        },
+        TicketUpdateRequest: {
+          type: "object",
+          minProperties: 1,
+          additionalProperties: false,
+          properties: {
+            priority: { $ref: "#/components/schemas/TicketPriority" },
+            topic: { type: ["string", "null"], minLength: 1 },
+            subtopic: { type: ["string", "null"], minLength: 1 },
+            language: { type: ["string", "null"], minLength: 1 },
+            sentiment: { type: ["string", "null"], minLength: 1 },
+            urgency_score: { type: ["integer", "null"] },
+            automation_mode: { $ref: "#/components/schemas/AutomationMode" },
+            assigned_queue: { type: ["string", "null"], minLength: 1 },
+            assigned_user_id: { type: ["string", "null"], minLength: 1 },
+            sla_policy_id: { type: ["string", "null"], minLength: 1 },
+            policy_version_id: { type: ["string", "null"], minLength: 1 },
+            first_response_due_at: {
+              type: ["string", "null"],
+              format: "date-time",
+            },
+            next_response_due_at: {
+              type: ["string", "null"],
+              format: "date-time",
+            },
+            resolution_due_at: {
+              type: ["string", "null"],
+              format: "date-time",
+            },
           },
         },
       },

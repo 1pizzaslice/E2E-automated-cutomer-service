@@ -6,21 +6,32 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton initial pass is implemented with RBAC checks and PostgreSQL-backed API read integration coverage; endpoint expansion is next.
+- Project phase: Milestone 3 API skeleton now has tenant/customer/ticket list-create-read-update contracts with RBAC checks and PostgreSQL-backed API integration coverage; conversation/message endpoint expansion is next.
 - Current milestone: Milestone 3 - backend API skeleton.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current read endpoints, PostgreSQL-backed API read integration tests, and read-only tenant/customer/ticket contract endpoints. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, and tenant/customer/ticket list-create-read-update skeleton contracts. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Continue Milestone 3 by expanding tenant/customer/ticket list/create/update contracts where the schema already supports them, extending RBAC per endpoint, and keeping PostgreSQL-backed API integration coverage for tenant isolation.
+> Continue Milestone 3 by adding conversation and message read/list endpoint skeletons backed by the existing schema, extending RBAC per endpoint, and keeping PostgreSQL-backed API integration coverage for tenant isolation.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat/api-crud-contracts` from `main` for the current Milestone 3 continuation.
+- Added shared list response envelopes and create/update request schemas for tenants, customers, and tickets.
+- Added repository helpers for tenant list/create/update plus tenant-scoped customer and ticket list/create/update operations; customer/ticket helpers keep explicit tenant scopes for RLS-backed data access.
+- Adjusted request context handling so tenant headers are optional globally but still required by tenant-scoped routes through `requireTenantRequestContext`.
+- Added `GET /v1/tenants`, `POST /v1/tenants`, and `PATCH /v1/tenants/{tenant_id}`. Tenant list/create is platform-admin only; tenant patch is platform-admin global or ops-admin current-tenant only.
+- Added tenant-scoped `GET /v1/customers`, `POST /v1/customers`, and `PATCH /v1/customers/{customer_id}`.
+- Added tenant-scoped `GET /v1/tickets`, `POST /v1/tickets`, and `PATCH /v1/tickets/{ticket_id}` for triage, assignment, policy/SLA references, and due timestamps only. Ticket lifecycle transitions remain future workflow-backed endpoints.
+- Expanded `packages/api/src/rbac.ts` with separate list/create/update permissions for tenant, customer, and ticket endpoint families.
+- Expanded generated OpenAPI paths and component schemas for the new contracts.
+- Expanded shared-schema tests, repository SQL generation tests, API contract tests, and live PostgreSQL-backed API integration tests for tenant/customer/ticket list-create-read-update behavior and tenant isolation.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, and `TODO.md` for the current API expansion.
 - Created feature branch `feat/api-rbac-integration-tests` from `main` for the current Milestone 3 continuation.
 - Added `packages/api/src/rbac.ts` with a current role-to-permission matrix for `openapi:read`, `tenants:read`, `customers:read`, and `tickets:read`.
 - Added authenticated-context access for non-tenant global endpoints and enforced RBAC on `GET /openapi.json`, `GET /v1/tenants/{tenant_id}`, `GET /v1/customers/{customer_id}`, and `GET /v1/tickets/{ticket_id}` before service/data access.
@@ -95,6 +106,20 @@ The next implementation task is:
 - `pnpm typecheck` passes after the RBAC/API integration changes.
 - `pnpm test` passes after the RBAC/API integration changes.
 - `pnpm build` passes after the API skeleton changes.
+- `pnpm --filter @support/shared-schemas test` passes with 7 tests after the tenant/customer/ticket CRUD contract schema expansion.
+- `pnpm --filter @support/shared-schemas typecheck` passes after the tenant/customer/ticket CRUD contract schema expansion.
+- `pnpm --filter @support/db test` passes with 24 normal tests and 11 live integration tests skipped unless explicitly enabled after repository list/update helper coverage.
+- `pnpm --filter @support/db typecheck` passes after repository list/create/update helpers.
+- `pnpm --filter @support/api test` passes with 22 API contract tests and 9 live integration tests skipped unless explicitly enabled after tenant/customer/ticket CRUD contract expansion.
+- `pnpm --filter @support/api typecheck` passes after tenant/customer/ticket CRUD route/service expansion.
+- `pnpm format` applied formatting after the tenant/customer/ticket CRUD API expansion.
+- `pnpm format:check` passes after the tenant/customer/ticket CRUD API expansion.
+- `pnpm lint` passes after the tenant/customer/ticket CRUD API expansion.
+- `pnpm typecheck` passes after the tenant/customer/ticket CRUD API expansion.
+- `pnpm test` passes after the tenant/customer/ticket CRUD API expansion.
+- `pnpm build` passes after the tenant/customer/ticket CRUD API expansion.
+- `pnpm infra:up` reports the local Compose stack running and PostgreSQL healthy.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` initially failed inside the managed sandbox with localhost `EPERM`, then passed when rerun with approved localhost access. The passing run covered 11 DB/RLS integration tests and 9 PostgreSQL-backed API integration tests.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes against the local Compose PostgreSQL database with 11 live repository and RLS execution tests.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm --filter @support/api test:integration` passes with 4 live PostgreSQL-backed API read tests after `pnpm infra:up`.
 - `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` passes with DB/RLS integration tests plus API PostgreSQL-backed read integration tests after `pnpm infra:up`.
@@ -110,7 +135,8 @@ The next implementation task is:
 
 - GitHub Actions includes the live PostgreSQL integration test step, but the latest workflow with DB/RLS plus API integration coverage has not run remotely yet.
 - API auth is still a placeholder header contract; no real identity provider exists yet.
-- RBAC exists only for the current skeleton OpenAPI/tenant/customer/ticket read endpoints and must be extended as new endpoint families are added.
+- RBAC exists only for the current skeleton OpenAPI and tenant/customer/ticket list-create-read-update endpoints and must be extended as new endpoint families are added.
+- Tenant/customer/ticket create/update endpoints do not yet create idempotency records, audit events, or workflow side effects.
 - Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
 - No real client/pilot data exists yet.
 - No OpenAI/model provider credentials configured yet.
@@ -255,10 +281,10 @@ Checklist:
 - [x] Add OpenAPI generation.
 - [x] Add health endpoint.
 - [x] Add readiness endpoint.
-- [ ] Add tenant endpoints. Current: by-id read skeleton only.
-- [ ] Add customer endpoints. Current: by-id read skeleton only.
+- [x] Add tenant endpoints. Current: list/create/read/update skeleton only.
+- [x] Add customer endpoints. Current: list/create/read/update skeleton only.
 - [ ] Add conversation endpoints.
-- [ ] Add ticket endpoints. Current: by-id read skeleton only.
+- [x] Add ticket endpoints. Current: list/create/read/update skeleton only; lifecycle transition endpoints are pending.
 - [ ] Add message endpoints.
 - [ ] Add policy endpoints.
 - [ ] Add KB metadata endpoints.
@@ -266,7 +292,7 @@ Checklist:
 - [ ] Add audit read endpoints.
 - [x] Add contract tests for current API skeleton.
 - [x] Add RBAC checks for current API skeleton endpoints.
-- [x] Add PostgreSQL-backed API integration tests for current read endpoints.
+- [x] Add PostgreSQL-backed API integration tests for current tenant/customer/ticket endpoints.
 
 Acceptance criteria:
 
@@ -518,6 +544,12 @@ Use reverse chronological order.
 
 ### 2026-06-20
 
+- Continued Milestone 3 tenant/customer/ticket API contract expansion:
+  - Added tenant/customer/ticket list-create-read-update skeleton endpoints where the current schema supports them.
+  - Added route-level RBAC for list/create/update permissions.
+  - Added OpenAPI, shared schema, repository helper, API contract, and live PostgreSQL-backed API integration coverage.
+  - Kept ticket `PATCH` limited to triage/assignment fields; workflow lifecycle transitions remain future endpoints.
+- Verified with `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` after `pnpm infra:up`.
 - Continued Milestone 3 API skeleton:
   - Added role-to-permission checks for the current OpenAPI, tenant, customer, and ticket read endpoints.
   - Added PostgreSQL-backed API integration tests for tenant/customer/ticket read handlers and tenant isolation.

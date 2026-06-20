@@ -728,15 +728,27 @@ Current API skeleton implements:
 - `GET /health`
 - `GET /ready`
 - `GET /openapi.json`
+- `GET /v1/tenants`
+- `POST /v1/tenants`
 - `GET /v1/tenants/{tenant_id}`
+- `PATCH /v1/tenants/{tenant_id}`
+- `GET /v1/customers`
+- `POST /v1/customers`
 - `GET /v1/customers/{customer_id}`
+- `PATCH /v1/customers/{customer_id}`
+- `GET /v1/tickets`
+- `POST /v1/tickets`
 - `GET /v1/tickets/{ticket_id}`
+- `PATCH /v1/tickets/{ticket_id}`
 
-The current tenant, customer, and ticket endpoints are read-only skeleton
-contracts. They validate headers, path params, and response bodies, then use the
-DB package tenant transaction helper for data access. They enforce the current
-role-to-permission matrix before service/data access. They do not yet implement
-list, create, update, workflow, idempotency, or audit behavior.
+The current tenant, customer, and ticket endpoints are skeleton contracts for
+list, create, read, and update where the database schema already supports those
+operations. They validate headers, path params, query params, request bodies, and
+response bodies, then use the DB package tenant transaction helper for
+tenant-scoped data access. They enforce the current role-to-permission matrix
+before service/data access. They do not yet implement workflow side effects,
+idempotency, audit behavior, customer identity merge logic, or ticket lifecycle
+transitions.
 
 The remaining endpoint families below are the target contract for future milestones.
 
@@ -760,14 +772,23 @@ Response rules:
 - `x-request-id` and `x-correlation-id` are echoed on responses.
 - Health and readiness do not require auth.
 - `GET /openapi.json` requires auth but no tenant context because it is a global contract document.
-- `/v1/tenants/{tenant_id}` currently requires `{tenant_id}` to match `x-tenant-id`; broader platform-admin tenant access without tenant context is deferred until explicit global admin paths exist.
+- Global tenant administration endpoints (`GET /v1/tenants`, `POST /v1/tenants`, and platform-admin `PATCH /v1/tenants/{tenant_id}`) require auth but do not require `x-tenant-id`.
+- `/v1/tenants/{tenant_id}` read currently requires `{tenant_id}` to match `x-tenant-id`.
+- Non-platform-admin tenant updates require `{tenant_id}` to match `x-tenant-id`; platform admins may patch a tenant without tenant context.
 
 Current skeleton permissions:
 
 - `openapi:read`: all current roles.
+- `tenants:list`: `platform_admin`.
 - `tenants:read`: `platform_admin`, `ops_admin`.
+- `tenants:create`: `platform_admin`.
+- `tenants:update`: `platform_admin`, `ops_admin`.
 - `customers:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
+- `customers:create`: `platform_admin`, `ops_admin`, `support_agent`.
+- `customers:update`: `platform_admin`, `ops_admin`, `support_agent`.
 - `tickets:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
+- `tickets:create`: `platform_admin`, `ops_admin`, `support_agent`.
+- `tickets:update`: `platform_admin`, `ops_admin`, `support_agent`.
 - `integration_admin` currently has only `openapi:read` until integration endpoints are implemented.
 
 ### 17.1 Health
@@ -790,7 +811,12 @@ Auth required. Tenant context not required.
 - `GET /v1/tenants/{tenant_id}`
 - `PATCH /v1/tenants/{tenant_id}`
 
-Platform/admin only.
+Current implementation:
+
+- `GET /v1/tenants` lists tenants with a bounded `limit` query parameter and is platform-admin only.
+- `POST /v1/tenants` creates a tenant from `tenant_id` (optional), `name`, `status` (optional), and `default_timezone` (optional). It is platform-admin only.
+- `GET /v1/tenants/{tenant_id}` reads the current tenant and requires the path tenant to match `x-tenant-id`.
+- `PATCH /v1/tenants/{tenant_id}` updates `name`, `status`, and `default_timezone`. Platform admins may update any tenant; ops admins may update only the tenant in `x-tenant-id`.
 
 ### 17.3 Channels
 
@@ -816,6 +842,14 @@ Webhook endpoints verify signatures before processing.
 - `GET /v1/customers/{customer_id}/conversations`
 - `GET /v1/customers/{customer_id}/tickets`
 
+Current implementation:
+
+- `GET /v1/customers` lists tenant-scoped customers with `limit`, `email`, and `external_customer_ref` query filters.
+- `POST /v1/customers` creates a tenant-scoped customer. `customer_id` is optional; the API generates one when omitted. Supported fields are `display_name`, `email`, `phone`, `external_customer_ref`, and `metadata`.
+- `GET /v1/customers/{customer_id}` reads a tenant-scoped customer.
+- `PATCH /v1/customers/{customer_id}` updates `display_name`, `email`, `phone`, `external_customer_ref`, and `metadata`; empty patch bodies are rejected.
+- Customer identity resolution, merge behavior, and customer conversation/ticket subresources are not implemented yet.
+
 ### 17.6 Conversations
 
 - `GET /v1/conversations`
@@ -834,6 +868,14 @@ Webhook endpoints verify signatures before processing.
 - `POST /v1/tickets/{ticket_id}/resolve`
 - `POST /v1/tickets/{ticket_id}/close`
 - `POST /v1/tickets/{ticket_id}/reopen`
+
+Current implementation:
+
+- `GET /v1/tickets` lists tenant-scoped tickets with `limit`, `status`, `customer_id`, and `assigned_queue` query filters.
+- `POST /v1/tickets` creates a tenant-scoped ticket attached to an existing tenant-scoped `conversation_id` and `customer_id`; `ticket_id` is optional and generated when omitted. The create contract supports priority, triage metadata, assignment fields, policy/SLA references, opened time, and due timestamps.
+- `GET /v1/tickets/{ticket_id}` reads a tenant-scoped ticket.
+- `PATCH /v1/tickets/{ticket_id}` updates triage, priority, assignment, policy/SLA references, and due timestamps only. It intentionally does not update `status`, `resolved_at`, or `closed_at`; lifecycle transitions remain dedicated workflow-backed endpoints.
+- Ticket create/update currently does not emit ticket events, audit events, workflow starts, or idempotency records.
 
 ### 17.8 Policies
 
@@ -1064,14 +1106,14 @@ Commands:
 
 - Apply local migrations: `pnpm db:migrate`.
 - Generate future migration drafts: `pnpm --filter @support/db generate:migration`.
-- Run live PostgreSQL integration tests for DB/RLS and API reads: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
+- Run live PostgreSQL integration tests for DB/RLS and API tenant/customer/ticket endpoints: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
 
 Initial schema choices:
 
 - Domain IDs are application-generated text IDs, matching the contract style such as `ten_...`, `ticket_...`, and `kb_chunk_...`.
 - PostgreSQL remains the source of truth.
 - The first KB embedding column is `vector(1536)` using `pgvector`; choose and document a production embedding model before relying on this dimension for real client data.
-- Tenant-scoped entities have `tenant_id` columns and tenant indexes. Repository query helpers currently enforce tenant filters for customers, tickets, KB chunks, integrations, audit events, and tool definitions.
+- Tenant-scoped entities have `tenant_id` columns and tenant indexes. Repository query helpers currently enforce tenant filters for customer and ticket reads/lists/updates/writes plus KB chunks, integrations, audit events, and tool definitions.
 - Tool definitions may be global when `tenant_id is null`; tenant query helpers allow global active tools while excluding other tenants.
 - Idempotency support starts with the `idempotency_keys` table and operation/key uniqueness per tenant.
 - Live repository execution tests seed two synthetic tenants and prove the tenant-scoped helpers execute against PostgreSQL without returning cross-tenant customers, tickets, KB chunks, integrations, tool definitions, or audit events.
