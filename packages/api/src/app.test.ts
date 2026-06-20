@@ -20,6 +20,10 @@ const authHeaders = {
   "x-tenant-id": "ten_test",
   "x-request-id": "req_test",
 };
+const tenantAdminHeaders = {
+  ...authHeaders,
+  "x-user-roles": "ops_admin",
+};
 
 let app: FastifyInstance | undefined;
 
@@ -108,7 +112,7 @@ describe("api tenant-scoped resource contracts", () => {
     const response = await app.inject({
       method: "GET",
       url: "/v1/tenants/ten_test",
-      headers: authHeaders,
+      headers: tenantAdminHeaders,
     });
     const body = TenantResourceResponseSchema.parse(response.json());
 
@@ -117,12 +121,25 @@ describe("api tenant-scoped resource contracts", () => {
     expect(body.tenant.tenant_id).toBe("ten_test");
   });
 
+  it("rejects tenant reads for roles without tenant read permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tenants/ten_test",
+      headers: authHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
   it("rejects tenant path mismatches before data access", async () => {
     app = buildApp({ services: makeServices() });
     const response = await app.inject({
       method: "GET",
       url: "/v1/tenants/ten_other",
-      headers: authHeaders,
+      headers: tenantAdminHeaders,
     });
     const body = ApiErrorResponseSchema.parse(response.json());
 

@@ -734,8 +734,9 @@ Current API skeleton implements:
 
 The current tenant, customer, and ticket endpoints are read-only skeleton
 contracts. They validate headers, path params, and response bodies, then use the
-DB package tenant transaction helper for data access. They do not yet implement
-list, create, update, workflow, RBAC permission, idempotency, or audit behavior.
+DB package tenant transaction helper for data access. They enforce the current
+role-to-permission matrix before service/data access. They do not yet implement
+list, create, update, workflow, idempotency, or audit behavior.
 
 The remaining endpoint families below are the target contract for future milestones.
 
@@ -759,7 +760,15 @@ Response rules:
 - `x-request-id` and `x-correlation-id` are echoed on responses.
 - Health and readiness do not require auth.
 - `GET /openapi.json` requires auth but no tenant context because it is a global contract document.
-- `/v1/tenants/{tenant_id}` currently requires `{tenant_id}` to match `x-tenant-id`; broader platform-admin tenant access is deferred until RBAC is implemented.
+- `/v1/tenants/{tenant_id}` currently requires `{tenant_id}` to match `x-tenant-id`; broader platform-admin tenant access without tenant context is deferred until explicit global admin paths exist.
+
+Current skeleton permissions:
+
+- `openapi:read`: all current roles.
+- `tenants:read`: `platform_admin`, `ops_admin`.
+- `customers:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
+- `tickets:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
+- `integration_admin` currently has only `openapi:read` until integration endpoints are implemented.
 
 ### 17.1 Health
 
@@ -1049,13 +1058,13 @@ Implemented artifacts:
 - Live repository execution tests: `packages/db/src/repositories.integration.test.ts`.
 - Live RLS negative tests: `packages/db/src/rls.integration.test.ts`.
 - Drizzle config for future migration drafts: `packages/db/drizzle.config.ts`.
-- API skeleton and contract tests: `packages/api/src/app.ts` and `packages/api/src/app.test.ts`.
+- API skeleton, RBAC, and tests: `packages/api/src/app.ts`, `packages/api/src/rbac.ts`, `packages/api/src/app.test.ts`, and `packages/api/src/app.integration.test.ts`.
 
 Commands:
 
 - Apply local migrations: `pnpm db:migrate`.
 - Generate future migration drafts: `pnpm --filter @support/db generate:migration`.
-- Run live PostgreSQL integration tests: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
+- Run live PostgreSQL integration tests for DB/RLS and API reads: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
 
 Initial schema choices:
 

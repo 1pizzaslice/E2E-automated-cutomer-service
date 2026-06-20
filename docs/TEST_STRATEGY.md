@@ -277,7 +277,8 @@ Current Milestone 2 coverage:
 Current Milestone 3 API skeleton coverage:
 
 - `packages/shared-schemas/src/index.test.ts` validates structured API errors and the first tenant/customer/ticket resource response schemas.
-- `packages/api/src/app.test.ts` covers public health/readiness, auth-required errors, tenant-context-required errors, authenticated OpenAPI document access, request ID echoing, tenant path mismatch rejection, tenant/customer/ticket response schemas, and structured not-found errors.
+- `packages/api/src/app.test.ts` covers public health/readiness, auth-required errors, tenant-context-required errors, authenticated OpenAPI document access, request ID echoing, RBAC denial for tenant reads without permission, tenant path mismatch rejection, tenant/customer/ticket response schemas, and structured not-found errors.
+- `packages/api/src/app.integration.test.ts` applies pending SQL migrations, seeds two synthetic tenants, exercises the PostgreSQL-backed tenant/customer/ticket read endpoints through HTTP, verifies role denial for tenant reads, verifies tenant A can read its own customer/ticket, verifies tenant A receives structured not-found errors for tenant B customer/ticket IDs, and cleans up fixture rows.
 
 ## 4. Golden Dataset
 
@@ -402,7 +403,7 @@ pnpm infra:up
 DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
 ```
 
-CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service.
+CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service. The root command currently runs DB repository/RLS integration tests first, then API PostgreSQL-backed read integration tests.
 
 Current Python tests use standard library `unittest` because `uv` is not installed locally. When the LangGraph AI runtime is implemented, add the chosen Python dependency manager and update this file with the real eval/test commands.
 

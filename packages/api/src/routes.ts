@@ -8,7 +8,11 @@ import {
 } from "@support/shared-schemas";
 import { HttpError } from "./errors.js";
 import { buildOpenApiDocument } from "./openapi.js";
-import { requireTenantRequestContext } from "./request-context.js";
+import {
+  requireAuthenticatedRequestContext,
+  requireTenantRequestContext,
+} from "./request-context.js";
+import { requirePermission } from "./rbac.js";
 import type { ApiServices } from "./services.js";
 
 const TenantParamsSchema = z.object({
@@ -29,10 +33,19 @@ export function registerRoutes(
 ): void {
   app.get("/health", async () => createHealthResponse("api"));
   app.get("/ready", async () => createHealthResponse("api"));
-  app.get("/openapi.json", async () => buildOpenApiDocument());
+  app.get("/openapi.json", async (request) => {
+    const context = requireAuthenticatedRequestContext(request);
+
+    requirePermission(context.actor, "openapi:read");
+
+    return buildOpenApiDocument();
+  });
 
   app.get("/v1/tenants/:tenant_id", async (request) => {
     const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "tenants:read");
+
     const { tenant_id: tenantId } = parseParams(TenantParamsSchema, request);
 
     if (tenantId !== context.tenant.tenantId) {
@@ -54,6 +67,9 @@ export function registerRoutes(
 
   app.get("/v1/customers/:customer_id", async (request) => {
     const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "customers:read");
+
     const { customer_id: customerId } = parseParams(
       CustomerParamsSchema,
       request,
@@ -69,6 +85,9 @@ export function registerRoutes(
 
   app.get("/v1/tickets/:ticket_id", async (request) => {
     const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "tickets:read");
+
     const { ticket_id: ticketId } = parseParams(TicketParamsSchema, request);
     const ticket = await services.tickets.getById(context, ticketId);
 

@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, and first Milestone 3 API skeleton. No business workflow implementation yet.
+Current status: documentation harness, backend scaffold, database/RLS foundation, and first Milestone 3 API skeleton with role checks for current read endpoints. No business workflow implementation yet.
 
 ## Start Here
 
@@ -69,7 +69,7 @@ pnpm test:py
 pnpm infra:up
 ```
 
-Live PostgreSQL integration tests require the local PostgreSQL service and cover repository tenant filters plus PostgreSQL RLS:
+Live PostgreSQL integration tests require the local PostgreSQL service and cover repository tenant filters, PostgreSQL RLS, and PostgreSQL-backed API read endpoints:
 
 ```bash
 DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
@@ -98,7 +98,7 @@ Implemented endpoints:
 - `GET /v1/customers/{customer_id}`
 - `GET /v1/tickets/{ticket_id}`
 
-Non-health endpoints require placeholder auth headers. `/v1/*` endpoints also require `x-tenant-id`; tenant-scoped DB work uses the DB package RLS transaction helper.
+Non-health endpoints require placeholder auth headers. `/v1/*` endpoints also require `x-tenant-id`; tenant-scoped DB work uses the DB package RLS transaction helper. The current skeleton enforces role permissions from `x-user-roles`: tenant reads require `platform_admin` or `ops_admin`, while customer and ticket reads allow read-focused tenant roles.
 
 ## Scope
 
