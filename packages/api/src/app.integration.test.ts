@@ -2,8 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
   ApiErrorResponseSchema,
+  CustomerListResponseSchema,
   CustomerResourceResponseSchema,
+  TenantListResponseSchema,
   TenantResourceResponseSchema,
+  TicketListResponseSchema,
   TicketResourceResponseSchema,
   type RoleName,
 } from "@support/shared-schemas";
@@ -27,14 +30,17 @@ const fixturePrefix = `api_it_${process.pid}_${Date.now()}`;
 const ids = {
   tenantA: `${fixturePrefix}_ten_a`,
   tenantB: `${fixturePrefix}_ten_b`,
+  tenantCreated: `${fixturePrefix}_ten_created`,
   customerA: `${fixturePrefix}_cus_a`,
   customerB: `${fixturePrefix}_cus_b`,
+  customerCreated: `${fixturePrefix}_cus_created`,
   channelA: `${fixturePrefix}_chn_a`,
   channelB: `${fixturePrefix}_chn_b`,
   conversationA: `${fixturePrefix}_cnv_a`,
   conversationB: `${fixturePrefix}_cnv_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
+  ticketCreated: `${fixturePrefix}_tic_created`,
 };
 
 describeLive("live PostgreSQL-backed API resource reads", () => {
@@ -86,6 +92,49 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     });
   });
 
+  it("lists tenants and creates tenant records for platform admins", async () => {
+    const listResponse = await app!.inject({
+      method: "GET",
+      url: "/v1/tenants?limit=100",
+      headers: platformAuthHeaders(),
+    });
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/v1/tenants",
+      headers: platformAuthHeaders(),
+      payload: {
+        tenant_id: ids.tenantCreated,
+        name: `${fixturePrefix} Created Tenant`,
+        default_timezone: "UTC",
+      },
+    });
+    const patchResponse = await app!.inject({
+      method: "PATCH",
+      url: `/v1/tenants/${ids.tenantCreated}`,
+      headers: platformAuthHeaders(),
+      payload: {
+        status: "suspended",
+      },
+    });
+    const listBody = TenantListResponseSchema.parse(listResponse.json());
+    const createBody = TenantResourceResponseSchema.parse(
+      createResponse.json(),
+    );
+    const patchBody = TenantResourceResponseSchema.parse(patchResponse.json());
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(listBody.tenants.map((tenant) => tenant.tenant_id)).toContain(
+      ids.tenantA,
+    );
+    expect(createResponse.statusCode).toBe(201);
+    expect(createBody.tenant.tenant_id).toBe(ids.tenantCreated);
+    expect(patchResponse.statusCode).toBe(200);
+    expect(patchBody.tenant).toMatchObject({
+      tenant_id: ids.tenantCreated,
+      status: "suspended",
+    });
+  });
+
   it("rejects tenant reads for roles without tenant read permission", async () => {
     const response = await app!.inject({
       method: "GET",
@@ -96,6 +145,20 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
 
     expect(response.statusCode).toBe(403);
     expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("lists tenant-scoped customers without crossing tenants", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/v1/customers?limit=100",
+      headers: authHeaders("support_agent"),
+    });
+    const body = CustomerListResponseSchema.parse(response.json());
+    const customerIds = body.customers.map((customer) => customer.customer_id);
+
+    expect(response.statusCode).toBe(200);
+    expect(customerIds).toContain(ids.customerA);
+    expect(customerIds).not.toContain(ids.customerB);
   });
 
   it("reads tenant-scoped customers without crossing tenants", async () => {
@@ -124,6 +187,57 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
   });
 
+  it("creates and updates tenant-scoped customers through PostgreSQL", async () => {
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders("support_agent"),
+      payload: {
+        customer_id: ids.customerCreated,
+        display_name: "Created API Customer",
+        email: `${fixturePrefix}.created@example.test`,
+        metadata: { source: "api-integration" },
+      },
+    });
+    const patchResponse = await app!.inject({
+      method: "PATCH",
+      url: `/v1/customers/${ids.customerCreated}`,
+      headers: authHeaders("support_agent"),
+      payload: {
+        display_name: "Updated API Customer",
+      },
+    });
+    const createBody = CustomerResourceResponseSchema.parse(
+      createResponse.json(),
+    );
+    const patchBody = CustomerResourceResponseSchema.parse(
+      patchResponse.json(),
+    );
+
+    expect(createResponse.statusCode).toBe(201);
+    expect(createBody.customer).toMatchObject({
+      customer_id: ids.customerCreated,
+      tenant_id: ids.tenantA,
+      email: `${fixturePrefix}.created@example.test`,
+    });
+    expect(patchResponse.statusCode).toBe(200);
+    expect(patchBody.customer.display_name).toBe("Updated API Customer");
+  });
+
+  it("lists tenant-scoped tickets without crossing tenants", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/v1/tickets?limit=100",
+      headers: authHeaders("support_agent"),
+    });
+    const body = TicketListResponseSchema.parse(response.json());
+    const ticketIds = body.tickets.map((ticket) => ticket.ticket_id);
+
+    expect(response.statusCode).toBe(200);
+    expect(ticketIds).toContain(ids.ticketA);
+    expect(ticketIds).not.toContain(ids.ticketB);
+  });
+
   it("reads tenant-scoped tickets without crossing tenants", async () => {
     const ownResponse = await app!.inject({
       method: "GET",
@@ -150,6 +264,50 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     expect(otherTenantResponse.statusCode).toBe(404);
     expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
   });
+
+  it("creates and updates tenant-scoped tickets through PostgreSQL", async () => {
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/v1/tickets",
+      headers: authHeaders("support_agent"),
+      payload: {
+        ticket_id: ids.ticketCreated,
+        conversation_id: ids.conversationA,
+        customer_id: ids.customerA,
+        priority: "p1",
+        topic: "shipping",
+        opened_at: "2026-06-19T01:00:00.000Z",
+      },
+    });
+    const patchResponse = await app!.inject({
+      method: "PATCH",
+      url: `/v1/tickets/${ids.ticketCreated}`,
+      headers: authHeaders("support_agent"),
+      payload: {
+        assigned_queue: "tier-1",
+      },
+    });
+    const createBody = TicketResourceResponseSchema.parse(
+      createResponse.json(),
+    );
+    const patchBody = TicketResourceResponseSchema.parse(patchResponse.json());
+
+    expect(createResponse.statusCode).toBe(201);
+    expect(createBody.ticket).toMatchObject({
+      ticket_id: ids.ticketCreated,
+      tenant_id: ids.tenantA,
+      conversation_id: ids.conversationA,
+      customer_id: ids.customerA,
+      priority: "p1",
+      status: "new",
+    });
+    expect(patchResponse.statusCode).toBe(200);
+    expect(patchBody.ticket).toMatchObject({
+      ticket_id: ids.ticketCreated,
+      assigned_queue: "tier-1",
+      status: "new",
+    });
+  });
 });
 
 function authHeaders(role: RoleName) {
@@ -160,6 +318,16 @@ function authHeaders(role: RoleName) {
     "x-user-roles": role,
     "x-tenant-id": ids.tenantA,
     "x-request-id": `${fixturePrefix}_req`,
+  };
+}
+
+function platformAuthHeaders() {
+  return {
+    authorization: "Bearer api-integration-test-token",
+    "x-user-id": `${fixturePrefix}_platform_usr`,
+    "x-user-email": `${fixturePrefix}.platform@example.test`,
+    "x-user-roles": "platform_admin",
+    "x-request-id": `${fixturePrefix}_platform_req`,
   };
 }
 
@@ -267,6 +435,6 @@ async function cleanupFixtures(client: PostgresClient) {
   `;
   await client`
     delete from tenants
-    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB}, ${ids.tenantCreated})
   `;
 }

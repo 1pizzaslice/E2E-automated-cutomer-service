@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   ApiErrorResponseSchema,
+  CustomerCreateRequestSchema,
+  CustomerListResponseSchema,
   CustomerResourceResponseSchema,
+  TenantCreateRequestSchema,
+  TenantListResponseSchema,
   HealthResponseSchema,
+  TicketCreateRequestSchema,
+  TicketListResponseSchema,
   TicketResourceResponseSchema,
+  TicketUpdateRequestSchema,
   createHealthResponse,
 } from "./index.js";
 
@@ -56,6 +63,108 @@ describe("shared API contract schemas", () => {
     };
 
     expect(CustomerResourceResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("validates list response envelopes", () => {
+    const now = "2026-06-19T00:00:00.000Z";
+
+    expect(
+      TenantListResponseSchema.parse({
+        tenants: [
+          {
+            tenant_id: "ten_test",
+            name: "Test Tenant",
+            status: "active",
+            default_timezone: "UTC",
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ page: { count: 1, limit: 50 } });
+
+    expect(
+      CustomerListResponseSchema.parse({
+        customers: [
+          {
+            customer_id: "cus_test",
+            tenant_id: "ten_test",
+            display_name: "Test Customer",
+            email: "customer@example.test",
+            phone: null,
+            external_customer_ref: null,
+            metadata: {},
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ customers: [{ customer_id: "cus_test" }] });
+
+    expect(
+      TicketListResponseSchema.parse({
+        tickets: [
+          {
+            ticket_id: "ticket_test",
+            tenant_id: "ten_test",
+            conversation_id: "cnv_test",
+            customer_id: "cus_test",
+            status: "new",
+            priority: "p2",
+            topic: null,
+            subtopic: null,
+            language: null,
+            sentiment: null,
+            urgency_score: null,
+            automation_mode: "human_approve",
+            assigned_queue: null,
+            assigned_user_id: null,
+            sla_policy_id: null,
+            policy_version_id: null,
+            opened_at: now,
+            first_response_due_at: null,
+            next_response_due_at: null,
+            resolution_due_at: null,
+            resolved_at: null,
+            closed_at: null,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ tickets: [{ ticket_id: "ticket_test" }] });
+  });
+
+  it("validates create and update request bodies", () => {
+    expect(
+      TenantCreateRequestSchema.parse({
+        name: "Test Tenant",
+        default_timezone: "UTC",
+      }),
+    ).toMatchObject({ name: "Test Tenant" });
+
+    expect(
+      CustomerCreateRequestSchema.parse({
+        email: "customer@example.test",
+        metadata: { source: "fixture" },
+      }),
+    ).toMatchObject({ email: "customer@example.test" });
+
+    expect(
+      TicketCreateRequestSchema.parse({
+        conversation_id: "cnv_test",
+        customer_id: "cus_test",
+        priority: "p1",
+      }),
+    ).toMatchObject({ priority: "p1" });
+
+    expect(() => TicketUpdateRequestSchema.parse({})).toThrow();
+    expect(() =>
+      TicketUpdateRequestSchema.parse({ status: "closed" }),
+    ).toThrow();
   });
 
   it("validates ticket resource responses", () => {

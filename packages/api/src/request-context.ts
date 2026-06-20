@@ -53,7 +53,7 @@ export function registerRequestContext(app: FastifyInstance): void {
 
     const actor = readAuthContext(request);
     const tenant = path.startsWith("/v1/")
-      ? readTenantContext(request)
+      ? readOptionalTenantContext(request)
       : undefined;
 
     request.requestContext = {
@@ -119,6 +119,14 @@ function readTenantContext(request: FastifyRequest): TenantContext {
       "TENANT_CONTEXT_REQUIRED",
     ),
   };
+}
+
+function readOptionalTenantContext(
+  request: FastifyRequest,
+): TenantContext | undefined {
+  const tenantId = readHeader(request, "x-tenant-id");
+
+  return tenantId ? { tenantId } : undefined;
 }
 
 function readRequiredHeader(
