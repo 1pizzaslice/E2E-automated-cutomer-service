@@ -11,6 +11,8 @@ import {
   integrationByIdQuery,
   messageByIdQuery,
   messagesListQuery,
+  policiesListQuery,
+  policyByIdQuery,
   tenantsListQuery,
   tenantByIdQuery,
   ticketsListQuery,
@@ -207,6 +209,33 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain('"tickets"."tenant_id" = $2');
     expect(compiled.sql).toContain('"tickets"."ticket_id" = $3');
     expect(compiled.params).toEqual(["p1", "ten_a", "tic_a"]);
+  });
+
+  it("scopes policy reads by tenant", () => {
+    const query = policyByIdQuery(makeDb(), { tenantId: "ten_a" }, "pol_a");
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"tenant_policies"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"tenant_policies"."policy_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "pol_a", 1]);
+  });
+
+  it("scopes policy list reads by tenant and filters", () => {
+    const query = policiesListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        limit: 10,
+        domain: "shipping",
+        status: "active",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"tenant_policies"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"tenant_policies"."domain" = $2');
+    expect(compiled.sql).toContain('"tenant_policies"."status" = $3');
+    expect(compiled.params).toEqual(["ten_a", "shipping", "active", 10]);
   });
 
   it("scopes active KB chunk retrieval by tenant and document", () => {

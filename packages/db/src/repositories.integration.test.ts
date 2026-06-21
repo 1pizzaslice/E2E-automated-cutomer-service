@@ -11,6 +11,8 @@ import {
   integrationByIdQuery,
   messageByIdQuery,
   messagesListQuery,
+  policiesListQuery,
+  policyByIdQuery,
   ticketByIdQuery,
   visibleToolDefinitionByNameQuery,
 } from "./repositories.js";
@@ -23,6 +25,7 @@ import {
   kbChunks,
   kbDocuments,
   messages,
+  tenantPolicies,
   tenants,
   tickets,
   toolDefinitions,
@@ -43,6 +46,8 @@ const ids = {
   conversationB: `${fixturePrefix}_cnv_b`,
   messageA: `${fixturePrefix}_msg_a`,
   messageB: `${fixturePrefix}_msg_b`,
+  policyA: `${fixturePrefix}_pol_a`,
+  policyB: `${fixturePrefix}_pol_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
   kbDocumentA: `${fixturePrefix}_kbd_a`,
@@ -177,6 +182,29 @@ describeLive("live tenant-scoped repository queries", () => {
     expect(otherTenantReadRows).toEqual([]);
     expect(listRows.map((row) => row.messageId)).toContain(ids.messageA);
     expect(listRows.map((row) => row.messageId)).not.toContain(ids.messageB);
+  });
+
+  it("executes policy reads and lists without returning another tenant policy", async () => {
+    const ownReadRows = await policyByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.policyA,
+    );
+    const otherTenantReadRows = await policyByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.policyB,
+    );
+    const listRows = await policiesListQuery(
+      db,
+      { tenantId: ids.tenantA },
+      { limit: 10, domain: "shipping", status: "active" },
+    );
+
+    expect(ownReadRows.map((row) => row.policyId)).toEqual([ids.policyA]);
+    expect(otherTenantReadRows).toEqual([]);
+    expect(listRows.map((row) => row.policyId)).toContain(ids.policyA);
+    expect(listRows.map((row) => row.policyId)).not.toContain(ids.policyB);
   });
 
   it("executes KB chunk reads with tenant and active-status filters", async () => {
@@ -367,6 +395,23 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
     },
   ]);
 
+  await db.insert(tenantPolicies).values([
+    {
+      policyId: ids.policyA,
+      tenantId: ids.tenantA,
+      name: "Tenant A Shipping Policy",
+      domain: "shipping",
+      status: "active",
+    },
+    {
+      policyId: ids.policyB,
+      tenantId: ids.tenantB,
+      name: "Tenant B Shipping Policy",
+      domain: "shipping",
+      status: "active",
+    },
+  ]);
+
   await db.insert(kbDocuments).values([
     {
       kbDocumentId: ids.kbDocumentA,
@@ -508,6 +553,10 @@ async function cleanupFixtures(client: PostgresClient) {
   `;
   await client`
     delete from kb_documents
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
+  await client`
+    delete from tenant_policies
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})
   `;
   await client`

@@ -11,7 +11,11 @@ import {
   MessageDirectionSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
+  PolicyListResponseSchema,
+  PolicyResourceResponseSchema,
   TenantResourceResponseSchema,
+  TenantPolicyDomainSchema,
+  TenantPolicyStatusSchema,
   TenantCreateRequestSchema,
   TenantListResponseSchema,
   TenantUpdateRequestSchema,
@@ -48,6 +52,10 @@ const MessageParamsSchema = z.object({
   message_id: z.string().min(1),
 });
 
+const PolicyParamsSchema = z.object({
+  policy_id: z.string().min(1),
+});
+
 const TicketParamsSchema = z.object({
   ticket_id: z.string().min(1),
 });
@@ -72,6 +80,11 @@ const ConversationListQuerySchema = ListQuerySchema.extend({
 const MessageListQuerySchema = ListQuerySchema.extend({
   direction: MessageDirectionSchema.optional(),
   ticket_id: z.string().min(1).optional(),
+});
+
+const PolicyListQuerySchema = ListQuerySchema.extend({
+  domain: TenantPolicyDomainSchema.optional(),
+  status: TenantPolicyStatusSchema.optional(),
 });
 
 const TicketListQuerySchema = ListQuerySchema.extend({
@@ -323,6 +336,32 @@ export function registerRoutes(
       return MessageResourceResponseSchema.parse({ message });
     },
   );
+
+  app.get("/v1/policies", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "policies:read");
+
+    const query = parseQuery(PolicyListQuerySchema, request);
+    const policies = await services.policies.list(context, query);
+
+    return PolicyListResponseSchema.parse(policies);
+  });
+
+  app.get("/v1/policies/:policy_id", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "policies:read");
+
+    const { policy_id: policyId } = parseParams(PolicyParamsSchema, request);
+    const policy = await services.policies.getById(context, policyId);
+
+    if (!policy) {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Policy was not found.");
+    }
+
+    return PolicyResourceResponseSchema.parse({ policy });
+  });
 
   app.get("/v1/tickets", async (request) => {
     const context = requireTenantRequestContext(request);

@@ -6,21 +6,31 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton now has tenant/customer/ticket list-create-read-update contracts plus conversation/message read-list contracts with RBAC checks and PostgreSQL-backed API integration coverage; policy endpoint expansion is next.
+- Project phase: Milestone 3 API skeleton now has tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy read-list contracts with RBAC checks and PostgreSQL-backed API integration coverage; KB metadata endpoint expansion is next.
 - Current milestone: Milestone 3 - backend API skeleton.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, and conversation/message read-list skeleton contracts. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, and conversation/message/policy read-list skeleton contracts. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Continue Milestone 3 by adding policy read/list endpoint skeletons backed by the existing policy tables, extending RBAC per endpoint, and keeping PostgreSQL-backed API integration coverage for tenant isolation.
+> Continue Milestone 3 by adding KB metadata read/list endpoint skeletons backed by the existing KB document tables, extending RBAC per endpoint, and keeping PostgreSQL-backed API integration coverage for tenant isolation.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat/api-policy-read-list` from `main` for the current Milestone 3 continuation.
+- Added shared policy response schemas plus list/resource envelopes for tenant policy contracts.
+- Added tenant-scoped policy list/read repository helpers with `domain` and `status` filters.
+- Added repository SQL-generation tests and live repository integration coverage for policy tenant isolation.
+- Added `GET /v1/policies` and `GET /v1/policies/{policy_id}`.
+- Added policy service adapters that use `withTenantTransaction`.
+- Expanded `packages/api/src/rbac.ts` with `policies:read` for platform admin, ops admin, support agent, QA reviewer, and client viewer roles.
+- Expanded generated OpenAPI paths and component schemas for policy read-list contracts.
+- Expanded shared-schema tests, repository tests, API contract tests, and live PostgreSQL-backed API integration tests for policy tenant isolation.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, and `TODO.md` for the current API expansion.
 - Added shared conversation and message response schemas plus list/resource envelopes.
 - Added tenant-scoped conversation list/read repository helpers and message list/read helpers scoped by tenant and parent conversation.
 - Added repository SQL-generation tests and live repository integration coverage for conversation/message tenant isolation.
@@ -130,6 +140,17 @@ The next implementation task is:
 - `pnpm --filter @support/shared-schemas test` passes with 8 tests after the conversation/message read-list contract schema expansion.
 - `pnpm --filter @support/db test` passes with 28 normal tests and 13 live integration tests skipped unless explicitly enabled after conversation/message repository helper coverage.
 - `pnpm --filter @support/api test` passes with 27 API contract tests and 13 live integration tests skipped unless explicitly enabled after conversation/message route/service expansion.
+- `pnpm --filter @support/shared-schemas test` passes with 9 tests after the policy read-list contract schema expansion.
+- `pnpm --filter @support/db test` passes with 30 normal tests and 14 live integration tests skipped unless explicitly enabled after policy repository helper coverage.
+- `pnpm --filter @support/api test` passes with 30 API contract tests and 15 live integration tests skipped unless explicitly enabled after policy route/service expansion.
+- `pnpm format` applied formatting after the policy API expansion.
+- `pnpm format:check` passes after the policy API expansion.
+- `pnpm lint` passes after the policy API expansion.
+- `pnpm typecheck` passes after the policy API expansion.
+- `pnpm test` passes after the policy API expansion.
+- `pnpm build` passes after the policy API expansion.
+- `pnpm infra:up` reports the local Compose stack running and PostgreSQL healthy after the policy API expansion.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` initially failed inside the managed sandbox with localhost `EPERM`, then passed when rerun with approved localhost access. The passing run covered 14 DB/RLS integration tests and 15 PostgreSQL-backed API integration tests.
 - `pnpm format` applied formatting after the conversation/message API expansion.
 - `pnpm format:check` passes after the conversation/message API expansion.
 - `pnpm lint` passes after the conversation/message API expansion.
@@ -155,7 +176,7 @@ The next implementation task is:
 
 - GitHub Actions includes the live PostgreSQL integration test step, but the latest workflow with DB/RLS plus API integration coverage has not run remotely yet.
 - API auth is still a placeholder header contract; no real identity provider exists yet.
-- RBAC exists only for the current skeleton OpenAPI, tenant/customer/ticket list-create-read-update endpoints, and conversation/message read-list endpoints; it must be extended as new endpoint families are added.
+- RBAC exists only for the current skeleton OpenAPI, tenant/customer/ticket list-create-read-update endpoints, and conversation/message/policy read-list endpoints; it must be extended as new endpoint families are added.
 - Tenant/customer/ticket create/update endpoints do not yet create idempotency records, audit events, or workflow side effects.
 - Conversation/message endpoints are read-list only; message ingestion, internal-note creation, outbound sends, attachment validation, and HTML sanitization enforcement remain future workflow/channel tasks.
 - Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
@@ -307,13 +328,13 @@ Checklist:
 - [x] Add conversation endpoints. Current: read/list skeleton only.
 - [x] Add ticket endpoints. Current: list/create/read/update skeleton only; lifecycle transition endpoints are pending.
 - [x] Add message endpoints. Current: read/list under conversations skeleton only.
-- [ ] Add policy endpoints.
+- [x] Add policy endpoints. Current: read/list skeleton only; create/version/approval/activation endpoints are pending.
 - [ ] Add KB metadata endpoints.
 - [ ] Add approval endpoints.
 - [ ] Add audit read endpoints.
 - [x] Add contract tests for current API skeleton.
 - [x] Add RBAC checks for current API skeleton endpoints.
-- [x] Add PostgreSQL-backed API integration tests for current tenant/customer/conversation/message/ticket endpoints.
+- [x] Add PostgreSQL-backed API integration tests for current tenant/customer/conversation/message/policy/ticket endpoints.
 
 Acceptance criteria:
 
@@ -565,6 +586,11 @@ Use reverse chronological order.
 
 ### 2026-06-21
 
+- Continued Milestone 3 policy API expansion:
+  - Added policy read/list skeleton endpoints backed by the existing `tenant_policies` table.
+  - Added route-level RBAC for `policies:read`.
+  - Added OpenAPI, shared schema, repository helper, API contract, repository integration, and live PostgreSQL-backed API integration coverage.
+  - Kept policy create, policy version creation, approval, activation, audit side effects, and immutable active-version enforcement for future policy workflow tasks.
 - Continued Milestone 3 conversation/message API expansion:
   - Added conversation read/list and message read/list skeleton endpoints backed by existing schema.
   - Added route-level RBAC for `conversations:read` and `messages:read`.

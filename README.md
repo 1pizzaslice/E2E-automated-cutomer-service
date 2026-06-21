@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, and Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list, create, read, and update contracts plus conversation/message read-list contracts. No business workflow implementation yet.
+Current status: documentation harness, backend scaffold, database/RLS foundation, and Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list, create, read, and update contracts; conversation/message read-list contracts; and policy read-list contracts. No business workflow implementation yet.
 
 ## Start Here
 
@@ -69,7 +69,7 @@ pnpm test:py
 pnpm infra:up
 ```
 
-Live PostgreSQL integration tests require the local PostgreSQL service and cover repository tenant filters, PostgreSQL RLS, and PostgreSQL-backed API tenant/customer/conversation/message/ticket endpoints:
+Live PostgreSQL integration tests require the local PostgreSQL service and cover repository tenant filters, PostgreSQL RLS, and PostgreSQL-backed API tenant/customer/conversation/message/policy/ticket endpoints:
 
 ```bash
 DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
@@ -106,12 +106,14 @@ Implemented endpoints:
 - `GET /v1/conversations/{conversation_id}`
 - `GET /v1/conversations/{conversation_id}/messages`
 - `GET /v1/conversations/{conversation_id}/messages/{message_id}`
+- `GET /v1/policies`
+- `GET /v1/policies/{policy_id}`
 - `GET /v1/tickets`
 - `POST /v1/tickets`
 - `GET /v1/tickets/{ticket_id}`
 - `PATCH /v1/tickets/{ticket_id}`
 
-Non-health endpoints require placeholder auth headers. Tenant-scoped endpoints require `x-tenant-id`; global tenant administration endpoints such as `GET /v1/tenants` and `POST /v1/tenants` do not. Tenant-scoped DB work uses the DB package RLS transaction helper. The current skeleton enforces role permissions from `x-user-roles`: tenant creation/listing is platform-admin only, tenant read/update is admin-only, customer/conversation/message/ticket reads allow read-focused tenant roles, and customer/ticket writes are limited to platform, ops, and support-agent roles. Ticket `PATCH` updates triage and assignment fields only; lifecycle transitions remain future workflow endpoints.
+Non-health endpoints require placeholder auth headers. Tenant-scoped endpoints require `x-tenant-id`; global tenant administration endpoints such as `GET /v1/tenants` and `POST /v1/tenants` do not. Tenant-scoped DB work uses the DB package RLS transaction helper. The current skeleton enforces role permissions from `x-user-roles`: tenant creation/listing is platform-admin only, tenant read/update is admin-only, customer/conversation/message/policy/ticket reads allow read-focused tenant roles, and customer/ticket writes are limited to platform, ops, and support-agent roles. Ticket `PATCH` updates triage and assignment fields only; lifecycle transitions remain future workflow endpoints.
 
 ## Scope
 

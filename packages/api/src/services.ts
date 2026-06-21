@@ -10,6 +10,8 @@ import {
   customersListQuery,
   messageByIdQuery,
   messagesListQuery,
+  policiesListQuery,
+  policyByIdQuery,
   tenantsListQuery,
   tenantByIdQuery,
   ticketByIdQuery,
@@ -26,6 +28,7 @@ import {
   type NewTicket,
   type PostgresClient,
   type Tenant,
+  type TenantPolicy,
   type Ticket,
 } from "@support/db";
 import type {
@@ -37,6 +40,8 @@ import type {
   CustomerUpdateRequest,
   MessageListResponse,
   MessageResponse,
+  PolicyListResponse,
+  PolicyResponse,
   TenantCreateRequest,
   TenantListResponse,
   TenantResponse,
@@ -75,6 +80,11 @@ export interface TicketListOptions extends ListOptions {
   readonly status?: Ticket["status"];
   readonly customer_id?: string;
   readonly assigned_queue?: string;
+}
+
+export interface PolicyListOptions extends ListOptions {
+  readonly domain?: TenantPolicy["domain"];
+  readonly status?: TenantPolicy["status"];
 }
 
 export interface ApiServices {
@@ -137,6 +147,16 @@ export interface ApiServices {
       conversationId: string,
       messageId: string,
     ): Promise<MessageResponse | null>;
+  };
+  readonly policies: {
+    list(
+      context: TenantRequestContext,
+      options: PolicyListOptions,
+    ): Promise<PolicyListResponse>;
+    getById(
+      context: TenantRequestContext,
+      policyId: string,
+    ): Promise<PolicyResponse | null>;
   };
   readonly tickets: {
     list(
@@ -421,6 +441,48 @@ export function createDatabaseApiServices(): ApiServices {
         );
       },
     },
+    policies: {
+      async list(context, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await policiesListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              {
+                limit: options.limit,
+                domain: options.domain,
+                status: options.status,
+              },
+            );
+
+            return {
+              policies: rows.map(mapPolicy),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
+          },
+        );
+      },
+      async getById(context, policyId) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await policyByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              policyId,
+            );
+
+            return rows[0] ? mapPolicy(rows[0]) : null;
+          },
+        );
+      },
+    },
     tickets: {
       async list(context, options) {
         return withTenantTransaction(
@@ -648,6 +710,18 @@ function mapMessage(row: Message): MessageResponse {
     sent_at: toNullableIsoString(row.sentAt),
     idempotency_key: row.idempotencyKey,
     created_at: toIsoString(row.createdAt),
+  };
+}
+
+function mapPolicy(row: TenantPolicy): PolicyResponse {
+  return {
+    policy_id: row.policyId,
+    tenant_id: row.tenantId,
+    name: row.name,
+    domain: row.domain,
+    status: row.status,
+    created_at: toIsoString(row.createdAt),
+    updated_at: toIsoString(row.updatedAt),
   };
 }
 

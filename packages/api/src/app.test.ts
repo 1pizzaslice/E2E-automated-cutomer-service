@@ -9,6 +9,8 @@ import {
   HealthResponseSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
+  PolicyListResponseSchema,
+  PolicyResourceResponseSchema,
   TenantListResponseSchema,
   TenantResourceResponseSchema,
   TicketListResponseSchema,
@@ -130,6 +132,8 @@ describe("api request context and contract errors", () => {
     expect(body.paths).toHaveProperty(
       "/v1/conversations/{conversation_id}/messages",
     );
+    expect(body.paths).toHaveProperty("/v1/policies");
+    expect(body.paths).toHaveProperty("/v1/policies/{policy_id}");
     expect(body.paths).toHaveProperty("/v1/tickets");
     expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}");
   });
@@ -385,6 +389,55 @@ describe("api tenant-scoped resource contracts", () => {
       tenant_id: "ten_test",
       body_text: "Where is my order?",
     });
+  });
+
+  it("lists policy resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/policies?domain=shipping&status=active&limit=10",
+      headers: authHeaders,
+    });
+    const body = PolicyListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.policies).toHaveLength(1);
+    expect(body.policies[0]!).toMatchObject({
+      policy_id: "pol_test",
+      domain: "shipping",
+      status: "active",
+    });
+  });
+
+  it("returns policy resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/policies/pol_test",
+      headers: authHeaders,
+    });
+    const body = PolicyResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.policy).toMatchObject({
+      policy_id: "pol_test",
+      tenant_id: "ten_test",
+      domain: "shipping",
+      status: "active",
+    });
+  });
+
+  it("rejects policy reads for roles without policy read permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/policies/pol_test",
+      headers: integrationAdminHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
   });
 
   it("lists ticket resources through the shared response schema", async () => {
@@ -751,6 +804,46 @@ function makeServices(
           sent_at: null,
           idempotency_key: "idem_msg_test",
           created_at: now,
+        };
+      },
+    },
+    policies: {
+      async list(context, options) {
+        expectTenantContext(context);
+
+        return {
+          policies: [
+            {
+              policy_id: "pol_test",
+              tenant_id: context.tenant.tenantId,
+              name: "Shipping Policy",
+              domain: options.domain ?? "shipping",
+              status: options.status ?? "active",
+              created_at: now,
+              updated_at: now,
+            },
+          ],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async getById(context, policyId) {
+        expectTenantContext(context);
+
+        if (policyId !== "pol_test") {
+          return null;
+        }
+
+        return {
+          policy_id: "pol_test",
+          tenant_id: context.tenant.tenantId,
+          name: "Shipping Policy",
+          domain: "shipping",
+          status: "active",
+          created_at: now,
+          updated_at: now,
         };
       },
     },
