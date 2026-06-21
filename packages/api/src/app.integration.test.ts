@@ -8,6 +8,8 @@ import {
   CustomerResourceResponseSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
+  PolicyListResponseSchema,
+  PolicyResourceResponseSchema,
   TenantListResponseSchema,
   TenantResourceResponseSchema,
   TicketListResponseSchema,
@@ -22,6 +24,7 @@ import {
   customers,
   messages,
   migrateDatabase,
+  tenantPolicies,
   tenants,
   tickets,
   type PostgresClient,
@@ -45,6 +48,8 @@ const ids = {
   conversationB: `${fixturePrefix}_cnv_b`,
   messageA: `${fixturePrefix}_msg_a`,
   messageB: `${fixturePrefix}_msg_b`,
+  policyA: `${fixturePrefix}_pol_a`,
+  policyB: `${fixturePrefix}_pol_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
   ticketCreated: `${fixturePrefix}_tic_created`,
@@ -327,6 +332,47 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
   });
 
+  it("lists tenant-scoped policies without crossing tenants", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/v1/policies?domain=shipping&status=active&limit=100",
+      headers: authHeaders("support_agent"),
+    });
+    const body = PolicyListResponseSchema.parse(response.json());
+    const policyIds = body.policies.map((policy) => policy.policy_id);
+
+    expect(response.statusCode).toBe(200);
+    expect(policyIds).toContain(ids.policyA);
+    expect(policyIds).not.toContain(ids.policyB);
+  });
+
+  it("reads tenant-scoped policies without crossing tenants", async () => {
+    const ownResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/policies/${ids.policyA}`,
+      headers: authHeaders("support_agent"),
+    });
+    const otherTenantResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/policies/${ids.policyB}`,
+      headers: authHeaders("support_agent"),
+    });
+    const ownBody = PolicyResourceResponseSchema.parse(ownResponse.json());
+    const otherTenantBody = ApiErrorResponseSchema.parse(
+      otherTenantResponse.json(),
+    );
+
+    expect(ownResponse.statusCode).toBe(200);
+    expect(ownBody.policy).toMatchObject({
+      policy_id: ids.policyA,
+      tenant_id: ids.tenantA,
+      domain: "shipping",
+      status: "active",
+    });
+    expect(otherTenantResponse.statusCode).toBe(404);
+    expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
   it("lists tenant-scoped tickets without crossing tenants", async () => {
     const response = await app!.inject({
       method: "GET",
@@ -548,9 +594,30 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
       idempotencyKey: `${fixturePrefix}_idem_msg_b`,
     },
   ]);
+
+  await db.insert(tenantPolicies).values([
+    {
+      policyId: ids.policyA,
+      tenantId: ids.tenantA,
+      name: "Tenant A Shipping Policy",
+      domain: "shipping",
+      status: "active",
+    },
+    {
+      policyId: ids.policyB,
+      tenantId: ids.tenantB,
+      name: "Tenant B Shipping Policy",
+      domain: "shipping",
+      status: "active",
+    },
+  ]);
 }
 
 async function cleanupFixtures(client: PostgresClient) {
+  await client`
+    delete from tenant_policies
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
   await client`
     delete from messages
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})

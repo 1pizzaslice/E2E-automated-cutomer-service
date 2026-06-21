@@ -12,7 +12,9 @@ import {
   type NewCustomer,
   type NewTenant,
   type NewTicket,
+  type TenantPolicy,
   type Ticket,
+  tenantPolicies,
   tenants,
   tickets,
   toolDefinitions,
@@ -46,6 +48,11 @@ export interface TicketListQueryOptions extends ListQueryOptions {
   readonly status?: Ticket["status"];
   readonly customerId?: string;
   readonly assignedQueue?: string;
+}
+
+export interface PolicyListQueryOptions extends ListQueryOptions {
+  readonly domain?: TenantPolicy["domain"];
+  readonly status?: TenantPolicy["status"];
 }
 
 export function tenantsListQuery(
@@ -315,6 +322,46 @@ export function updateTicketByIdQuery(
       and(eq(tickets.tenantId, scope.tenantId), eq(tickets.ticketId, ticketId)),
     )
     .returning();
+}
+
+export function policiesListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: PolicyListQueryOptions,
+) {
+  const filters: SQL[] = [eq(tenantPolicies.tenantId, scope.tenantId)];
+
+  if (options.domain) {
+    filters.push(eq(tenantPolicies.domain, options.domain));
+  }
+
+  if (options.status) {
+    filters.push(eq(tenantPolicies.status, options.status));
+  }
+
+  return db
+    .select()
+    .from(tenantPolicies)
+    .where(and(...filters))
+    .orderBy(desc(tenantPolicies.createdAt), desc(tenantPolicies.policyId))
+    .limit(options.limit);
+}
+
+export function policyByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  policyId: string,
+) {
+  return db
+    .select()
+    .from(tenantPolicies)
+    .where(
+      and(
+        eq(tenantPolicies.tenantId, scope.tenantId),
+        eq(tenantPolicies.policyId, policyId),
+      ),
+    )
+    .limit(1);
 }
 
 export function activeKbChunksForDocumentQuery(

@@ -274,6 +274,46 @@ export type MessageResourceResponse = z.infer<
 >;
 export type MessageListResponse = z.infer<typeof MessageListResponseSchema>;
 
+export const TenantPolicyDomainSchema = z.enum([
+  "refunds",
+  "cancellations",
+  "shipping",
+  "faq",
+  "routing",
+  "tone",
+  "escalation",
+  "automation",
+]);
+
+export const TenantPolicyStatusSchema = z.enum(["draft", "active", "archived"]);
+
+export const PolicyResponseSchema = z.object({
+  policy_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  name: z.string().min(1),
+  domain: TenantPolicyDomainSchema,
+  status: TenantPolicyStatusSchema,
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+});
+
+export const PolicyResourceResponseSchema = z.object({
+  policy: PolicyResponseSchema,
+});
+
+export const PolicyListResponseSchema = z.object({
+  policies: z.array(PolicyResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export type TenantPolicyDomain = z.infer<typeof TenantPolicyDomainSchema>;
+export type TenantPolicyStatus = z.infer<typeof TenantPolicyStatusSchema>;
+export type PolicyResponse = z.infer<typeof PolicyResponseSchema>;
+export type PolicyResourceResponse = z.infer<
+  typeof PolicyResourceResponseSchema
+>;
+export type PolicyListResponse = z.infer<typeof PolicyListResponseSchema>;
+
 export const TicketStatusSchema = z.enum([
   "new",
   "triaged",

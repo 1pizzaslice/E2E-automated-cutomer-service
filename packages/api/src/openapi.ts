@@ -533,6 +533,67 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/policies": {
+        get: {
+          summary: "List tenant-scoped policies",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "domain",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/TenantPolicyDomain" },
+            },
+            {
+              name: "status",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/TenantPolicyStatus" },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Policy list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PolicyList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/policies/{policy_id}": {
+        get: {
+          summary: "Read a tenant-scoped policy",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "policy_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Policy resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PolicyResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -869,6 +930,60 @@ export function buildOpenApiDocument() {
             messages: {
               type: "array",
               items: { $ref: "#/components/schemas/Message" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        PolicyResource: {
+          type: "object",
+          required: ["policy"],
+          properties: {
+            policy: { $ref: "#/components/schemas/Policy" },
+          },
+        },
+        TenantPolicyDomain: {
+          enum: [
+            "refunds",
+            "cancellations",
+            "shipping",
+            "faq",
+            "routing",
+            "tone",
+            "escalation",
+            "automation",
+          ],
+        },
+        TenantPolicyStatus: {
+          enum: ["draft", "active", "archived"],
+        },
+        Policy: {
+          type: "object",
+          required: [
+            "policy_id",
+            "tenant_id",
+            "name",
+            "domain",
+            "status",
+            "created_at",
+            "updated_at",
+          ],
+          properties: {
+            policy_id: { type: "string" },
+            tenant_id: { type: "string" },
+            name: { type: "string" },
+            domain: { $ref: "#/components/schemas/TenantPolicyDomain" },
+            status: { $ref: "#/components/schemas/TenantPolicyStatus" },
+            created_at: { type: "string", format: "date-time" },
+            updated_at: { type: "string", format: "date-time" },
+          },
+        },
+        PolicyList: {
+          type: "object",
+          required: ["policies", "page"],
+          properties: {
+            policies: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Policy" },
             },
             page: { $ref: "#/components/schemas/ListPage" },
           },

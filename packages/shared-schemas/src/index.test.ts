@@ -11,6 +11,8 @@ import {
   HealthResponseSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
+  PolicyListResponseSchema,
+  PolicyResourceResponseSchema,
   TicketCreateRequestSchema,
   TicketListResponseSchema,
   TicketResourceResponseSchema,
@@ -191,6 +193,23 @@ describe("shared API contract schemas", () => {
         page: { count: 1, limit: 50 },
       }),
     ).toMatchObject({ tickets: [{ ticket_id: "ticket_test" }] });
+
+    expect(
+      PolicyListResponseSchema.parse({
+        policies: [
+          {
+            policy_id: "pol_test",
+            tenant_id: "ten_test",
+            name: "Shipping Policy",
+            domain: "shipping",
+            status: "active",
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ policies: [{ policy_id: "pol_test" }] });
   });
 
   it("validates create and update request bodies", () => {
@@ -303,5 +322,21 @@ describe("shared API contract schemas", () => {
     expect(MessageResourceResponseSchema.parse(messageResponse)).toEqual(
       messageResponse,
     );
+  });
+
+  it("validates policy resource responses", () => {
+    const response = {
+      policy: {
+        policy_id: "pol_test",
+        tenant_id: "ten_test",
+        name: "Shipping Policy",
+        domain: "shipping",
+        status: "active",
+        created_at: "2026-06-19T00:00:00.000Z",
+        updated_at: "2026-06-19T00:00:00.000Z",
+      },
+    };
+
+    expect(PolicyResourceResponseSchema.parse(response)).toEqual(response);
   });
 });
