@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   ApiErrorResponseSchema,
+  ConversationListResponseSchema,
+  ConversationResourceResponseSchema,
   CustomerCreateRequestSchema,
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
   TenantCreateRequestSchema,
   TenantListResponseSchema,
   HealthResponseSchema,
+  MessageListResponseSchema,
+  MessageResourceResponseSchema,
   TicketCreateRequestSchema,
   TicketListResponseSchema,
   TicketResourceResponseSchema,
@@ -104,6 +108,57 @@ describe("shared API contract schemas", () => {
     ).toMatchObject({ customers: [{ customer_id: "cus_test" }] });
 
     expect(
+      ConversationListResponseSchema.parse({
+        conversations: [
+          {
+            conversation_id: "cnv_test",
+            tenant_id: "ten_test",
+            customer_id: "cus_test",
+            channel_id: "chn_test",
+            external_thread_id: "thread_test",
+            status: "open",
+            last_message_at: now,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ conversations: [{ conversation_id: "cnv_test" }] });
+
+    expect(
+      MessageListResponseSchema.parse({
+        messages: [
+          {
+            message_id: "msg_test",
+            tenant_id: "ten_test",
+            conversation_id: "cnv_test",
+            ticket_id: "ticket_test",
+            channel_id: "chn_test",
+            direction: "inbound",
+            body_text: "Where is my order?",
+            body_html_ref: null,
+            attachments: [],
+            external_message_id: "external_msg_test",
+            external_thread_id: "thread_test",
+            raw_payload_ref: "raw_payload_test",
+            created_by_type: "customer",
+            created_by_user_id: null,
+            provider_message_id: null,
+            send_status: null,
+            sent_by_type: null,
+            ai_run_id: null,
+            approval_id: null,
+            sent_at: null,
+            idempotency_key: "idem_msg_test",
+            created_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ messages: [{ message_id: "msg_test" }] });
+
+    expect(
       TicketListResponseSchema.parse({
         tickets: [
           {
@@ -198,5 +253,55 @@ describe("shared API contract schemas", () => {
     };
 
     expect(TicketResourceResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("validates conversation and message resource responses", () => {
+    const now = "2026-06-19T00:00:00.000Z";
+    const conversationResponse = {
+      conversation: {
+        conversation_id: "cnv_test",
+        tenant_id: "ten_test",
+        customer_id: "cus_test",
+        channel_id: "chn_test",
+        external_thread_id: "thread_test",
+        status: "open",
+        last_message_at: now,
+        created_at: now,
+        updated_at: now,
+      },
+    };
+    const messageResponse = {
+      message: {
+        message_id: "msg_test",
+        tenant_id: "ten_test",
+        conversation_id: "cnv_test",
+        ticket_id: "ticket_test",
+        channel_id: "chn_test",
+        direction: "inbound",
+        body_text: "Where is my order?",
+        body_html_ref: null,
+        attachments: [],
+        external_message_id: "external_msg_test",
+        external_thread_id: "thread_test",
+        raw_payload_ref: "raw_payload_test",
+        created_by_type: "customer",
+        created_by_user_id: null,
+        provider_message_id: null,
+        send_status: null,
+        sent_by_type: null,
+        ai_run_id: null,
+        approval_id: null,
+        sent_at: null,
+        idempotency_key: "idem_msg_test",
+        created_at: now,
+      },
+    };
+
+    expect(
+      ConversationResourceResponseSchema.parse(conversationResponse),
+    ).toEqual(conversationResponse);
+    expect(MessageResourceResponseSchema.parse(messageResponse)).toEqual(
+      messageResponse,
+    );
   });
 });

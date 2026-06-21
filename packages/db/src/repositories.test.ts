@@ -4,9 +4,13 @@ import { createDatabase, type PostgresClient } from "./client.js";
 import {
   activeKbChunksForDocumentQuery,
   auditEventsForEntityQuery,
+  conversationsListQuery,
+  conversationByIdQuery,
   customersListQuery,
   customerByIdQuery,
   integrationByIdQuery,
+  messageByIdQuery,
+  messagesListQuery,
   tenantsListQuery,
   tenantByIdQuery,
   ticketsListQuery,
@@ -97,6 +101,69 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain('"customers"."tenant_id" = $2');
     expect(compiled.sql).toContain('"customers"."customer_id" = $3');
     expect(compiled.params).toEqual(["Updated Customer", "ten_a", "cus_a"]);
+  });
+
+  it("scopes conversation list reads by tenant and filters", () => {
+    const query = conversationsListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        limit: 10,
+        status: "open",
+        customerId: "cus_a",
+        channelId: "chn_a",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"conversations"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"conversations"."status" = $2');
+    expect(compiled.sql).toContain('"conversations"."customer_id" = $3');
+    expect(compiled.sql).toContain('"conversations"."channel_id" = $4');
+    expect(compiled.params).toEqual(["ten_a", "open", "cus_a", "chn_a", 10]);
+  });
+
+  it("scopes conversation reads by tenant", () => {
+    const query = conversationByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "cnv_a",
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"conversations"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"conversations"."conversation_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "cnv_a", 1]);
+  });
+
+  it("scopes message list reads by tenant, conversation, and filters", () => {
+    const query = messagesListQuery(makeDb(), { tenantId: "ten_a" }, "cnv_a", {
+      limit: 10,
+      direction: "inbound",
+      ticketId: "tic_a",
+    });
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"messages"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"messages"."conversation_id" = $2');
+    expect(compiled.sql).toContain('"messages"."direction" = $3');
+    expect(compiled.sql).toContain('"messages"."ticket_id" = $4');
+    expect(compiled.params).toEqual(["ten_a", "cnv_a", "inbound", "tic_a", 10]);
+  });
+
+  it("scopes message reads by tenant and conversation", () => {
+    const query = messageByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "cnv_a",
+      "msg_a",
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"messages"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"messages"."conversation_id" = $2');
+    expect(compiled.sql).toContain('"messages"."message_id" = $3');
+    expect(compiled.params).toEqual(["ten_a", "cnv_a", "msg_a", 1]);
   });
 
   it("scopes ticket reads by tenant", () => {

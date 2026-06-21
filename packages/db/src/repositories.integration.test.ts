@@ -5,8 +5,12 @@ import { migrateDatabase } from "./migrations.js";
 import {
   activeKbChunksForDocumentQuery,
   auditEventsForEntityQuery,
+  conversationByIdQuery,
+  conversationsListQuery,
   customerByIdQuery,
   integrationByIdQuery,
+  messageByIdQuery,
+  messagesListQuery,
   ticketByIdQuery,
   visibleToolDefinitionByNameQuery,
 } from "./repositories.js";
@@ -18,6 +22,7 @@ import {
   integrations,
   kbChunks,
   kbDocuments,
+  messages,
   tenants,
   tickets,
   toolDefinitions,
@@ -36,6 +41,8 @@ const ids = {
   channelB: `${fixturePrefix}_chn_b`,
   conversationA: `${fixturePrefix}_cnv_a`,
   conversationB: `${fixturePrefix}_cnv_b`,
+  messageA: `${fixturePrefix}_msg_a`,
+  messageB: `${fixturePrefix}_msg_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
   kbDocumentA: `${fixturePrefix}_kbd_a`,
@@ -115,6 +122,61 @@ describeLive("live tenant-scoped repository queries", () => {
 
     expect(ownRows.map((row) => row.ticketId)).toEqual([ids.ticketA]);
     expect(otherTenantRows).toEqual([]);
+  });
+
+  it("executes conversation reads and lists without returning another tenant conversation", async () => {
+    const ownReadRows = await conversationByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.conversationA,
+    );
+    const otherTenantReadRows = await conversationByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.conversationB,
+    );
+    const listRows = await conversationsListQuery(
+      db,
+      { tenantId: ids.tenantA },
+      { limit: 10, status: "open" },
+    );
+
+    expect(ownReadRows.map((row) => row.conversationId)).toEqual([
+      ids.conversationA,
+    ]);
+    expect(otherTenantReadRows).toEqual([]);
+    expect(listRows.map((row) => row.conversationId)).toContain(
+      ids.conversationA,
+    );
+    expect(listRows.map((row) => row.conversationId)).not.toContain(
+      ids.conversationB,
+    );
+  });
+
+  it("executes message reads and lists without returning another tenant message", async () => {
+    const ownReadRows = await messageByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.conversationA,
+      ids.messageA,
+    );
+    const otherTenantReadRows = await messageByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.conversationB,
+      ids.messageB,
+    );
+    const listRows = await messagesListQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.conversationA,
+      { limit: 10, direction: "inbound" },
+    );
+
+    expect(ownReadRows.map((row) => row.messageId)).toEqual([ids.messageA]);
+    expect(otherTenantReadRows).toEqual([]);
+    expect(listRows.map((row) => row.messageId)).toContain(ids.messageA);
+    expect(listRows.map((row) => row.messageId)).not.toContain(ids.messageB);
   });
 
   it("executes KB chunk reads with tenant and active-status filters", async () => {
@@ -274,6 +336,37 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
     },
   ]);
 
+  await db.insert(messages).values([
+    {
+      messageId: ids.messageA,
+      tenantId: ids.tenantA,
+      conversationId: ids.conversationA,
+      ticketId: ids.ticketA,
+      channelId: ids.channelA,
+      direction: "inbound",
+      bodyText: "Tenant A repository message.",
+      externalMessageId: `${fixturePrefix}_external_msg_a`,
+      externalThreadId: `${fixturePrefix}_thread_a`,
+      rawPayloadRef: `${fixturePrefix}/raw/a.json`,
+      createdByType: "customer",
+      idempotencyKey: `${fixturePrefix}_idem_msg_a`,
+    },
+    {
+      messageId: ids.messageB,
+      tenantId: ids.tenantB,
+      conversationId: ids.conversationB,
+      ticketId: ids.ticketB,
+      channelId: ids.channelB,
+      direction: "inbound",
+      bodyText: "Tenant B repository message.",
+      externalMessageId: `${fixturePrefix}_external_msg_b`,
+      externalThreadId: `${fixturePrefix}_thread_b`,
+      rawPayloadRef: `${fixturePrefix}/raw/b.json`,
+      createdByType: "customer",
+      idempotencyKey: `${fixturePrefix}_idem_msg_b`,
+    },
+  ]);
+
   await db.insert(kbDocuments).values([
     {
       kbDocumentId: ids.kbDocumentA,
@@ -415,6 +508,10 @@ async function cleanupFixtures(client: PostgresClient) {
   `;
   await client`
     delete from kb_documents
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
+  await client`
+    delete from messages
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})
   `;
   await client`

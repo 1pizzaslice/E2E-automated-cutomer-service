@@ -2,8 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
   ApiErrorResponseSchema,
+  ConversationListResponseSchema,
+  ConversationResourceResponseSchema,
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
+  MessageListResponseSchema,
+  MessageResourceResponseSchema,
   TenantListResponseSchema,
   TenantResourceResponseSchema,
   TicketListResponseSchema,
@@ -16,6 +20,7 @@ import {
   createDatabase,
   createPostgresClient,
   customers,
+  messages,
   migrateDatabase,
   tenants,
   tickets,
@@ -38,6 +43,8 @@ const ids = {
   channelB: `${fixturePrefix}_chn_b`,
   conversationA: `${fixturePrefix}_cnv_a`,
   conversationB: `${fixturePrefix}_cnv_b`,
+  messageA: `${fixturePrefix}_msg_a`,
+  messageB: `${fixturePrefix}_msg_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
   ticketCreated: `${fixturePrefix}_tic_created`,
@@ -222,6 +229,102 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     });
     expect(patchResponse.statusCode).toBe(200);
     expect(patchBody.customer.display_name).toBe("Updated API Customer");
+  });
+
+  it("lists tenant-scoped conversations without crossing tenants", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/v1/conversations?limit=100",
+      headers: authHeaders("support_agent"),
+    });
+    const body = ConversationListResponseSchema.parse(response.json());
+    const conversationIds = body.conversations.map(
+      (conversation) => conversation.conversation_id,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(conversationIds).toContain(ids.conversationA);
+    expect(conversationIds).not.toContain(ids.conversationB);
+  });
+
+  it("reads tenant-scoped conversations without crossing tenants", async () => {
+    const ownResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/conversations/${ids.conversationA}`,
+      headers: authHeaders("support_agent"),
+    });
+    const otherTenantResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/conversations/${ids.conversationB}`,
+      headers: authHeaders("support_agent"),
+    });
+    const ownBody = ConversationResourceResponseSchema.parse(
+      ownResponse.json(),
+    );
+    const otherTenantBody = ApiErrorResponseSchema.parse(
+      otherTenantResponse.json(),
+    );
+
+    expect(ownResponse.statusCode).toBe(200);
+    expect(ownBody.conversation).toMatchObject({
+      conversation_id: ids.conversationA,
+      tenant_id: ids.tenantA,
+      customer_id: ids.customerA,
+      status: "open",
+    });
+    expect(otherTenantResponse.statusCode).toBe(404);
+    expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("lists tenant-scoped messages without crossing tenants", async () => {
+    const ownResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/conversations/${ids.conversationA}/messages?limit=100`,
+      headers: authHeaders("support_agent"),
+    });
+    const otherTenantResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/conversations/${ids.conversationB}/messages?limit=100`,
+      headers: authHeaders("support_agent"),
+    });
+    const ownBody = MessageListResponseSchema.parse(ownResponse.json());
+    const otherTenantBody = ApiErrorResponseSchema.parse(
+      otherTenantResponse.json(),
+    );
+    const messageIds = ownBody.messages.map((message) => message.message_id);
+
+    expect(ownResponse.statusCode).toBe(200);
+    expect(messageIds).toContain(ids.messageA);
+    expect(messageIds).not.toContain(ids.messageB);
+    expect(otherTenantResponse.statusCode).toBe(404);
+    expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("reads tenant-scoped messages without crossing tenants", async () => {
+    const ownResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/conversations/${ids.conversationA}/messages/${ids.messageA}`,
+      headers: authHeaders("support_agent"),
+    });
+    const otherTenantResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/conversations/${ids.conversationB}/messages/${ids.messageB}`,
+      headers: authHeaders("support_agent"),
+    });
+    const ownBody = MessageResourceResponseSchema.parse(ownResponse.json());
+    const otherTenantBody = ApiErrorResponseSchema.parse(
+      otherTenantResponse.json(),
+    );
+
+    expect(ownResponse.statusCode).toBe(200);
+    expect(ownBody.message).toMatchObject({
+      message_id: ids.messageA,
+      tenant_id: ids.tenantA,
+      conversation_id: ids.conversationA,
+      direction: "inbound",
+    });
+    expect(otherTenantResponse.statusCode).toBe(404);
+    expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
   });
 
   it("lists tenant-scoped tickets without crossing tenants", async () => {
@@ -414,9 +517,44 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
       openedAt: new Date("2026-06-19T00:00:00.000Z"),
     },
   ]);
+
+  await db.insert(messages).values([
+    {
+      messageId: ids.messageA,
+      tenantId: ids.tenantA,
+      conversationId: ids.conversationA,
+      ticketId: ids.ticketA,
+      channelId: ids.channelA,
+      direction: "inbound",
+      bodyText: "Where is my order?",
+      externalMessageId: `${fixturePrefix}_external_msg_a`,
+      externalThreadId: `${fixturePrefix}_thread_a`,
+      rawPayloadRef: `${fixturePrefix}/raw/a.json`,
+      createdByType: "customer",
+      idempotencyKey: `${fixturePrefix}_idem_msg_a`,
+    },
+    {
+      messageId: ids.messageB,
+      tenantId: ids.tenantB,
+      conversationId: ids.conversationB,
+      ticketId: ids.ticketB,
+      channelId: ids.channelB,
+      direction: "inbound",
+      bodyText: "Tenant B message",
+      externalMessageId: `${fixturePrefix}_external_msg_b`,
+      externalThreadId: `${fixturePrefix}_thread_b`,
+      rawPayloadRef: `${fixturePrefix}/raw/b.json`,
+      createdByType: "customer",
+      idempotencyKey: `${fixturePrefix}_idem_msg_b`,
+    },
+  ]);
 }
 
 async function cleanupFixtures(client: PostgresClient) {
+  await client`
+    delete from messages
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
   await client`
     delete from tickets
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})

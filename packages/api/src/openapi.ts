@@ -264,6 +264,148 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/conversations": {
+        get: {
+          summary: "List tenant-scoped conversations",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "status",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/ConversationStatus" },
+            },
+            {
+              name: "customer_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "channel_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Conversation list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ConversationList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/conversations/{conversation_id}": {
+        get: {
+          summary: "Read a tenant-scoped conversation",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "conversation_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Conversation resource",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ConversationResource",
+                  },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/conversations/{conversation_id}/messages": {
+        get: {
+          summary: "List messages for a tenant-scoped conversation",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "conversation_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "direction",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/MessageDirection" },
+            },
+            {
+              name: "ticket_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Message list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/MessageList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/conversations/{conversation_id}/messages/{message_id}": {
+        get: {
+          summary: "Read a message for a tenant-scoped conversation",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "conversation_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "message_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Message resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/MessageResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/tickets": {
         get: {
           summary: "List tenant-scoped tickets",
@@ -600,6 +742,135 @@ export function buildOpenApiDocument() {
               minLength: 1,
             },
             metadata: { type: "object", additionalProperties: true },
+          },
+        },
+        ConversationResource: {
+          type: "object",
+          required: ["conversation"],
+          properties: {
+            conversation: { $ref: "#/components/schemas/Conversation" },
+          },
+        },
+        ConversationStatus: {
+          enum: ["open", "archived"],
+        },
+        Conversation: {
+          type: "object",
+          required: [
+            "conversation_id",
+            "tenant_id",
+            "customer_id",
+            "channel_id",
+            "external_thread_id",
+            "status",
+            "last_message_at",
+            "created_at",
+            "updated_at",
+          ],
+          properties: {
+            conversation_id: { type: "string" },
+            tenant_id: { type: "string" },
+            customer_id: { type: "string" },
+            channel_id: { type: "string" },
+            external_thread_id: { type: ["string", "null"] },
+            status: { $ref: "#/components/schemas/ConversationStatus" },
+            last_message_at: {
+              type: ["string", "null"],
+              format: "date-time",
+            },
+            created_at: { type: "string", format: "date-time" },
+            updated_at: { type: "string", format: "date-time" },
+          },
+        },
+        ConversationList: {
+          type: "object",
+          required: ["conversations", "page"],
+          properties: {
+            conversations: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Conversation" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        MessageResource: {
+          type: "object",
+          required: ["message"],
+          properties: {
+            message: { $ref: "#/components/schemas/Message" },
+          },
+        },
+        MessageDirection: {
+          enum: ["inbound", "outbound", "internal_note", "system"],
+        },
+        MessageCreatorType: {
+          enum: ["customer", "human", "ai", "system", "integration"],
+        },
+        Message: {
+          type: "object",
+          required: [
+            "message_id",
+            "tenant_id",
+            "conversation_id",
+            "ticket_id",
+            "channel_id",
+            "direction",
+            "body_text",
+            "body_html_ref",
+            "attachments",
+            "external_message_id",
+            "external_thread_id",
+            "raw_payload_ref",
+            "created_by_type",
+            "created_by_user_id",
+            "provider_message_id",
+            "send_status",
+            "sent_by_type",
+            "ai_run_id",
+            "approval_id",
+            "sent_at",
+            "idempotency_key",
+            "created_at",
+          ],
+          properties: {
+            message_id: { type: "string" },
+            tenant_id: { type: "string" },
+            conversation_id: { type: "string" },
+            ticket_id: { type: ["string", "null"] },
+            channel_id: { type: "string" },
+            direction: { $ref: "#/components/schemas/MessageDirection" },
+            body_text: { type: ["string", "null"] },
+            body_html_ref: { type: ["string", "null"] },
+            attachments: {
+              type: "array",
+              items: { type: "object", additionalProperties: true },
+            },
+            external_message_id: { type: ["string", "null"] },
+            external_thread_id: { type: ["string", "null"] },
+            raw_payload_ref: { type: ["string", "null"] },
+            created_by_type: {
+              $ref: "#/components/schemas/MessageCreatorType",
+            },
+            created_by_user_id: { type: ["string", "null"] },
+            provider_message_id: { type: ["string", "null"] },
+            send_status: { type: ["string", "null"] },
+            sent_by_type: { type: ["string", "null"] },
+            ai_run_id: { type: ["string", "null"] },
+            approval_id: { type: ["string", "null"] },
+            sent_at: { type: ["string", "null"], format: "date-time" },
+            idempotency_key: { type: ["string", "null"] },
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        MessageList: {
+          type: "object",
+          required: ["messages", "page"],
+          properties: {
+            messages: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Message" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
           },
         },
         TicketResource: {

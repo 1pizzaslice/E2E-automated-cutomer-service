@@ -1,10 +1,16 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  ConversationListResponseSchema,
+  ConversationResourceResponseSchema,
+  ConversationStatusSchema,
   CustomerCreateRequestSchema,
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
   CustomerUpdateRequestSchema,
+  MessageDirectionSchema,
+  MessageListResponseSchema,
+  MessageResourceResponseSchema,
   TenantResourceResponseSchema,
   TenantCreateRequestSchema,
   TenantListResponseSchema,
@@ -33,6 +39,15 @@ const CustomerParamsSchema = z.object({
   customer_id: z.string().min(1),
 });
 
+const ConversationParamsSchema = z.object({
+  conversation_id: z.string().min(1),
+});
+
+const MessageParamsSchema = z.object({
+  conversation_id: z.string().min(1),
+  message_id: z.string().min(1),
+});
+
 const TicketParamsSchema = z.object({
   ticket_id: z.string().min(1),
 });
@@ -46,6 +61,17 @@ const ListQuerySchema = z
 const CustomerListQuerySchema = ListQuerySchema.extend({
   email: z.string().email().optional(),
   external_customer_ref: z.string().min(1).optional(),
+});
+
+const ConversationListQuerySchema = ListQuerySchema.extend({
+  status: ConversationStatusSchema.optional(),
+  customer_id: z.string().min(1).optional(),
+  channel_id: z.string().min(1).optional(),
+});
+
+const MessageListQuerySchema = ListQuerySchema.extend({
+  direction: MessageDirectionSchema.optional(),
+  ticket_id: z.string().min(1).optional(),
 });
 
 const TicketListQuerySchema = ListQuerySchema.extend({
@@ -207,6 +233,96 @@ export function registerRoutes(
 
     return CustomerResourceResponseSchema.parse({ customer });
   });
+
+  app.get("/v1/conversations", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "conversations:read");
+
+    const query = parseQuery(ConversationListQuerySchema, request);
+    const conversations = await services.conversations.list(context, query);
+
+    return ConversationListResponseSchema.parse(conversations);
+  });
+
+  app.get("/v1/conversations/:conversation_id", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "conversations:read");
+
+    const { conversation_id: conversationId } = parseParams(
+      ConversationParamsSchema,
+      request,
+    );
+    const conversation = await services.conversations.getById(
+      context,
+      conversationId,
+    );
+
+    if (!conversation) {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "Conversation was not found.",
+      );
+    }
+
+    return ConversationResourceResponseSchema.parse({ conversation });
+  });
+
+  app.get("/v1/conversations/:conversation_id/messages", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "messages:read");
+
+    const { conversation_id: conversationId } = parseParams(
+      ConversationParamsSchema,
+      request,
+    );
+    const query = parseQuery(MessageListQuerySchema, request);
+    const messages = await services.messages.list(
+      context,
+      conversationId,
+      query,
+    );
+
+    if (!messages) {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "Conversation was not found.",
+      );
+    }
+
+    return MessageListResponseSchema.parse(messages);
+  });
+
+  app.get(
+    "/v1/conversations/:conversation_id/messages/:message_id",
+    async (request) => {
+      const context = requireTenantRequestContext(request);
+
+      requirePermission(context.actor, "messages:read");
+
+      const { conversation_id: conversationId, message_id: messageId } =
+        parseParams(MessageParamsSchema, request);
+      const message = await services.messages.getById(
+        context,
+        conversationId,
+        messageId,
+      );
+
+      if (!message) {
+        throw new HttpError(
+          404,
+          "RESOURCE_NOT_FOUND",
+          "Message was not found.",
+        );
+      }
+
+      return MessageResourceResponseSchema.parse({ message });
+    },
+  );
 
   app.get("/v1/tickets", async (request) => {
     const context = requireTenantRequestContext(request);

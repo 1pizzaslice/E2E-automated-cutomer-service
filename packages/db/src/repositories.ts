@@ -6,6 +6,9 @@ import {
   customers,
   integrations,
   kbChunks,
+  messages,
+  type Conversation,
+  type Message,
   type NewCustomer,
   type NewTenant,
   type NewTicket,
@@ -26,6 +29,17 @@ export interface ListQueryOptions {
 export interface CustomerListQueryOptions extends ListQueryOptions {
   readonly email?: string;
   readonly externalCustomerRef?: string;
+}
+
+export interface ConversationListQueryOptions extends ListQueryOptions {
+  readonly status?: Conversation["status"];
+  readonly customerId?: string;
+  readonly channelId?: string;
+}
+
+export interface MessageListQueryOptions extends ListQueryOptions {
+  readonly direction?: Message["direction"];
+  readonly ticketId?: string;
 }
 
 export interface TicketListQueryOptions extends ListQueryOptions {
@@ -146,6 +160,33 @@ export function updateCustomerByIdQuery(
     .returning();
 }
 
+export function conversationsListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: ConversationListQueryOptions,
+) {
+  const filters: SQL[] = [eq(conversations.tenantId, scope.tenantId)];
+
+  if (options.status) {
+    filters.push(eq(conversations.status, options.status));
+  }
+
+  if (options.customerId) {
+    filters.push(eq(conversations.customerId, options.customerId));
+  }
+
+  if (options.channelId) {
+    filters.push(eq(conversations.channelId, options.channelId));
+  }
+
+  return db
+    .select()
+    .from(conversations)
+    .where(and(...filters))
+    .orderBy(desc(conversations.createdAt), desc(conversations.conversationId))
+    .limit(options.limit);
+}
+
 export function conversationByIdQuery(
   db: SupportDatabase,
   scope: TenantScope,
@@ -158,6 +199,52 @@ export function conversationByIdQuery(
       and(
         eq(conversations.tenantId, scope.tenantId),
         eq(conversations.conversationId, conversationId),
+      ),
+    )
+    .limit(1);
+}
+
+export function messagesListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  conversationId: string,
+  options: MessageListQueryOptions,
+) {
+  const filters: SQL[] = [
+    eq(messages.tenantId, scope.tenantId),
+    eq(messages.conversationId, conversationId),
+  ];
+
+  if (options.direction) {
+    filters.push(eq(messages.direction, options.direction));
+  }
+
+  if (options.ticketId) {
+    filters.push(eq(messages.ticketId, options.ticketId));
+  }
+
+  return db
+    .select()
+    .from(messages)
+    .where(and(...filters))
+    .orderBy(desc(messages.createdAt), desc(messages.messageId))
+    .limit(options.limit);
+}
+
+export function messageByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  conversationId: string,
+  messageId: string,
+) {
+  return db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        eq(messages.conversationId, conversationId),
+        eq(messages.messageId, messageId),
       ),
     )
     .limit(1);

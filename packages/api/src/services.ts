@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
   conversationByIdQuery,
+  conversationsListQuery,
   createCustomerQuery,
   createDatabaseFromEnv,
   createTenantQuery,
   createTicketQuery,
   customerByIdQuery,
   customersListQuery,
+  messageByIdQuery,
+  messagesListQuery,
   tenantsListQuery,
   tenantByIdQuery,
   ticketByIdQuery,
@@ -15,7 +18,9 @@ import {
   updateTenantByIdQuery,
   updateTicketByIdQuery,
   withTenantTransaction,
+  type Conversation,
   type Customer,
+  type Message,
   type NewCustomer,
   type NewTenant,
   type NewTicket,
@@ -24,10 +29,14 @@ import {
   type Ticket,
 } from "@support/db";
 import type {
+  ConversationListResponse,
+  ConversationResponse,
   CustomerCreateRequest,
   CustomerListResponse,
   CustomerResponse,
   CustomerUpdateRequest,
+  MessageListResponse,
+  MessageResponse,
   TenantCreateRequest,
   TenantListResponse,
   TenantResponse,
@@ -49,6 +58,17 @@ export interface ListOptions {
 export interface CustomerListOptions extends ListOptions {
   readonly email?: string;
   readonly external_customer_ref?: string;
+}
+
+export interface ConversationListOptions extends ListOptions {
+  readonly status?: Conversation["status"];
+  readonly customer_id?: string;
+  readonly channel_id?: string;
+}
+
+export interface MessageListOptions extends ListOptions {
+  readonly direction?: Message["direction"];
+  readonly ticket_id?: string;
 }
 
 export interface TicketListOptions extends ListOptions {
@@ -95,6 +115,28 @@ export interface ApiServices {
       customerId: string,
       input: CustomerUpdateRequest,
     ): Promise<CustomerResponse | null>;
+  };
+  readonly conversations: {
+    list(
+      context: TenantRequestContext,
+      options: ConversationListOptions,
+    ): Promise<ConversationListResponse>;
+    getById(
+      context: TenantRequestContext,
+      conversationId: string,
+    ): Promise<ConversationResponse | null>;
+  };
+  readonly messages: {
+    list(
+      context: TenantRequestContext,
+      conversationId: string,
+      options: MessageListOptions,
+    ): Promise<MessageListResponse | null>;
+    getById(
+      context: TenantRequestContext,
+      conversationId: string,
+      messageId: string,
+    ): Promise<MessageResponse | null>;
   };
   readonly tickets: {
     list(
@@ -278,6 +320,103 @@ export function createDatabaseApiServices(): ApiServices {
             );
 
             return rows[0] ? mapCustomer(rows[0]) : null;
+          },
+        );
+      },
+    },
+    conversations: {
+      async list(context, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await conversationsListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              {
+                limit: options.limit,
+                status: options.status,
+                customerId: options.customer_id,
+                channelId: options.channel_id,
+              },
+            );
+
+            return {
+              conversations: rows.map(mapConversation),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
+          },
+        );
+      },
+      async getById(context, conversationId) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await conversationByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              conversationId,
+            );
+
+            return rows[0] ? mapConversation(rows[0]) : null;
+          },
+        );
+      },
+    },
+    messages: {
+      async list(context, conversationId, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const [conversation] = await conversationByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              conversationId,
+            );
+
+            if (!conversation) {
+              return null;
+            }
+
+            const rows = await messagesListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              conversationId,
+              {
+                limit: options.limit,
+                direction: options.direction,
+                ticketId: options.ticket_id,
+              },
+            );
+
+            return {
+              messages: rows.map(mapMessage),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
+          },
+        );
+      },
+      async getById(context, conversationId, messageId) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await messageByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              conversationId,
+              messageId,
+            );
+
+            return rows[0] ? mapMessage(rows[0]) : null;
           },
         );
       },
@@ -468,6 +607,47 @@ function mapCustomer(row: Customer): CustomerResponse {
     metadata: row.metadata,
     created_at: toIsoString(row.createdAt),
     updated_at: toIsoString(row.updatedAt),
+  };
+}
+
+function mapConversation(row: Conversation): ConversationResponse {
+  return {
+    conversation_id: row.conversationId,
+    tenant_id: row.tenantId,
+    customer_id: row.customerId,
+    channel_id: row.channelId,
+    external_thread_id: row.externalThreadId,
+    status: row.status,
+    last_message_at: toNullableIsoString(row.lastMessageAt),
+    created_at: toIsoString(row.createdAt),
+    updated_at: toIsoString(row.updatedAt),
+  };
+}
+
+function mapMessage(row: Message): MessageResponse {
+  return {
+    message_id: row.messageId,
+    tenant_id: row.tenantId,
+    conversation_id: row.conversationId,
+    ticket_id: row.ticketId,
+    channel_id: row.channelId,
+    direction: row.direction,
+    body_text: row.bodyText,
+    body_html_ref: row.bodyHtmlRef,
+    attachments: row.attachments,
+    external_message_id: row.externalMessageId,
+    external_thread_id: row.externalThreadId,
+    raw_payload_ref: row.rawPayloadRef,
+    created_by_type: row.createdByType,
+    created_by_user_id: row.createdByUserId,
+    provider_message_id: row.providerMessageId,
+    send_status: row.sendStatus,
+    sent_by_type: row.sentByType,
+    ai_run_id: row.aiRunId,
+    approval_id: row.approvalId,
+    sent_at: toNullableIsoString(row.sentAt),
+    idempotency_key: row.idempotencyKey,
+    created_at: toIsoString(row.createdAt),
   };
 }
 
