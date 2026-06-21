@@ -11,6 +11,8 @@ export type ApiPermission =
   | "customers:read"
   | "customers:create"
   | "customers:update"
+  | "conversations:read"
+  | "messages:read"
   | "tickets:read"
   | "tickets:create"
   | "tickets:update";
@@ -26,6 +28,8 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "customers:read",
       "customers:create",
       "customers:update",
+      "conversations:read",
+      "messages:read",
       "tickets:read",
       "tickets:create",
       "tickets:update",
@@ -37,6 +41,8 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "customers:read",
       "customers:create",
       "customers:update",
+      "conversations:read",
+      "messages:read",
       "tickets:read",
       "tickets:create",
       "tickets:update",
@@ -46,12 +52,26 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "customers:read",
       "customers:create",
       "customers:update",
+      "conversations:read",
+      "messages:read",
       "tickets:read",
       "tickets:create",
       "tickets:update",
     ]),
-    qa_reviewer: new Set(["openapi:read", "customers:read", "tickets:read"]),
-    client_viewer: new Set(["openapi:read", "customers:read", "tickets:read"]),
+    qa_reviewer: new Set([
+      "openapi:read",
+      "customers:read",
+      "conversations:read",
+      "messages:read",
+      "tickets:read",
+    ]),
+    client_viewer: new Set([
+      "openapi:read",
+      "customers:read",
+      "conversations:read",
+      "messages:read",
+      "tickets:read",
+    ]),
     integration_admin: new Set(["openapi:read"]),
   };
 

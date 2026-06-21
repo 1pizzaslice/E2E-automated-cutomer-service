@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const JsonObjectSchema = z.record(z.string(), z.unknown());
+const JsonArraySchema = z.array(JsonObjectSchema);
 const OptionalNullableStringSchema = z.string().min(1).nullable().optional();
 
 function hasDefinedValue(value: Record<string, unknown>): boolean {
@@ -184,6 +185,94 @@ export type CustomerResourceResponse = z.infer<
 export type CustomerListResponse = z.infer<typeof CustomerListResponseSchema>;
 export type CustomerCreateRequest = z.infer<typeof CustomerCreateRequestSchema>;
 export type CustomerUpdateRequest = z.infer<typeof CustomerUpdateRequestSchema>;
+
+export const ConversationStatusSchema = z.enum(["open", "archived"]);
+
+export const ConversationResponseSchema = z.object({
+  conversation_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  customer_id: z.string().min(1),
+  channel_id: z.string().min(1),
+  external_thread_id: z.string().nullable(),
+  status: ConversationStatusSchema,
+  last_message_at: z.string().datetime().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+});
+
+export const ConversationResourceResponseSchema = z.object({
+  conversation: ConversationResponseSchema,
+});
+
+export const ConversationListResponseSchema = z.object({
+  conversations: z.array(ConversationResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export const MessageDirectionSchema = z.enum([
+  "inbound",
+  "outbound",
+  "internal_note",
+  "system",
+]);
+
+export const MessageCreatorTypeSchema = z.enum([
+  "customer",
+  "human",
+  "ai",
+  "system",
+  "integration",
+]);
+
+export const MessageResponseSchema = z.object({
+  message_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  ticket_id: z.string().nullable(),
+  channel_id: z.string().min(1),
+  direction: MessageDirectionSchema,
+  body_text: z.string().nullable(),
+  body_html_ref: z.string().nullable(),
+  attachments: JsonArraySchema,
+  external_message_id: z.string().nullable(),
+  external_thread_id: z.string().nullable(),
+  raw_payload_ref: z.string().nullable(),
+  created_by_type: MessageCreatorTypeSchema,
+  created_by_user_id: z.string().nullable(),
+  provider_message_id: z.string().nullable(),
+  send_status: z.string().nullable(),
+  sent_by_type: z.string().nullable(),
+  ai_run_id: z.string().nullable(),
+  approval_id: z.string().nullable(),
+  sent_at: z.string().datetime().nullable(),
+  idempotency_key: z.string().nullable(),
+  created_at: z.string().datetime(),
+});
+
+export const MessageResourceResponseSchema = z.object({
+  message: MessageResponseSchema,
+});
+
+export const MessageListResponseSchema = z.object({
+  messages: z.array(MessageResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
+export type ConversationResponse = z.infer<typeof ConversationResponseSchema>;
+export type ConversationResourceResponse = z.infer<
+  typeof ConversationResourceResponseSchema
+>;
+export type ConversationListResponse = z.infer<
+  typeof ConversationListResponseSchema
+>;
+export type MessageDirection = z.infer<typeof MessageDirectionSchema>;
+export type MessageCreatorType = z.infer<typeof MessageCreatorTypeSchema>;
+export type MessageResponse = z.infer<typeof MessageResponseSchema>;
+export type MessageResourceResponse = z.infer<
+  typeof MessageResourceResponseSchema
+>;
+export type MessageListResponse = z.infer<typeof MessageListResponseSchema>;
 
 export const TicketStatusSchema = z.enum([
   "new",

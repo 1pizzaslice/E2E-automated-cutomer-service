@@ -112,6 +112,8 @@ Keep e2e smoke tests small and stable.
 Required tests:
 
 - Tenant A cannot read Tenant B customers.
+- Tenant A cannot read Tenant B conversations.
+- Tenant A cannot read Tenant B messages.
 - Tenant A cannot read Tenant B tickets.
 - Tenant A cannot retrieve Tenant B KB chunks.
 - Tenant A cannot execute tools with Tenant B credentials.
@@ -262,7 +264,7 @@ Required tests:
 - Repository query helpers include tenant filters for tenant-scoped reads, lists, updates, and writes.
 - Global tool-definition reads allow `tenant_id is null` but must not allow other tenants.
 - Live migration verification should run against the local PostgreSQL service before database changes are considered complete.
-- Live repository execution tests should use real PostgreSQL fixtures for customers, tickets, KB chunks, integrations, tool definitions, and audit events.
+- Live repository execution tests should use real PostgreSQL fixtures for customers, conversations, messages, tickets, KB chunks, integrations, tool definitions, and audit events.
 - Live RLS tests should use the non-owner `support_app` role, set `app.current_tenant_id` transaction-locally, and prove missing context, cross-tenant reads, cross-tenant writes, and global tool visibility behavior.
 
 Current Milestone 2 coverage:
@@ -271,14 +273,14 @@ Current Milestone 2 coverage:
 - `packages/db/src/schema.test.ts` checks core schema constants such as the KB embedding vector dimension.
 - `packages/db/src/repositories.test.ts` compiles repository queries and asserts tenant filters in generated SQL for reads, lists, and updates.
 - `packages/db/src/rls.test.ts` checks tenant context helpers and verifies `withTenantTransaction` sets the application role before scoped work in unit tests.
-- `packages/db/src/repositories.integration.test.ts` applies pending SQL migrations, inserts synthetic tenant A/B fixtures, executes repository helpers against PostgreSQL, verifies no cross-tenant rows are returned, and cleans up fixture rows.
+- `packages/db/src/repositories.integration.test.ts` applies pending SQL migrations, inserts synthetic tenant A/B fixtures, executes repository helpers against PostgreSQL, verifies no cross-tenant rows are returned for customer, conversation, message, ticket, KB, integration, tool-definition, and audit helpers, and cleans up fixture rows.
 - `packages/db/src/rls.integration.test.ts` applies pending SQL migrations, uses `support_app` with transaction-local tenant context, verifies raw SQL cannot read cross-tenant rows, verifies missing context is rejected, verifies cross-tenant writes are blocked, verifies global tool definitions remain visible, and verifies the tenant transaction helper runs repository work under the application role.
 
 Current Milestone 3 API skeleton coverage:
 
-- `packages/shared-schemas/src/index.test.ts` validates structured API errors, tenant/customer/ticket resource responses, list envelopes, create request schemas, and non-empty update request schemas.
-- `packages/api/src/app.test.ts` covers public health/readiness, auth-required errors, tenant-context-required errors, authenticated OpenAPI document access, request ID echoing, RBAC denial for protected tenant/customer operations, tenant path mismatch rejection, tenant/customer/ticket list-create-read-update response schemas, empty patch-body validation, and structured not-found errors.
-- `packages/api/src/app.integration.test.ts` applies pending SQL migrations, seeds two synthetic tenants, exercises the PostgreSQL-backed tenant/customer/ticket list-create-read-update endpoints through HTTP, verifies role denial for tenant reads, verifies tenant A can list/read its own customer/ticket without seeing tenant B resources, verifies tenant A receives structured not-found errors for tenant B customer/ticket IDs, and cleans up fixture rows.
+- `packages/shared-schemas/src/index.test.ts` validates structured API errors, tenant/customer/conversation/message/ticket resource responses, list envelopes, create request schemas, and non-empty update request schemas.
+- `packages/api/src/app.test.ts` covers public health/readiness, auth-required errors, tenant-context-required errors, authenticated OpenAPI document access, request ID echoing, RBAC denial for protected tenant/customer/conversation operations, tenant path mismatch rejection, tenant/customer/ticket list-create-read-update response schemas, conversation/message read-list response schemas, empty patch-body validation, and structured not-found errors.
+- `packages/api/src/app.integration.test.ts` applies pending SQL migrations, seeds two synthetic tenants, exercises the PostgreSQL-backed tenant/customer/conversation/message/ticket endpoints through HTTP, verifies role denial for tenant reads, verifies tenant A can list/read its own customer/conversation/message/ticket resources without seeing tenant B resources, verifies tenant A receives structured not-found errors for tenant B customer/conversation/message/ticket IDs, and cleans up fixture rows.
 
 ## 4. Golden Dataset
 
@@ -403,7 +405,7 @@ pnpm infra:up
 DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
 ```
 
-CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service. The root command currently runs DB repository/RLS integration tests first, then API PostgreSQL-backed tenant/customer/ticket integration tests.
+CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service. The root command currently runs DB repository/RLS integration tests first, then API PostgreSQL-backed tenant/customer/conversation/message/ticket integration tests.
 
 Current Python tests use standard library `unittest` because `uv` is not installed locally. When the LangGraph AI runtime is implemented, add the chosen Python dependency manager and update this file with the real eval/test commands.
 

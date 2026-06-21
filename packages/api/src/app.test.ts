@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
   ApiErrorResponseSchema,
+  ConversationListResponseSchema,
+  ConversationResourceResponseSchema,
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
   HealthResponseSchema,
+  MessageListResponseSchema,
+  MessageResourceResponseSchema,
   TenantListResponseSchema,
   TenantResourceResponseSchema,
   TicketListResponseSchema,
@@ -37,6 +41,10 @@ const platformAdminHeaders = {
 const clientViewerHeaders = {
   ...authHeaders,
   "x-user-roles": "client_viewer",
+};
+const integrationAdminHeaders = {
+  ...authHeaders,
+  "x-user-roles": "integration_admin",
 };
 
 let app: FastifyInstance | undefined;
@@ -117,6 +125,11 @@ describe("api request context and contract errors", () => {
     expect(body.openapi).toBe("3.1.0");
     expect(body.paths).toHaveProperty("/v1/customers");
     expect(body.paths).toHaveProperty("/v1/customers/{customer_id}");
+    expect(body.paths).toHaveProperty("/v1/conversations");
+    expect(body.paths).toHaveProperty("/v1/conversations/{conversation_id}");
+    expect(body.paths).toHaveProperty(
+      "/v1/conversations/{conversation_id}/messages",
+    );
     expect(body.paths).toHaveProperty("/v1/tickets");
     expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}");
   });
@@ -291,6 +304,87 @@ describe("api tenant-scoped resource contracts", () => {
 
     expect(response.statusCode).toBe(200);
     expect(body.customer.display_name).toBe("Updated Customer");
+  });
+
+  it("lists conversation resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/conversations?status=open&limit=10",
+      headers: authHeaders,
+    });
+    const body = ConversationListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.conversations).toHaveLength(1);
+    expect(body.conversations[0]!.status).toBe("open");
+  });
+
+  it("returns conversation resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/conversations/cnv_test",
+      headers: authHeaders,
+    });
+    const body = ConversationResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.conversation).toMatchObject({
+      conversation_id: "cnv_test",
+      tenant_id: "ten_test",
+      customer_id: "cus_test",
+      status: "open",
+    });
+  });
+
+  it("rejects conversation reads for roles without conversation read permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/conversations/cnv_test",
+      headers: integrationAdminHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("lists message resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/conversations/cnv_test/messages?direction=inbound&limit=10",
+      headers: authHeaders,
+    });
+    const body = MessageListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0]!).toMatchObject({
+      message_id: "msg_test",
+      direction: "inbound",
+      created_by_type: "customer",
+    });
+  });
+
+  it("returns message resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/conversations/cnv_test/messages/msg_test",
+      headers: authHeaders,
+    });
+    const body = MessageResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.message).toMatchObject({
+      message_id: "msg_test",
+      conversation_id: "cnv_test",
+      tenant_id: "ten_test",
+      body_text: "Where is my order?",
+    });
   });
 
   it("lists ticket resources through the shared response schema", async () => {
@@ -539,6 +633,124 @@ function makeServices(
           metadata: input.metadata ?? {},
           created_at: now,
           updated_at: now,
+        };
+      },
+    },
+    conversations: {
+      async list(context, options) {
+        expectTenantContext(context);
+
+        return {
+          conversations: [
+            {
+              conversation_id: "cnv_test",
+              tenant_id: context.tenant.tenantId,
+              customer_id: "cus_test",
+              channel_id: "chn_test",
+              external_thread_id: "thread_test",
+              status: options.status ?? "open",
+              last_message_at: now,
+              created_at: now,
+              updated_at: now,
+            },
+          ],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async getById(context, conversationId) {
+        expectTenantContext(context);
+
+        if (conversationId !== "cnv_test") {
+          return null;
+        }
+
+        return {
+          conversation_id: "cnv_test",
+          tenant_id: context.tenant.tenantId,
+          customer_id: "cus_test",
+          channel_id: "chn_test",
+          external_thread_id: "thread_test",
+          status: "open",
+          last_message_at: now,
+          created_at: now,
+          updated_at: now,
+        };
+      },
+    },
+    messages: {
+      async list(context, conversationId, options) {
+        expectTenantContext(context);
+
+        if (conversationId !== "cnv_test") {
+          return null;
+        }
+
+        return {
+          messages: [
+            {
+              message_id: "msg_test",
+              tenant_id: context.tenant.tenantId,
+              conversation_id: "cnv_test",
+              ticket_id: "ticket_test",
+              channel_id: "chn_test",
+              direction: options.direction ?? "inbound",
+              body_text: "Where is my order?",
+              body_html_ref: null,
+              attachments: [],
+              external_message_id: "external_msg_test",
+              external_thread_id: "thread_test",
+              raw_payload_ref: "raw_payload_test",
+              created_by_type: "customer",
+              created_by_user_id: null,
+              provider_message_id: null,
+              send_status: null,
+              sent_by_type: null,
+              ai_run_id: null,
+              approval_id: null,
+              sent_at: null,
+              idempotency_key: "idem_msg_test",
+              created_at: now,
+            },
+          ],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async getById(context, conversationId, messageId) {
+        expectTenantContext(context);
+
+        if (conversationId !== "cnv_test" || messageId !== "msg_test") {
+          return null;
+        }
+
+        return {
+          message_id: "msg_test",
+          tenant_id: context.tenant.tenantId,
+          conversation_id: "cnv_test",
+          ticket_id: "ticket_test",
+          channel_id: "chn_test",
+          direction: "inbound",
+          body_text: "Where is my order?",
+          body_html_ref: null,
+          attachments: [],
+          external_message_id: "external_msg_test",
+          external_thread_id: "thread_test",
+          raw_payload_ref: "raw_payload_test",
+          created_by_type: "customer",
+          created_by_user_id: null,
+          provider_message_id: null,
+          send_status: null,
+          sent_by_type: null,
+          ai_run_id: null,
+          approval_id: null,
+          sent_at: null,
+          idempotency_key: "idem_msg_test",
+          created_at: now,
         };
       },
     },
