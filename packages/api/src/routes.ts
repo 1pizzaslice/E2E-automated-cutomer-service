@@ -8,6 +8,11 @@ import {
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
   CustomerUpdateRequestSchema,
+  KbDocumentListResponseSchema,
+  KbDocumentResourceResponseSchema,
+  KbDocumentSourceTypeSchema,
+  KbDocumentTypeSchema,
+  KbStatusSchema,
   MessageDirectionSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
@@ -56,6 +61,10 @@ const PolicyParamsSchema = z.object({
   policy_id: z.string().min(1),
 });
 
+const KbDocumentParamsSchema = z.object({
+  kb_document_id: z.string().min(1),
+});
+
 const TicketParamsSchema = z.object({
   ticket_id: z.string().min(1),
 });
@@ -85,6 +94,12 @@ const MessageListQuerySchema = ListQuerySchema.extend({
 const PolicyListQuerySchema = ListQuerySchema.extend({
   domain: TenantPolicyDomainSchema.optional(),
   status: TenantPolicyStatusSchema.optional(),
+});
+
+const KbDocumentListQuerySchema = ListQuerySchema.extend({
+  source_type: KbDocumentSourceTypeSchema.optional(),
+  document_type: KbDocumentTypeSchema.optional(),
+  status: KbStatusSchema.optional(),
 });
 
 const TicketListQuerySchema = ListQuerySchema.extend({
@@ -361,6 +376,44 @@ export function registerRoutes(
     }
 
     return PolicyResourceResponseSchema.parse({ policy });
+  });
+
+  app.get("/v1/kb/documents", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "kb_documents:read");
+
+    const query = parseQuery(KbDocumentListQuerySchema, request);
+    const kbDocuments = await services.kbDocuments.list(context, query);
+
+    return KbDocumentListResponseSchema.parse(kbDocuments);
+  });
+
+  app.get("/v1/kb/documents/:kb_document_id", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "kb_documents:read");
+
+    const { kb_document_id: kbDocumentId } = parseParams(
+      KbDocumentParamsSchema,
+      request,
+    );
+    const kbDocument = await services.kbDocuments.getById(
+      context,
+      kbDocumentId,
+    );
+
+    if (!kbDocument) {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "KB document was not found.",
+      );
+    }
+
+    return KbDocumentResourceResponseSchema.parse({
+      kb_document: kbDocument,
+    });
   });
 
   app.get("/v1/tickets", async (request) => {

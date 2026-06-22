@@ -594,6 +594,73 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/kb/documents": {
+        get: {
+          summary: "List tenant-scoped KB documents",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "source_type",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/KbDocumentSourceType" },
+            },
+            {
+              name: "document_type",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/KbDocumentType" },
+            },
+            {
+              name: "status",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/KbStatus" },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "KB document list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/KbDocumentList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/kb/documents/{kb_document_id}": {
+        get: {
+          summary: "Read a tenant-scoped KB document",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "kb_document_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "KB document resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/KbDocumentResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -984,6 +1051,64 @@ export function buildOpenApiDocument() {
             policies: {
               type: "array",
               items: { $ref: "#/components/schemas/Policy" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        KbDocumentResource: {
+          type: "object",
+          required: ["kb_document"],
+          properties: {
+            kb_document: { $ref: "#/components/schemas/KbDocument" },
+          },
+        },
+        KbDocumentSourceType: {
+          enum: ["manual", "upload", "url", "integration"],
+        },
+        KbDocumentType: {
+          enum: ["faq", "policy", "macro", "product_doc", "sop"],
+        },
+        KbStatus: {
+          enum: ["draft", "active", "stale", "archived"],
+        },
+        KbDocument: {
+          type: "object",
+          required: [
+            "kb_document_id",
+            "tenant_id",
+            "title",
+            "source_type",
+            "source_ref",
+            "document_type",
+            "status",
+            "version",
+            "content_hash",
+            "created_by_user_id",
+            "created_at",
+            "updated_at",
+          ],
+          properties: {
+            kb_document_id: { type: "string" },
+            tenant_id: { type: "string" },
+            title: { type: "string" },
+            source_type: { $ref: "#/components/schemas/KbDocumentSourceType" },
+            source_ref: { type: ["string", "null"] },
+            document_type: { $ref: "#/components/schemas/KbDocumentType" },
+            status: { $ref: "#/components/schemas/KbStatus" },
+            version: { type: "integer", minimum: 1 },
+            content_hash: { type: "string" },
+            created_by_user_id: { type: ["string", "null"] },
+            created_at: { type: "string", format: "date-time" },
+            updated_at: { type: "string", format: "date-time" },
+          },
+        },
+        KbDocumentList: {
+          type: "object",
+          required: ["kb_documents", "page"],
+          properties: {
+            kb_documents: {
+              type: "array",
+              items: { $ref: "#/components/schemas/KbDocument" },
             },
             page: { $ref: "#/components/schemas/ListPage" },
           },

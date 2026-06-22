@@ -9,6 +9,8 @@ import {
   customersListQuery,
   customerByIdQuery,
   integrationByIdQuery,
+  kbDocumentByIdQuery,
+  kbDocumentsListQuery,
   messageByIdQuery,
   messagesListQuery,
   policiesListQuery,
@@ -250,6 +252,41 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain('"kb_chunks"."kb_document_id" = $2');
     expect(compiled.sql).toContain('"kb_chunks"."status" = $3');
     expect(compiled.params).toEqual(["ten_a", "kbd_a", "active"]);
+  });
+
+  it("scopes KB document reads by tenant", () => {
+    const query = kbDocumentByIdQuery(makeDb(), { tenantId: "ten_a" }, "kbd_a");
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"kb_documents"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"kb_documents"."kb_document_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "kbd_a", 1]);
+  });
+
+  it("scopes KB document list reads by tenant and filters", () => {
+    const query = kbDocumentsListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        limit: 10,
+        sourceType: "manual",
+        documentType: "policy",
+        status: "active",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"kb_documents"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"kb_documents"."source_type" = $2');
+    expect(compiled.sql).toContain('"kb_documents"."document_type" = $3');
+    expect(compiled.sql).toContain('"kb_documents"."status" = $4');
+    expect(compiled.params).toEqual([
+      "ten_a",
+      "manual",
+      "policy",
+      "active",
+      10,
+    ]);
   });
 
   it("scopes audit reads by tenant and entity", () => {

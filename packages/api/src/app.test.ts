@@ -7,6 +7,8 @@ import {
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
   HealthResponseSchema,
+  KbDocumentListResponseSchema,
+  KbDocumentResourceResponseSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
   PolicyListResponseSchema,
@@ -134,6 +136,8 @@ describe("api request context and contract errors", () => {
     );
     expect(body.paths).toHaveProperty("/v1/policies");
     expect(body.paths).toHaveProperty("/v1/policies/{policy_id}");
+    expect(body.paths).toHaveProperty("/v1/kb/documents");
+    expect(body.paths).toHaveProperty("/v1/kb/documents/{kb_document_id}");
     expect(body.paths).toHaveProperty("/v1/tickets");
     expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}");
   });
@@ -432,6 +436,56 @@ describe("api tenant-scoped resource contracts", () => {
     const response = await app.inject({
       method: "GET",
       url: "/v1/policies/pol_test",
+      headers: integrationAdminHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("lists KB document resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/kb/documents?source_type=manual&document_type=faq&status=active&limit=10",
+      headers: authHeaders,
+    });
+    const body = KbDocumentListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.kb_documents).toHaveLength(1);
+    expect(body.kb_documents[0]!).toMatchObject({
+      kb_document_id: "kbd_test",
+      source_type: "manual",
+      document_type: "faq",
+      status: "active",
+    });
+  });
+
+  it("returns KB document resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/kb/documents/kbd_test",
+      headers: authHeaders,
+    });
+    const body = KbDocumentResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.kb_document).toMatchObject({
+      kb_document_id: "kbd_test",
+      tenant_id: "ten_test",
+      title: "Shipping FAQ",
+      status: "active",
+    });
+  });
+
+  it("rejects KB document reads for roles without KB document read permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/kb/documents/kbd_test",
       headers: integrationAdminHeaders,
     });
     const body = ApiErrorResponseSchema.parse(response.json());
@@ -842,6 +896,56 @@ function makeServices(
           name: "Shipping Policy",
           domain: "shipping",
           status: "active",
+          created_at: now,
+          updated_at: now,
+        };
+      },
+    },
+    kbDocuments: {
+      async list(context, options) {
+        expectTenantContext(context);
+
+        return {
+          kb_documents: [
+            {
+              kb_document_id: "kbd_test",
+              tenant_id: context.tenant.tenantId,
+              title: "Shipping FAQ",
+              source_type: options.source_type ?? "manual",
+              source_ref: null,
+              document_type: options.document_type ?? "faq",
+              status: options.status ?? "active",
+              version: 1,
+              content_hash: "hash_test",
+              created_by_user_id: null,
+              created_at: now,
+              updated_at: now,
+            },
+          ],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async getById(context, kbDocumentId) {
+        expectTenantContext(context);
+
+        if (kbDocumentId !== "kbd_test") {
+          return null;
+        }
+
+        return {
+          kb_document_id: "kbd_test",
+          tenant_id: context.tenant.tenantId,
+          title: "Shipping FAQ",
+          source_type: "manual",
+          source_ref: null,
+          document_type: "faq",
+          status: "active",
+          version: 1,
+          content_hash: "hash_test",
+          created_by_user_id: null,
           created_at: now,
           updated_at: now,
         };

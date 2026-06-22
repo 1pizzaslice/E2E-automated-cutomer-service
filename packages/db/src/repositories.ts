@@ -6,9 +6,11 @@ import {
   customers,
   integrations,
   kbChunks,
+  kbDocuments,
   messages,
   type Conversation,
   type Message,
+  type KbDocument,
   type NewCustomer,
   type NewTenant,
   type NewTicket,
@@ -53,6 +55,12 @@ export interface TicketListQueryOptions extends ListQueryOptions {
 export interface PolicyListQueryOptions extends ListQueryOptions {
   readonly domain?: TenantPolicy["domain"];
   readonly status?: TenantPolicy["status"];
+}
+
+export interface KbDocumentListQueryOptions extends ListQueryOptions {
+  readonly sourceType?: KbDocument["sourceType"];
+  readonly documentType?: KbDocument["documentType"];
+  readonly status?: KbDocument["status"];
 }
 
 export function tenantsListQuery(
@@ -359,6 +367,50 @@ export function policyByIdQuery(
       and(
         eq(tenantPolicies.tenantId, scope.tenantId),
         eq(tenantPolicies.policyId, policyId),
+      ),
+    )
+    .limit(1);
+}
+
+export function kbDocumentsListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: KbDocumentListQueryOptions,
+) {
+  const filters: SQL[] = [eq(kbDocuments.tenantId, scope.tenantId)];
+
+  if (options.sourceType) {
+    filters.push(eq(kbDocuments.sourceType, options.sourceType));
+  }
+
+  if (options.documentType) {
+    filters.push(eq(kbDocuments.documentType, options.documentType));
+  }
+
+  if (options.status) {
+    filters.push(eq(kbDocuments.status, options.status));
+  }
+
+  return db
+    .select()
+    .from(kbDocuments)
+    .where(and(...filters))
+    .orderBy(desc(kbDocuments.createdAt), desc(kbDocuments.kbDocumentId))
+    .limit(options.limit);
+}
+
+export function kbDocumentByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  kbDocumentId: string,
+) {
+  return db
+    .select()
+    .from(kbDocuments)
+    .where(
+      and(
+        eq(kbDocuments.tenantId, scope.tenantId),
+        eq(kbDocuments.kbDocumentId, kbDocumentId),
       ),
     )
     .limit(1);
