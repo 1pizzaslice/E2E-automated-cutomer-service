@@ -13,7 +13,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - Milestone 0 documentation harness is complete.
 - Milestone 1 backend scaffold is complete and locally verified.
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
-- Milestone 3 API skeleton has started with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy read-list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
+- Milestone 3 API skeleton has started with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document read-list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
 
 ## Product Direction
 
@@ -140,6 +140,8 @@ Latest Milestone 3 API expansion:
 - Added conversation/message shared schemas, repository helpers, service adapters, RBAC permissions, generated OpenAPI paths, API contract tests, repository tests, and PostgreSQL-backed API integration tests for tenant isolation.
 - Added tenant-scoped policy list/read contracts with `limit`, `domain`, and `status` filters.
 - Added policy shared schemas, repository helpers, service adapters, `policies:read` RBAC permission, generated OpenAPI paths, API contract tests, repository tests, and PostgreSQL-backed API integration tests for tenant isolation.
+- Added tenant-scoped KB document metadata list/read contracts with `limit`, `source_type`, `document_type`, and `status` filters.
+- Added KB document shared schemas, repository helpers, service adapters, `kb_documents:read` RBAC permission, generated OpenAPI paths, API contract tests, repository tests, and PostgreSQL-backed API integration tests for tenant isolation.
 - Added global platform-admin tenant list/create contracts.
 - Added current-tenant tenant patch support for ops admins and global tenant patch support for platform admins.
 - Added tenant-scoped customer list/create/update contracts.
@@ -176,7 +178,7 @@ The following passed locally in the cloned repo:
 - Repository tenant filters remain mandatory even with PostgreSQL row-level security.
 - API and worker database code must set transaction-local `app.current_tenant_id` before tenant-scoped operations. The DB package now provides `withTenantTransaction`, which also sets `support_app` as the transaction-local role before repository work.
 - CI includes a live PostgreSQL integration test job step, but the remote workflow result has not been observed yet.
-- Current API auth is still placeholder header-based identity, not a real identity provider. The API now enforces a role-to-permission matrix for the current OpenAPI, tenant, customer, conversation, message, policy, and ticket endpoint families.
+- Current API auth is still placeholder header-based identity, not a real identity provider. The API now enforces a role-to-permission matrix for the current OpenAPI, tenant, customer, conversation, message, policy, KB document, and ticket endpoint families.
 
 ## Errors Encountered And Fixes
 
@@ -271,6 +273,6 @@ Fix:
 
 Continue Milestone 3 by expanding the API skeleton:
 
-1. Add KB metadata endpoint skeletons backed by the existing KB document tables.
-2. Add approval read/list endpoint skeletons after KB metadata coverage.
+1. Add approval read/list endpoint skeletons backed by the existing approval tables.
+2. Add audit read/list endpoint skeletons after approval coverage.
 3. Keep RBAC and PostgreSQL-backed tenant-isolation integration coverage in lockstep as each endpoint family is added.

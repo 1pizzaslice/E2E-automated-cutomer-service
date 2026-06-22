@@ -6,6 +6,8 @@ import {
   CustomerCreateRequestSchema,
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
+  KbDocumentListResponseSchema,
+  KbDocumentResourceResponseSchema,
   TenantCreateRequestSchema,
   TenantListResponseSchema,
   HealthResponseSchema,
@@ -210,6 +212,28 @@ describe("shared API contract schemas", () => {
         page: { count: 1, limit: 50 },
       }),
     ).toMatchObject({ policies: [{ policy_id: "pol_test" }] });
+
+    expect(
+      KbDocumentListResponseSchema.parse({
+        kb_documents: [
+          {
+            kb_document_id: "kbd_test",
+            tenant_id: "ten_test",
+            title: "Shipping FAQ",
+            source_type: "manual",
+            source_ref: null,
+            document_type: "faq",
+            status: "active",
+            version: 1,
+            content_hash: "hash_test",
+            created_by_user_id: null,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ kb_documents: [{ kb_document_id: "kbd_test" }] });
   });
 
   it("validates create and update request bodies", () => {
@@ -272,6 +296,27 @@ describe("shared API contract schemas", () => {
     };
 
     expect(TicketResourceResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("validates KB document resource responses", () => {
+    const response = {
+      kb_document: {
+        kb_document_id: "kbd_test",
+        tenant_id: "ten_test",
+        title: "Shipping FAQ",
+        source_type: "manual",
+        source_ref: null,
+        document_type: "faq",
+        status: "active",
+        version: 1,
+        content_hash: "hash_test",
+        created_by_user_id: null,
+        created_at: "2026-06-19T00:00:00.000Z",
+        updated_at: "2026-06-19T00:00:00.000Z",
+      },
+    };
+
+    expect(KbDocumentResourceResponseSchema.parse(response)).toEqual(response);
   });
 
   it("validates conversation and message resource responses", () => {

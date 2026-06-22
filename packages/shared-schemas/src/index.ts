@@ -314,6 +314,58 @@ export type PolicyResourceResponse = z.infer<
 >;
 export type PolicyListResponse = z.infer<typeof PolicyListResponseSchema>;
 
+export const KbDocumentSourceTypeSchema = z.enum([
+  "manual",
+  "upload",
+  "url",
+  "integration",
+]);
+
+export const KbDocumentTypeSchema = z.enum([
+  "faq",
+  "policy",
+  "macro",
+  "product_doc",
+  "sop",
+]);
+
+export const KbStatusSchema = z.enum(["draft", "active", "stale", "archived"]);
+
+export const KbDocumentResponseSchema = z.object({
+  kb_document_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  title: z.string().min(1),
+  source_type: KbDocumentSourceTypeSchema,
+  source_ref: z.string().nullable(),
+  document_type: KbDocumentTypeSchema,
+  status: KbStatusSchema,
+  version: z.number().int().positive(),
+  content_hash: z.string().min(1),
+  created_by_user_id: z.string().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+});
+
+export const KbDocumentResourceResponseSchema = z.object({
+  kb_document: KbDocumentResponseSchema,
+});
+
+export const KbDocumentListResponseSchema = z.object({
+  kb_documents: z.array(KbDocumentResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export type KbDocumentSourceType = z.infer<typeof KbDocumentSourceTypeSchema>;
+export type KbDocumentType = z.infer<typeof KbDocumentTypeSchema>;
+export type KbStatus = z.infer<typeof KbStatusSchema>;
+export type KbDocumentResponse = z.infer<typeof KbDocumentResponseSchema>;
+export type KbDocumentResourceResponse = z.infer<
+  typeof KbDocumentResourceResponseSchema
+>;
+export type KbDocumentListResponse = z.infer<
+  typeof KbDocumentListResponseSchema
+>;
+
 export const TicketStatusSchema = z.enum([
   "new",
   "triaged",

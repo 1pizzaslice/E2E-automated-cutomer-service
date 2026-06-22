@@ -9,6 +9,8 @@ import {
   conversationsListQuery,
   customerByIdQuery,
   integrationByIdQuery,
+  kbDocumentByIdQuery,
+  kbDocumentsListQuery,
   messageByIdQuery,
   messagesListQuery,
   policiesListQuery,
@@ -221,6 +223,38 @@ describeLive("live tenant-scoped repository queries", () => {
 
     expect(ownRows.map((row) => row.kbChunkId)).toEqual([ids.kbChunkA]);
     expect(otherTenantRows).toEqual([]);
+  });
+
+  it("executes KB document reads and lists without returning another tenant document", async () => {
+    const ownReadRows = await kbDocumentByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.kbDocumentA,
+    );
+    const otherTenantReadRows = await kbDocumentByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.kbDocumentB,
+    );
+    const listRows = await kbDocumentsListQuery(
+      db,
+      { tenantId: ids.tenantA },
+      {
+        limit: 10,
+        sourceType: "manual",
+        documentType: "policy",
+        status: "active",
+      },
+    );
+
+    expect(ownReadRows.map((row) => row.kbDocumentId)).toEqual([
+      ids.kbDocumentA,
+    ]);
+    expect(otherTenantReadRows).toEqual([]);
+    expect(listRows.map((row) => row.kbDocumentId)).toContain(ids.kbDocumentA);
+    expect(listRows.map((row) => row.kbDocumentId)).not.toContain(
+      ids.kbDocumentB,
+    );
   });
 
   it("executes integration reads without returning another tenant integration", async () => {

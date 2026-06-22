@@ -6,6 +6,8 @@ import {
   ConversationResourceResponseSchema,
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
+  KbDocumentListResponseSchema,
+  KbDocumentResourceResponseSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
   PolicyListResponseSchema,
@@ -22,6 +24,7 @@ import {
   createDatabase,
   createPostgresClient,
   customers,
+  kbDocuments,
   messages,
   migrateDatabase,
   tenantPolicies,
@@ -50,6 +53,8 @@ const ids = {
   messageB: `${fixturePrefix}_msg_b`,
   policyA: `${fixturePrefix}_pol_a`,
   policyB: `${fixturePrefix}_pol_b`,
+  kbDocumentA: `${fixturePrefix}_kbd_a`,
+  kbDocumentB: `${fixturePrefix}_kbd_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
   ticketCreated: `${fixturePrefix}_tic_created`,
@@ -373,6 +378,50 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
   });
 
+  it("lists tenant-scoped KB documents without crossing tenants", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/v1/kb/documents?source_type=manual&document_type=faq&status=active&limit=100",
+      headers: authHeaders("support_agent"),
+    });
+    const body = KbDocumentListResponseSchema.parse(response.json());
+    const kbDocumentIds = body.kb_documents.map(
+      (kbDocument) => kbDocument.kb_document_id,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(kbDocumentIds).toContain(ids.kbDocumentA);
+    expect(kbDocumentIds).not.toContain(ids.kbDocumentB);
+  });
+
+  it("reads tenant-scoped KB documents without crossing tenants", async () => {
+    const ownResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/kb/documents/${ids.kbDocumentA}`,
+      headers: authHeaders("support_agent"),
+    });
+    const otherTenantResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/kb/documents/${ids.kbDocumentB}`,
+      headers: authHeaders("support_agent"),
+    });
+    const ownBody = KbDocumentResourceResponseSchema.parse(ownResponse.json());
+    const otherTenantBody = ApiErrorResponseSchema.parse(
+      otherTenantResponse.json(),
+    );
+
+    expect(ownResponse.statusCode).toBe(200);
+    expect(ownBody.kb_document).toMatchObject({
+      kb_document_id: ids.kbDocumentA,
+      tenant_id: ids.tenantA,
+      source_type: "manual",
+      document_type: "faq",
+      status: "active",
+    });
+    expect(otherTenantResponse.statusCode).toBe(404);
+    expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
   it("lists tenant-scoped tickets without crossing tenants", async () => {
     const response = await app!.inject({
       method: "GET",
@@ -611,9 +660,34 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
       status: "active",
     },
   ]);
+
+  await db.insert(kbDocuments).values([
+    {
+      kbDocumentId: ids.kbDocumentA,
+      tenantId: ids.tenantA,
+      title: "Tenant A Shipping FAQ",
+      sourceType: "manual",
+      documentType: "faq",
+      status: "active",
+      contentHash: `${fixturePrefix}_kb_hash_a`,
+    },
+    {
+      kbDocumentId: ids.kbDocumentB,
+      tenantId: ids.tenantB,
+      title: "Tenant B Shipping FAQ",
+      sourceType: "manual",
+      documentType: "faq",
+      status: "active",
+      contentHash: `${fixturePrefix}_kb_hash_b`,
+    },
+  ]);
 }
 
 async function cleanupFixtures(client: PostgresClient) {
+  await client`
+    delete from kb_documents
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
   await client`
     delete from tenant_policies
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})

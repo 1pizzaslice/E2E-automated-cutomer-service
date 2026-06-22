@@ -14,6 +14,7 @@ export type ApiPermission =
   | "conversations:read"
   | "messages:read"
   | "policies:read"
+  | "kb_documents:read"
   | "tickets:read"
   | "tickets:create"
   | "tickets:update";
@@ -32,6 +33,7 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "conversations:read",
       "messages:read",
       "policies:read",
+      "kb_documents:read",
       "tickets:read",
       "tickets:create",
       "tickets:update",
@@ -46,6 +48,7 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "conversations:read",
       "messages:read",
       "policies:read",
+      "kb_documents:read",
       "tickets:read",
       "tickets:create",
       "tickets:update",
@@ -58,6 +61,7 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "conversations:read",
       "messages:read",
       "policies:read",
+      "kb_documents:read",
       "tickets:read",
       "tickets:create",
       "tickets:update",
@@ -68,6 +72,7 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "conversations:read",
       "messages:read",
       "policies:read",
+      "kb_documents:read",
       "tickets:read",
     ]),
     client_viewer: new Set([
@@ -76,6 +81,7 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "conversations:read",
       "messages:read",
       "policies:read",
+      "kb_documents:read",
       "tickets:read",
     ]),
     integration_admin: new Set(["openapi:read"]),

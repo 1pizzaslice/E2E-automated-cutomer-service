@@ -8,6 +8,8 @@ import {
   createTicketQuery,
   customerByIdQuery,
   customersListQuery,
+  kbDocumentByIdQuery,
+  kbDocumentsListQuery,
   messageByIdQuery,
   messagesListQuery,
   policiesListQuery,
@@ -22,6 +24,7 @@ import {
   withTenantTransaction,
   type Conversation,
   type Customer,
+  type KbDocument,
   type Message,
   type NewCustomer,
   type NewTenant,
@@ -38,6 +41,8 @@ import type {
   CustomerListResponse,
   CustomerResponse,
   CustomerUpdateRequest,
+  KbDocumentListResponse,
+  KbDocumentResponse,
   MessageListResponse,
   MessageResponse,
   PolicyListResponse,
@@ -85,6 +90,12 @@ export interface TicketListOptions extends ListOptions {
 export interface PolicyListOptions extends ListOptions {
   readonly domain?: TenantPolicy["domain"];
   readonly status?: TenantPolicy["status"];
+}
+
+export interface KbDocumentListOptions extends ListOptions {
+  readonly source_type?: KbDocument["sourceType"];
+  readonly document_type?: KbDocument["documentType"];
+  readonly status?: KbDocument["status"];
 }
 
 export interface ApiServices {
@@ -157,6 +168,16 @@ export interface ApiServices {
       context: TenantRequestContext,
       policyId: string,
     ): Promise<PolicyResponse | null>;
+  };
+  readonly kbDocuments: {
+    list(
+      context: TenantRequestContext,
+      options: KbDocumentListOptions,
+    ): Promise<KbDocumentListResponse>;
+    getById(
+      context: TenantRequestContext,
+      kbDocumentId: string,
+    ): Promise<KbDocumentResponse | null>;
   };
   readonly tickets: {
     list(
@@ -483,6 +504,49 @@ export function createDatabaseApiServices(): ApiServices {
         );
       },
     },
+    kbDocuments: {
+      async list(context, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await kbDocumentsListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              {
+                limit: options.limit,
+                sourceType: options.source_type,
+                documentType: options.document_type,
+                status: options.status,
+              },
+            );
+
+            return {
+              kb_documents: rows.map(mapKbDocument),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
+          },
+        );
+      },
+      async getById(context, kbDocumentId) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await kbDocumentByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              kbDocumentId,
+            );
+
+            return rows[0] ? mapKbDocument(rows[0]) : null;
+          },
+        );
+      },
+    },
     tickets: {
       async list(context, options) {
         return withTenantTransaction(
@@ -720,6 +784,23 @@ function mapPolicy(row: TenantPolicy): PolicyResponse {
     name: row.name,
     domain: row.domain,
     status: row.status,
+    created_at: toIsoString(row.createdAt),
+    updated_at: toIsoString(row.updatedAt),
+  };
+}
+
+function mapKbDocument(row: KbDocument): KbDocumentResponse {
+  return {
+    kb_document_id: row.kbDocumentId,
+    tenant_id: row.tenantId,
+    title: row.title,
+    source_type: row.sourceType,
+    source_ref: row.sourceRef,
+    document_type: row.documentType,
+    status: row.status,
+    version: row.version,
+    content_hash: row.contentHash,
+    created_by_user_id: row.createdByUserId,
     created_at: toIsoString(row.createdAt),
     updated_at: toIsoString(row.updatedAt),
   };
