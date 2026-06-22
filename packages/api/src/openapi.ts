@@ -661,6 +661,73 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/approvals": {
+        get: {
+          summary: "List tenant-scoped approvals",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "status",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/ApprovalStatus" },
+            },
+            {
+              name: "ticket_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "approval_type",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/ApprovalType" },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Approval list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ApprovalList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/approvals/{approval_id}": {
+        get: {
+          summary: "Read a tenant-scoped approval",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "approval_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Approval resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ApprovalResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -1109,6 +1176,74 @@ export function buildOpenApiDocument() {
             kb_documents: {
               type: "array",
               items: { $ref: "#/components/schemas/KbDocument" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        ApprovalResource: {
+          type: "object",
+          required: ["approval"],
+          properties: {
+            approval: { $ref: "#/components/schemas/Approval" },
+          },
+        },
+        ApprovalType: {
+          enum: ["reply", "tool_action", "escalation", "policy_exception"],
+        },
+        ApprovalStatus: {
+          enum: [
+            "pending",
+            "approved",
+            "edited",
+            "rejected",
+            "escalated",
+            "expired",
+          ],
+        },
+        Approval: {
+          type: "object",
+          required: [
+            "approval_id",
+            "tenant_id",
+            "ticket_id",
+            "ai_run_id",
+            "approval_type",
+            "status",
+            "requested_payload",
+            "approved_payload",
+            "reviewer_user_id",
+            "review_notes",
+            "created_at",
+            "resolved_at",
+          ],
+          properties: {
+            approval_id: { type: "string" },
+            tenant_id: { type: "string" },
+            ticket_id: { type: "string" },
+            ai_run_id: { type: ["string", "null"] },
+            approval_type: { $ref: "#/components/schemas/ApprovalType" },
+            status: { $ref: "#/components/schemas/ApprovalStatus" },
+            requested_payload: {
+              type: "object",
+              additionalProperties: true,
+            },
+            approved_payload: {
+              type: ["object", "null"],
+              additionalProperties: true,
+            },
+            reviewer_user_id: { type: ["string", "null"] },
+            review_notes: { type: ["string", "null"] },
+            created_at: { type: "string", format: "date-time" },
+            resolved_at: { type: ["string", "null"], format: "date-time" },
+          },
+        },
+        ApprovalList: {
+          type: "object",
+          required: ["approvals", "page"],
+          properties: {
+            approvals: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Approval" },
             },
             page: { $ref: "#/components/schemas/ListPage" },
           },

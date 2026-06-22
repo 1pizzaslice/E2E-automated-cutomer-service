@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
+  ApprovalListResponseSchema,
+  ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
@@ -138,6 +140,8 @@ describe("api request context and contract errors", () => {
     expect(body.paths).toHaveProperty("/v1/policies/{policy_id}");
     expect(body.paths).toHaveProperty("/v1/kb/documents");
     expect(body.paths).toHaveProperty("/v1/kb/documents/{kb_document_id}");
+    expect(body.paths).toHaveProperty("/v1/approvals");
+    expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}");
     expect(body.paths).toHaveProperty("/v1/tickets");
     expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}");
   });
@@ -486,6 +490,55 @@ describe("api tenant-scoped resource contracts", () => {
     const response = await app.inject({
       method: "GET",
       url: "/v1/kb/documents/kbd_test",
+      headers: integrationAdminHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("lists approval resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/approvals?status=pending&approval_type=reply&limit=10",
+      headers: authHeaders,
+    });
+    const body = ApprovalListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.approvals).toHaveLength(1);
+    expect(body.approvals[0]!).toMatchObject({
+      approval_id: "apr_test",
+      approval_type: "reply",
+      status: "pending",
+    });
+  });
+
+  it("returns approval resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/approvals/apr_test",
+      headers: authHeaders,
+    });
+    const body = ApprovalResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.approval).toMatchObject({
+      approval_id: "apr_test",
+      tenant_id: "ten_test",
+      ticket_id: "ticket_test",
+      status: "pending",
+    });
+  });
+
+  it("rejects approval reads for roles without approval read permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/approvals/apr_test",
       headers: integrationAdminHeaders,
     });
     const body = ApiErrorResponseSchema.parse(response.json());
@@ -948,6 +1001,62 @@ function makeServices(
           created_by_user_id: null,
           created_at: now,
           updated_at: now,
+        };
+      },
+    },
+    approvals: {
+      async list(context, options) {
+        expectTenantContext(context);
+
+        return {
+          approvals: [
+            {
+              approval_id: "apr_test",
+              tenant_id: context.tenant.tenantId,
+              ticket_id: options.ticket_id ?? "ticket_test",
+              ai_run_id: null,
+              approval_type: options.approval_type ?? "reply",
+              status: options.status ?? "pending",
+              requested_payload: {
+                draft: "Where is my order response draft.",
+                risk_reasons: ["v1_default_human_approval"],
+              },
+              approved_payload: null,
+              reviewer_user_id: null,
+              review_notes: null,
+              created_at: now,
+              resolved_at: null,
+            },
+          ],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async getById(context, approvalId) {
+        expectTenantContext(context);
+
+        if (approvalId !== "apr_test") {
+          return null;
+        }
+
+        return {
+          approval_id: "apr_test",
+          tenant_id: context.tenant.tenantId,
+          ticket_id: "ticket_test",
+          ai_run_id: null,
+          approval_type: "reply",
+          status: "pending",
+          requested_payload: {
+            draft: "Where is my order response draft.",
+            risk_reasons: ["v1_default_human_approval"],
+          },
+          approved_payload: null,
+          reviewer_user_id: null,
+          review_notes: null,
+          created_at: now,
+          resolved_at: null,
         };
       },
     },

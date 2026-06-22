@@ -4,6 +4,8 @@ import { createDatabase, type PostgresClient } from "./client.js";
 import { migrateDatabase } from "./migrations.js";
 import {
   activeKbChunksForDocumentQuery,
+  approvalByIdQuery,
+  approvalsListQuery,
   auditEventsForEntityQuery,
   conversationByIdQuery,
   conversationsListQuery,
@@ -19,6 +21,7 @@ import {
   visibleToolDefinitionByNameQuery,
 } from "./repositories.js";
 import {
+  approvals,
   auditEvents,
   channels,
   conversations,
@@ -52,6 +55,8 @@ const ids = {
   policyB: `${fixturePrefix}_pol_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
+  approvalA: `${fixturePrefix}_apr_a`,
+  approvalB: `${fixturePrefix}_apr_b`,
   kbDocumentA: `${fixturePrefix}_kbd_a`,
   kbDocumentB: `${fixturePrefix}_kbd_b`,
   kbChunkA: `${fixturePrefix}_kbc_a`,
@@ -257,6 +262,34 @@ describeLive("live tenant-scoped repository queries", () => {
     );
   });
 
+  it("executes approval reads and lists without returning another tenant approval", async () => {
+    const ownReadRows = await approvalByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.approvalA,
+    );
+    const otherTenantReadRows = await approvalByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.approvalB,
+    );
+    const listRows = await approvalsListQuery(
+      db,
+      { tenantId: ids.tenantA },
+      {
+        limit: 10,
+        status: "pending",
+        ticketId: ids.ticketA,
+        approvalType: "reply",
+      },
+    );
+
+    expect(ownReadRows.map((row) => row.approvalId)).toEqual([ids.approvalA]);
+    expect(otherTenantReadRows).toEqual([]);
+    expect(listRows.map((row) => row.approvalId)).toContain(ids.approvalA);
+    expect(listRows.map((row) => row.approvalId)).not.toContain(ids.approvalB);
+  });
+
   it("executes integration reads without returning another tenant integration", async () => {
     const ownRows = await integrationByIdQuery(
       db,
@@ -429,6 +462,31 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
     },
   ]);
 
+  await db.insert(approvals).values([
+    {
+      approvalId: ids.approvalA,
+      tenantId: ids.tenantA,
+      ticketId: ids.ticketA,
+      approvalType: "reply",
+      status: "pending",
+      requestedPayload: {
+        draft: "Tenant A approval draft.",
+        risk_reasons: ["v1_default_human_approval"],
+      },
+    },
+    {
+      approvalId: ids.approvalB,
+      tenantId: ids.tenantB,
+      ticketId: ids.ticketB,
+      approvalType: "reply",
+      status: "pending",
+      requestedPayload: {
+        draft: "Tenant B approval draft.",
+        risk_reasons: ["v1_default_human_approval"],
+      },
+    },
+  ]);
+
   await db.insert(tenantPolicies).values([
     {
       policyId: ids.policyA,
@@ -591,6 +649,10 @@ async function cleanupFixtures(client: PostgresClient) {
   `;
   await client`
     delete from tenant_policies
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
+  await client`
+    delete from approvals
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})
   `;
   await client`

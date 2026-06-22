@@ -366,6 +366,54 @@ export type KbDocumentListResponse = z.infer<
   typeof KbDocumentListResponseSchema
 >;
 
+export const ApprovalTypeSchema = z.enum([
+  "reply",
+  "tool_action",
+  "escalation",
+  "policy_exception",
+]);
+
+export const ApprovalStatusSchema = z.enum([
+  "pending",
+  "approved",
+  "edited",
+  "rejected",
+  "escalated",
+  "expired",
+]);
+
+export const ApprovalResponseSchema = z.object({
+  approval_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  ticket_id: z.string().min(1),
+  ai_run_id: z.string().nullable(),
+  approval_type: ApprovalTypeSchema,
+  status: ApprovalStatusSchema,
+  requested_payload: JsonObjectSchema,
+  approved_payload: JsonObjectSchema.nullable(),
+  reviewer_user_id: z.string().nullable(),
+  review_notes: z.string().nullable(),
+  created_at: z.string().datetime(),
+  resolved_at: z.string().datetime().nullable(),
+});
+
+export const ApprovalResourceResponseSchema = z.object({
+  approval: ApprovalResponseSchema,
+});
+
+export const ApprovalListResponseSchema = z.object({
+  approvals: z.array(ApprovalResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export type ApprovalType = z.infer<typeof ApprovalTypeSchema>;
+export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>;
+export type ApprovalResponse = z.infer<typeof ApprovalResponseSchema>;
+export type ApprovalResourceResponse = z.infer<
+  typeof ApprovalResourceResponseSchema
+>;
+export type ApprovalListResponse = z.infer<typeof ApprovalListResponseSchema>;
+
 export const TicketStatusSchema = z.enum([
   "new",
   "triaged",

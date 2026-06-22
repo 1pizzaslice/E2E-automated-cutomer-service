@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  ApprovalListResponseSchema,
+  ApprovalResourceResponseSchema,
+  ApprovalStatusSchema,
+  ApprovalTypeSchema,
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
   ConversationStatusSchema,
@@ -65,6 +69,10 @@ const KbDocumentParamsSchema = z.object({
   kb_document_id: z.string().min(1),
 });
 
+const ApprovalParamsSchema = z.object({
+  approval_id: z.string().min(1),
+});
+
 const TicketParamsSchema = z.object({
   ticket_id: z.string().min(1),
 });
@@ -100,6 +108,12 @@ const KbDocumentListQuerySchema = ListQuerySchema.extend({
   source_type: KbDocumentSourceTypeSchema.optional(),
   document_type: KbDocumentTypeSchema.optional(),
   status: KbStatusSchema.optional(),
+});
+
+const ApprovalListQuerySchema = ListQuerySchema.extend({
+  status: ApprovalStatusSchema.optional(),
+  ticket_id: z.string().min(1).optional(),
+  approval_type: ApprovalTypeSchema.optional(),
 });
 
 const TicketListQuerySchema = ListQuerySchema.extend({
@@ -414,6 +428,35 @@ export function registerRoutes(
     return KbDocumentResourceResponseSchema.parse({
       kb_document: kbDocument,
     });
+  });
+
+  app.get("/v1/approvals", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "approvals:read");
+
+    const query = parseQuery(ApprovalListQuerySchema, request);
+    const approvals = await services.approvals.list(context, query);
+
+    return ApprovalListResponseSchema.parse(approvals);
+  });
+
+  app.get("/v1/approvals/:approval_id", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "approvals:read");
+
+    const { approval_id: approvalId } = parseParams(
+      ApprovalParamsSchema,
+      request,
+    );
+    const approval = await services.approvals.getById(context, approvalId);
+
+    if (!approval) {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Approval was not found.");
+    }
+
+    return ApprovalResourceResponseSchema.parse({ approval });
   });
 
   app.get("/v1/tickets", async (request) => {

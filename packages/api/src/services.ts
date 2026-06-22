@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
+  approvalByIdQuery,
+  approvalsListQuery,
   conversationByIdQuery,
   conversationsListQuery,
   createCustomerQuery,
@@ -22,6 +24,7 @@ import {
   updateTenantByIdQuery,
   updateTicketByIdQuery,
   withTenantTransaction,
+  type Approval,
   type Conversation,
   type Customer,
   type KbDocument,
@@ -35,6 +38,8 @@ import {
   type Ticket,
 } from "@support/db";
 import type {
+  ApprovalListResponse,
+  ApprovalResponse,
   ConversationListResponse,
   ConversationResponse,
   CustomerCreateRequest,
@@ -96,6 +101,12 @@ export interface KbDocumentListOptions extends ListOptions {
   readonly source_type?: KbDocument["sourceType"];
   readonly document_type?: KbDocument["documentType"];
   readonly status?: KbDocument["status"];
+}
+
+export interface ApprovalListOptions extends ListOptions {
+  readonly status?: Approval["status"];
+  readonly ticket_id?: string;
+  readonly approval_type?: Approval["approvalType"];
 }
 
 export interface ApiServices {
@@ -178,6 +189,16 @@ export interface ApiServices {
       context: TenantRequestContext,
       kbDocumentId: string,
     ): Promise<KbDocumentResponse | null>;
+  };
+  readonly approvals: {
+    list(
+      context: TenantRequestContext,
+      options: ApprovalListOptions,
+    ): Promise<ApprovalListResponse>;
+    getById(
+      context: TenantRequestContext,
+      approvalId: string,
+    ): Promise<ApprovalResponse | null>;
   };
   readonly tickets: {
     list(
@@ -547,6 +568,49 @@ export function createDatabaseApiServices(): ApiServices {
         );
       },
     },
+    approvals: {
+      async list(context, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await approvalsListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              {
+                limit: options.limit,
+                status: options.status,
+                ticketId: options.ticket_id,
+                approvalType: options.approval_type,
+              },
+            );
+
+            return {
+              approvals: rows.map(mapApproval),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
+          },
+        );
+      },
+      async getById(context, approvalId) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await approvalByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              approvalId,
+            );
+
+            return rows[0] ? mapApproval(rows[0]) : null;
+          },
+        );
+      },
+    },
     tickets: {
       async list(context, options) {
         return withTenantTransaction(
@@ -803,6 +867,23 @@ function mapKbDocument(row: KbDocument): KbDocumentResponse {
     created_by_user_id: row.createdByUserId,
     created_at: toIsoString(row.createdAt),
     updated_at: toIsoString(row.updatedAt),
+  };
+}
+
+function mapApproval(row: Approval): ApprovalResponse {
+  return {
+    approval_id: row.approvalId,
+    tenant_id: row.tenantId,
+    ticket_id: row.ticketId,
+    ai_run_id: row.aiRunId,
+    approval_type: row.approvalType,
+    status: row.status,
+    requested_payload: row.requestedPayload,
+    approved_payload: row.approvedPayload,
+    reviewer_user_id: row.reviewerUserId,
+    review_notes: row.reviewNotes,
+    created_at: toIsoString(row.createdAt),
+    resolved_at: toNullableIsoString(row.resolvedAt),
   };
 }
 
