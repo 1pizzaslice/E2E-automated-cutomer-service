@@ -744,15 +744,17 @@ Current API skeleton implements:
 - `GET /v1/policies/{policy_id}`
 - `GET /v1/kb/documents`
 - `GET /v1/kb/documents/{kb_document_id}`
+- `GET /v1/approvals`
+- `GET /v1/approvals/{approval_id}`
 - `GET /v1/tickets`
 - `POST /v1/tickets`
 - `GET /v1/tickets/{ticket_id}`
 - `PATCH /v1/tickets/{ticket_id}`
 
-The current tenant, customer, ticket, conversation, message, policy, and KB document endpoints are
+The current tenant, customer, ticket, conversation, message, policy, KB document, and approval endpoints are
 skeleton contracts where the database schema already supports those operations.
 Tenant/customer/ticket currently support list-create-read-update as documented
-below; conversations, messages, policies, and KB documents currently support read/list only. They validate
+below; conversations, messages, policies, KB documents, and approvals currently support read/list only. They validate
 headers, path params, query params, request bodies, and response bodies, then use
 the DB package tenant transaction helper for tenant-scoped data access. They
 enforce the current role-to-permission matrix before service/data access. They do
@@ -760,9 +762,9 @@ not yet implement workflow side effects, idempotency, audit behavior, customer
 identity merge logic, message ingestion, outbound sending, internal-note writes,
 policy version mutation/approval/activation, or ticket lifecycle transitions.
 They also do not yet implement KB document creation/update, ingestion, chunking,
-embedding, retrieval search, or KB audit side effects.
+embedding, retrieval search, KB audit side effects, or approval actions.
 
-The remaining endpoint families below are the target contract for future milestones.
+Endpoint families below include current implementation notes where available; otherwise they are target contracts for future milestones.
 
 ### 17.0 Common API Contract
 
@@ -802,6 +804,7 @@ Current skeleton permissions:
 - `messages:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `policies:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `kb_documents:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
+- `approvals:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `tickets:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `tickets:create`: `platform_admin`, `ops_admin`, `support_agent`.
 - `tickets:update`: `platform_admin`, `ops_admin`, `support_agent`.
@@ -954,6 +957,12 @@ Current implementation:
 - `POST /v1/approvals/{approval_id}/edit`
 - `POST /v1/approvals/{approval_id}/reject`
 - `POST /v1/approvals/{approval_id}/escalate`
+
+Current implementation:
+
+- `GET /v1/approvals` lists tenant-scoped approval records with `limit`, `status`, `ticket_id`, and `approval_type` query filters.
+- `GET /v1/approvals/{approval_id}` reads a tenant-scoped approval record, including requested and approved payload metadata.
+- Approval approve/edit/reject/escalate actions, Temporal signals, audit events, outbound side effects, and workflow resume behavior remain future endpoints.
 
 ### 17.13 Audit
 
@@ -1143,17 +1152,17 @@ Commands:
 
 - Apply local migrations: `pnpm db:migrate`.
 - Generate future migration drafts: `pnpm --filter @support/db generate:migration`.
-- Run live PostgreSQL integration tests for DB/RLS and API tenant/customer/conversation/message/policy/KB document/ticket endpoints: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
+- Run live PostgreSQL integration tests for DB/RLS and API tenant/customer/conversation/message/policy/KB document/approval/ticket endpoints: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
 
 Initial schema choices:
 
 - Domain IDs are application-generated text IDs, matching the contract style such as `ten_...`, `ticket_...`, and `kb_chunk_...`.
 - PostgreSQL remains the source of truth.
 - The first KB embedding column is `vector(1536)` using `pgvector`; choose and document a production embedding model before relying on this dimension for real client data.
-- Tenant-scoped entities have `tenant_id` columns and tenant indexes. Repository query helpers currently enforce tenant filters for customer and ticket reads/lists/updates/writes, conversation, message, policy, and KB document reads/lists, plus KB chunks, integrations, audit events, and tool definitions.
+- Tenant-scoped entities have `tenant_id` columns and tenant indexes. Repository query helpers currently enforce tenant filters for customer and ticket reads/lists/updates/writes, conversation, message, policy, KB document, and approval reads/lists, plus KB chunks, integrations, audit events, and tool definitions.
 - Tool definitions may be global when `tenant_id is null`; tenant query helpers allow global active tools while excluding other tenants.
 - Idempotency support starts with the `idempotency_keys` table and operation/key uniqueness per tenant.
-- Live repository execution tests seed two synthetic tenants and prove the tenant-scoped helpers execute against PostgreSQL without returning cross-tenant customers, conversations, messages, policies, tickets, KB documents, KB chunks, integrations, tool definitions, or audit events.
+- Live repository execution tests seed two synthetic tenants and prove the tenant-scoped helpers execute against PostgreSQL without returning cross-tenant customers, conversations, messages, policies, tickets, KB documents, approvals, KB chunks, integrations, tool definitions, or audit events.
 - PostgreSQL row-level security is enabled for tenant-scoped tables before tenant-scoped API endpoints are exposed.
 - Runtime tenant access uses the `app.current_tenant_id` PostgreSQL setting. API and worker code must set it transaction-locally through the DB package helper before tenant-scoped reads or writes.
 - The `support_app` database role is the non-owner application role used for RLS enforcement. The local migration grants it DML access to current domain tables for runtime and test verification.

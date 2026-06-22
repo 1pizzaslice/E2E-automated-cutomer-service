@@ -6,21 +6,31 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton now has tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata read-list contracts with RBAC checks and PostgreSQL-backed API integration coverage; approval endpoint expansion is next.
+- Project phase: Milestone 3 API skeleton now has tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval read-list contracts with RBAC checks and PostgreSQL-backed API integration coverage; audit read endpoint expansion is next.
 - Current milestone: Milestone 3 - backend API skeleton.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, and conversation/message/policy/KB document metadata read-list skeleton contracts. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, and conversation/message/policy/KB document metadata/approval read-list skeleton contracts. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Continue Milestone 3 by adding approval read/list endpoint skeletons backed by the existing approval tables, extending RBAC per endpoint, and keeping PostgreSQL-backed API integration coverage for tenant isolation.
+> Continue Milestone 3 by adding audit event read/list endpoint skeletons backed by the existing audit event table, extending RBAC per endpoint, and keeping PostgreSQL-backed API integration coverage for tenant isolation.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat-api-approval-read-list` from `main` for the current Milestone 3 continuation after the sandbox could not write `.git` refs without elevated Git access and nested `feat/...` refs remained unavailable.
+- Added shared approval response schemas plus list/resource envelopes for approval contracts.
+- Added tenant-scoped approval list/read repository helpers with `status`, `ticket_id`, and `approval_type` filters.
+- Added repository SQL-generation tests and live repository integration coverage for approval tenant isolation.
+- Added `GET /v1/approvals` and `GET /v1/approvals/{approval_id}`.
+- Added approval service adapters that use `withTenantTransaction`.
+- Expanded `packages/api/src/rbac.ts` with `approvals:read` for platform admin, ops admin, support agent, QA reviewer, and client viewer roles.
+- Expanded generated OpenAPI paths and component schemas for approval read-list contracts.
+- Expanded shared-schema tests, repository tests, API contract tests, and live PostgreSQL-backed API integration tests for approval tenant isolation.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, and `TODO.md` for the current API expansion.
 - Created feature branch `feat-api-kb-document-read-list` from `main` for the current Milestone 3 continuation because the sandbox could not create nested `feat/...` refs without elevated Git access.
 - Added shared KB document metadata response schemas plus list/resource envelopes for KB document contracts.
 - Added tenant-scoped KB document list/read repository helpers with `source_type`, `document_type`, and `status` filters.
@@ -113,6 +123,20 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm --filter @support/shared-schemas test` passes with 11 tests after the approval contract schema expansion.
+- `pnpm --filter @support/shared-schemas typecheck` passes after the approval contract schema expansion.
+- `pnpm --filter @support/db test` passes with 34 normal tests and 16 live integration tests skipped unless explicitly enabled after approval repository helper coverage.
+- `pnpm --filter @support/db typecheck` passes after approval repository helpers.
+- `pnpm --filter @support/api test` passes with 36 API contract tests and 19 live integration tests skipped unless explicitly enabled after approval route/service expansion.
+- `pnpm --filter @support/api typecheck` passes after approval route/service expansion.
+- `pnpm format` applied formatting after the approval API expansion.
+- `pnpm format:check` passes after the approval API expansion.
+- `pnpm lint` passes after the approval API expansion.
+- `pnpm typecheck` passes after the approval API expansion.
+- `pnpm test` passes after the approval API expansion.
+- `pnpm build` passes after the approval API expansion.
+- `pnpm infra:up` reports the local Compose stack running and PostgreSQL healthy after the approval API expansion.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` initially failed inside the managed sandbox with localhost `EPERM`, then passed when rerun with approved localhost access. The passing run covered 16 DB/RLS integration tests and 19 PostgreSQL-backed API integration tests.
 - `pnpm --filter @support/shared-schemas test` passes with 10 tests after the KB document metadata contract schema expansion.
 - `pnpm --filter @support/shared-schemas typecheck` passes after the KB document metadata contract schema expansion.
 - `pnpm --filter @support/db test` passes with 32 normal tests and 15 live integration tests skipped unless explicitly enabled after KB document repository helper coverage.
@@ -200,10 +224,11 @@ The next implementation task is:
 
 - GitHub Actions includes the live PostgreSQL integration test step, but the latest workflow with DB/RLS plus API integration coverage has not run remotely yet.
 - API auth is still a placeholder header contract; no real identity provider exists yet.
-- RBAC exists only for the current skeleton OpenAPI, tenant/customer/ticket list-create-read-update endpoints, and conversation/message/policy/KB document read-list endpoints; it must be extended as new endpoint families are added.
+- RBAC exists only for the current skeleton OpenAPI, tenant/customer/ticket list-create-read-update endpoints, and conversation/message/policy/KB document/approval read-list endpoints; it must be extended as new endpoint families are added.
 - Tenant/customer/ticket create/update endpoints do not yet create idempotency records, audit events, or workflow side effects.
 - Conversation/message endpoints are read-list only; message ingestion, internal-note creation, outbound sends, attachment validation, and HTML sanitization enforcement remain future workflow/channel tasks.
 - KB document endpoints are metadata read-list only; creation, update, ingestion, chunking, embedding, retrieval search, audit events, and workflow side effects remain future KB/RAG tasks.
+- Approval endpoints are read-list only; approve/edit/reject/escalate actions, Temporal signals, audit events, outbound side effects, and workflow resume behavior remain future human-approval-loop tasks.
 - Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
 - No real client/pilot data exists yet.
 - No OpenAI/model provider credentials configured yet.
@@ -355,11 +380,11 @@ Checklist:
 - [x] Add message endpoints. Current: read/list under conversations skeleton only.
 - [x] Add policy endpoints. Current: read/list skeleton only; create/version/approval/activation endpoints are pending.
 - [x] Add KB metadata endpoints. Current: document metadata read/list skeleton only; create/update/ingest/search endpoints are pending.
-- [ ] Add approval endpoints.
+- [x] Add approval endpoints. Current: read/list skeleton only; approve/edit/reject/escalate action endpoints are pending.
 - [ ] Add audit read endpoints.
 - [x] Add contract tests for current API skeleton.
 - [x] Add RBAC checks for current API skeleton endpoints.
-- [x] Add PostgreSQL-backed API integration tests for current tenant/customer/conversation/message/policy/KB document/ticket endpoints.
+- [x] Add PostgreSQL-backed API integration tests for current tenant/customer/conversation/message/policy/KB document/approval/ticket endpoints.
 
 Acceptance criteria:
 
@@ -611,6 +636,11 @@ Use reverse chronological order.
 
 ### 2026-06-22
 
+- Continued Milestone 3 approval API expansion:
+  - Added approval read/list skeleton endpoints backed by the existing `approvals` table.
+  - Added route-level RBAC for `approvals:read`.
+  - Added OpenAPI, shared schema, repository helper, API contract, repository integration, and live PostgreSQL-backed API integration coverage.
+  - Kept approval approve/edit/reject/escalate actions, Temporal signals, audit events, outbound side effects, and workflow resume behavior for future human-approval-loop tasks.
 - Continued Milestone 3 KB document metadata API expansion:
   - Added KB document metadata read/list skeleton endpoints backed by the existing `kb_documents` table.
   - Added route-level RBAC for `kb_documents:read`.

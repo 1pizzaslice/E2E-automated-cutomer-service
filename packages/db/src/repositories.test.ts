@@ -3,6 +3,8 @@ import postgres from "postgres";
 import { createDatabase, type PostgresClient } from "./client.js";
 import {
   activeKbChunksForDocumentQuery,
+  approvalByIdQuery,
+  approvalsListQuery,
   auditEventsForEntityQuery,
   conversationsListQuery,
   conversationByIdQuery,
@@ -287,6 +289,35 @@ describe("tenant-scoped repository queries", () => {
       "active",
       10,
     ]);
+  });
+
+  it("scopes approval reads by tenant", () => {
+    const query = approvalByIdQuery(makeDb(), { tenantId: "ten_a" }, "apr_a");
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"approvals"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"approvals"."approval_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "apr_a", 1]);
+  });
+
+  it("scopes approval list reads by tenant and filters", () => {
+    const query = approvalsListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        limit: 10,
+        status: "pending",
+        ticketId: "tic_a",
+        approvalType: "reply",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"approvals"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"approvals"."status" = $2');
+    expect(compiled.sql).toContain('"approvals"."ticket_id" = $3');
+    expect(compiled.sql).toContain('"approvals"."approval_type" = $4');
+    expect(compiled.params).toEqual(["ten_a", "pending", "tic_a", "reply", 10]);
   });
 
   it("scopes audit reads by tenant and entity", () => {

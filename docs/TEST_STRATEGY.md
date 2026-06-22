@@ -273,14 +273,14 @@ Current Milestone 2 coverage:
 - `packages/db/src/schema.test.ts` checks core schema constants such as the KB embedding vector dimension.
 - `packages/db/src/repositories.test.ts` compiles repository queries and asserts tenant filters in generated SQL for reads, lists, and updates.
 - `packages/db/src/rls.test.ts` checks tenant context helpers and verifies `withTenantTransaction` sets the application role before scoped work in unit tests.
-- `packages/db/src/repositories.integration.test.ts` applies pending SQL migrations, inserts synthetic tenant A/B fixtures, executes repository helpers against PostgreSQL, verifies no cross-tenant rows are returned for customer, conversation, message, policy, ticket, KB document, KB chunk, integration, tool-definition, and audit helpers, and cleans up fixture rows.
+- `packages/db/src/repositories.integration.test.ts` applies pending SQL migrations, inserts synthetic tenant A/B fixtures, executes repository helpers against PostgreSQL, verifies no cross-tenant rows are returned for customer, conversation, message, policy, ticket, KB document, approval, KB chunk, integration, tool-definition, and audit helpers, and cleans up fixture rows.
 - `packages/db/src/rls.integration.test.ts` applies pending SQL migrations, uses `support_app` with transaction-local tenant context, verifies raw SQL cannot read cross-tenant rows, verifies missing context is rejected, verifies cross-tenant writes are blocked, verifies global tool definitions remain visible, and verifies the tenant transaction helper runs repository work under the application role.
 
 Current Milestone 3 API skeleton coverage:
 
-- `packages/shared-schemas/src/index.test.ts` validates structured API errors, tenant/customer/conversation/message/policy/KB document/ticket resource responses, list envelopes, create request schemas, and non-empty update request schemas.
-- `packages/api/src/app.test.ts` covers public health/readiness, auth-required errors, tenant-context-required errors, authenticated OpenAPI document access, request ID echoing, RBAC denial for protected tenant/customer/conversation/policy/KB document operations, tenant path mismatch rejection, tenant/customer/ticket list-create-read-update response schemas, conversation/message/policy/KB document read-list response schemas, empty patch-body validation, and structured not-found errors.
-- `packages/api/src/app.integration.test.ts` applies pending SQL migrations, seeds two synthetic tenants, exercises the PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/ticket endpoints through HTTP, verifies role denial for tenant reads, verifies tenant A can list/read its own customer/conversation/message/policy/KB document/ticket resources without seeing tenant B resources, verifies tenant A receives structured not-found errors for tenant B customer/conversation/message/policy/KB document/ticket IDs, and cleans up fixture rows.
+- `packages/shared-schemas/src/index.test.ts` validates structured API errors, tenant/customer/conversation/message/policy/KB document/approval/ticket resource responses, list envelopes, create request schemas, and non-empty update request schemas.
+- `packages/api/src/app.test.ts` covers public health/readiness, auth-required errors, tenant-context-required errors, authenticated OpenAPI document access, request ID echoing, RBAC denial for protected tenant/customer/conversation/policy/KB document/approval operations, tenant path mismatch rejection, tenant/customer/ticket list-create-read-update response schemas, conversation/message/policy/KB document/approval read-list response schemas, empty patch-body validation, and structured not-found errors.
+- `packages/api/src/app.integration.test.ts` applies pending SQL migrations, seeds two synthetic tenants, exercises the PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/approval/ticket endpoints through HTTP, verifies role denial for tenant reads, verifies tenant A can list/read its own customer/conversation/message/policy/KB document/approval/ticket resources without seeing tenant B resources, verifies tenant A receives structured not-found errors for tenant B customer/conversation/message/policy/KB document/approval/ticket IDs, and cleans up fixture rows.
 
 ## 4. Golden Dataset
 
@@ -405,7 +405,7 @@ pnpm infra:up
 DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
 ```
 
-CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service. The root command currently runs DB repository/RLS integration tests first, then API PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/ticket integration tests.
+CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service. The root command currently runs DB repository/RLS integration tests first, then API PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/approval/ticket integration tests.
 
 Current Python tests use standard library `unittest` because `uv` is not installed locally. When the LangGraph AI runtime is implemented, add the chosen Python dependency manager and update this file with the real eval/test commands.
 

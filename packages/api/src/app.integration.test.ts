@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
+  ApprovalListResponseSchema,
+  ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
@@ -19,6 +21,7 @@ import {
   type RoleName,
 } from "@support/shared-schemas";
 import {
+  approvals,
   channels,
   conversations,
   createDatabase,
@@ -55,6 +58,8 @@ const ids = {
   policyB: `${fixturePrefix}_pol_b`,
   kbDocumentA: `${fixturePrefix}_kbd_a`,
   kbDocumentB: `${fixturePrefix}_kbd_b`,
+  approvalA: `${fixturePrefix}_apr_a`,
+  approvalB: `${fixturePrefix}_apr_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
   ticketCreated: `${fixturePrefix}_tic_created`,
@@ -422,6 +427,47 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
   });
 
+  it("lists tenant-scoped approvals without crossing tenants", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: `/v1/approvals?status=pending&approval_type=reply&ticket_id=${ids.ticketA}&limit=100`,
+      headers: authHeaders("support_agent"),
+    });
+    const body = ApprovalListResponseSchema.parse(response.json());
+    const approvalIds = body.approvals.map((approval) => approval.approval_id);
+
+    expect(response.statusCode).toBe(200);
+    expect(approvalIds).toContain(ids.approvalA);
+    expect(approvalIds).not.toContain(ids.approvalB);
+  });
+
+  it("reads tenant-scoped approvals without crossing tenants", async () => {
+    const ownResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/approvals/${ids.approvalA}`,
+      headers: authHeaders("support_agent"),
+    });
+    const otherTenantResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/approvals/${ids.approvalB}`,
+      headers: authHeaders("support_agent"),
+    });
+    const ownBody = ApprovalResourceResponseSchema.parse(ownResponse.json());
+    const otherTenantBody = ApiErrorResponseSchema.parse(
+      otherTenantResponse.json(),
+    );
+
+    expect(ownResponse.statusCode).toBe(200);
+    expect(ownBody.approval).toMatchObject({
+      approval_id: ids.approvalA,
+      tenant_id: ids.tenantA,
+      ticket_id: ids.ticketA,
+      status: "pending",
+    });
+    expect(otherTenantResponse.statusCode).toBe(404);
+    expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
   it("lists tenant-scoped tickets without crossing tenants", async () => {
     const response = await app!.inject({
       method: "GET",
@@ -613,6 +659,31 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
     },
   ]);
 
+  await db.insert(approvals).values([
+    {
+      approvalId: ids.approvalA,
+      tenantId: ids.tenantA,
+      ticketId: ids.ticketA,
+      approvalType: "reply",
+      status: "pending",
+      requestedPayload: {
+        draft: "Tenant A API approval draft.",
+        risk_reasons: ["v1_default_human_approval"],
+      },
+    },
+    {
+      approvalId: ids.approvalB,
+      tenantId: ids.tenantB,
+      ticketId: ids.ticketB,
+      approvalType: "reply",
+      status: "pending",
+      requestedPayload: {
+        draft: "Tenant B API approval draft.",
+        risk_reasons: ["v1_default_human_approval"],
+      },
+    },
+  ]);
+
   await db.insert(messages).values([
     {
       messageId: ids.messageA,
@@ -684,6 +755,10 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
 }
 
 async function cleanupFixtures(client: PostgresClient) {
+  await client`
+    delete from approvals
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
   await client`
     delete from kb_documents
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})

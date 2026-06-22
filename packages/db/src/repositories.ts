@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, or, type SQL } from "drizzle-orm";
 import type { SupportDatabase } from "./client.js";
 import {
+  approvals,
   auditEvents,
   conversations,
   customers,
@@ -8,9 +9,10 @@ import {
   kbChunks,
   kbDocuments,
   messages,
+  type Approval,
   type Conversation,
-  type Message,
   type KbDocument,
+  type Message,
   type NewCustomer,
   type NewTenant,
   type NewTicket,
@@ -61,6 +63,12 @@ export interface KbDocumentListQueryOptions extends ListQueryOptions {
   readonly sourceType?: KbDocument["sourceType"];
   readonly documentType?: KbDocument["documentType"];
   readonly status?: KbDocument["status"];
+}
+
+export interface ApprovalListQueryOptions extends ListQueryOptions {
+  readonly status?: Approval["status"];
+  readonly ticketId?: string;
+  readonly approvalType?: Approval["approvalType"];
 }
 
 export function tenantsListQuery(
@@ -411,6 +419,50 @@ export function kbDocumentByIdQuery(
       and(
         eq(kbDocuments.tenantId, scope.tenantId),
         eq(kbDocuments.kbDocumentId, kbDocumentId),
+      ),
+    )
+    .limit(1);
+}
+
+export function approvalsListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: ApprovalListQueryOptions,
+) {
+  const filters: SQL[] = [eq(approvals.tenantId, scope.tenantId)];
+
+  if (options.status) {
+    filters.push(eq(approvals.status, options.status));
+  }
+
+  if (options.ticketId) {
+    filters.push(eq(approvals.ticketId, options.ticketId));
+  }
+
+  if (options.approvalType) {
+    filters.push(eq(approvals.approvalType, options.approvalType));
+  }
+
+  return db
+    .select()
+    .from(approvals)
+    .where(and(...filters))
+    .orderBy(desc(approvals.createdAt), desc(approvals.approvalId))
+    .limit(options.limit);
+}
+
+export function approvalByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  approvalId: string,
+) {
+  return db
+    .select()
+    .from(approvals)
+    .where(
+      and(
+        eq(approvals.tenantId, scope.tenantId),
+        eq(approvals.approvalId, approvalId),
       ),
     )
     .limit(1);

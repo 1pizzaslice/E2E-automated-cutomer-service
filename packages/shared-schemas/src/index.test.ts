@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  ApprovalListResponseSchema,
+  ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
@@ -234,6 +236,30 @@ describe("shared API contract schemas", () => {
         page: { count: 1, limit: 50 },
       }),
     ).toMatchObject({ kb_documents: [{ kb_document_id: "kbd_test" }] });
+
+    expect(
+      ApprovalListResponseSchema.parse({
+        approvals: [
+          {
+            approval_id: "apr_test",
+            tenant_id: "ten_test",
+            ticket_id: "ticket_test",
+            ai_run_id: null,
+            approval_type: "reply",
+            status: "pending",
+            requested_payload: {
+              draft: "Where is my order response draft.",
+            },
+            approved_payload: null,
+            reviewer_user_id: null,
+            review_notes: null,
+            created_at: now,
+            resolved_at: null,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ approvals: [{ approval_id: "apr_test" }] });
   });
 
   it("validates create and update request bodies", () => {
@@ -383,5 +409,29 @@ describe("shared API contract schemas", () => {
     };
 
     expect(PolicyResourceResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("validates approval resource responses", () => {
+    const response = {
+      approval: {
+        approval_id: "apr_test",
+        tenant_id: "ten_test",
+        ticket_id: "ticket_test",
+        ai_run_id: null,
+        approval_type: "reply",
+        status: "pending",
+        requested_payload: {
+          draft: "Where is my order response draft.",
+          risk_reasons: ["v1_default_human_approval"],
+        },
+        approved_payload: null,
+        reviewer_user_id: null,
+        review_notes: null,
+        created_at: "2026-06-19T00:00:00.000Z",
+        resolved_at: null,
+      },
+    };
+
+    expect(ApprovalResourceResponseSchema.parse(response)).toEqual(response);
   });
 });
