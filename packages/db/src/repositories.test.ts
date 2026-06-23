@@ -5,7 +5,9 @@ import {
   activeKbChunksForDocumentQuery,
   approvalByIdQuery,
   approvalsListQuery,
+  auditEventByIdQuery,
   auditEventsForEntityQuery,
+  auditEventsListQuery,
   conversationsListQuery,
   conversationByIdQuery,
   customersListQuery,
@@ -333,6 +335,47 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain('"audit_events"."entity_type" = $2');
     expect(compiled.sql).toContain('"audit_events"."entity_id" = $3');
     expect(compiled.params).toEqual(["ten_a", "ticket", "tic_a"]);
+  });
+
+  it("scopes audit reads by tenant and ID", () => {
+    const query = auditEventByIdQuery(makeDb(), { tenantId: "ten_a" }, "aud_a");
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"audit_events"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"audit_events"."audit_event_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "aud_a", 1]);
+  });
+
+  it("scopes audit list reads by tenant and filters", () => {
+    const query = auditEventsListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        limit: 10,
+        actorType: "system",
+        entityType: "ticket",
+        entityId: "tic_a",
+        action: "ticket.created",
+        correlationId: "corr_a",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"audit_events"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"audit_events"."actor_type" = $2');
+    expect(compiled.sql).toContain('"audit_events"."entity_type" = $3');
+    expect(compiled.sql).toContain('"audit_events"."entity_id" = $4');
+    expect(compiled.sql).toContain('"audit_events"."action" = $5');
+    expect(compiled.sql).toContain('"audit_events"."correlation_id" = $6');
+    expect(compiled.params).toEqual([
+      "ten_a",
+      "system",
+      "ticket",
+      "tic_a",
+      "ticket.created",
+      "corr_a",
+      10,
+    ]);
   });
 
   it("scopes integration reads by tenant", () => {

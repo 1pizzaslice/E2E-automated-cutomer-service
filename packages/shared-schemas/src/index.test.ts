@@ -3,6 +3,8 @@ import {
   ApprovalListResponseSchema,
   ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
+  AuditEventListResponseSchema,
+  AuditEventResourceResponseSchema,
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
   CustomerCreateRequestSchema,
@@ -260,6 +262,26 @@ describe("shared API contract schemas", () => {
         page: { count: 1, limit: 50 },
       }),
     ).toMatchObject({ approvals: [{ approval_id: "apr_test" }] });
+
+    expect(
+      AuditEventListResponseSchema.parse({
+        audit_events: [
+          {
+            audit_event_id: "aud_test",
+            tenant_id: "ten_test",
+            actor_type: "system",
+            actor_id: null,
+            entity_type: "ticket",
+            entity_id: "ticket_test",
+            action: "ticket.created",
+            metadata: { status: "new" },
+            correlation_id: "corr_test",
+            created_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ audit_events: [{ audit_event_id: "aud_test" }] });
   });
 
   it("validates create and update request bodies", () => {
@@ -433,5 +455,24 @@ describe("shared API contract schemas", () => {
     };
 
     expect(ApprovalResourceResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("validates audit event resource responses", () => {
+    const response = {
+      audit_event: {
+        audit_event_id: "aud_test",
+        tenant_id: "ten_test",
+        actor_type: "system",
+        actor_id: null,
+        entity_type: "ticket",
+        entity_id: "ticket_test",
+        action: "ticket.created",
+        metadata: { status: "new" },
+        correlation_id: "corr_test",
+        created_at: "2026-06-19T00:00:00.000Z",
+      },
+    };
+
+    expect(AuditEventResourceResponseSchema.parse(response)).toEqual(response);
   });
 });

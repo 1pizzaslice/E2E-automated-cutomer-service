@@ -5,6 +5,9 @@ import {
   ApprovalResourceResponseSchema,
   ApprovalStatusSchema,
   ApprovalTypeSchema,
+  AuditActorTypeSchema,
+  AuditEventListResponseSchema,
+  AuditEventResourceResponseSchema,
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
   ConversationStatusSchema,
@@ -73,6 +76,10 @@ const ApprovalParamsSchema = z.object({
   approval_id: z.string().min(1),
 });
 
+const AuditEventParamsSchema = z.object({
+  audit_event_id: z.string().min(1),
+});
+
 const TicketParamsSchema = z.object({
   ticket_id: z.string().min(1),
 });
@@ -114,6 +121,20 @@ const ApprovalListQuerySchema = ListQuerySchema.extend({
   status: ApprovalStatusSchema.optional(),
   ticket_id: z.string().min(1).optional(),
   approval_type: ApprovalTypeSchema.optional(),
+});
+
+const AuditEventListQuerySchema = ListQuerySchema.extend({
+  actor_type: AuditActorTypeSchema.optional(),
+  entity_type: z.string().min(1).optional(),
+  entity_id: z.string().min(1).optional(),
+  action: z.string().min(1).optional(),
+  correlation_id: z.string().min(1).optional(),
+});
+
+const TicketAuditEventListQuerySchema = ListQuerySchema.extend({
+  actor_type: AuditActorTypeSchema.optional(),
+  action: z.string().min(1).optional(),
+  correlation_id: z.string().min(1).optional(),
 });
 
 const TicketListQuerySchema = ListQuerySchema.extend({
@@ -459,6 +480,44 @@ export function registerRoutes(
     return ApprovalResourceResponseSchema.parse({ approval });
   });
 
+  app.get("/v1/audit-events", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "audit_events:read");
+
+    const query = parseQuery(AuditEventListQuerySchema, request);
+    const auditEvents = await services.auditEvents.list(context, query);
+
+    return AuditEventListResponseSchema.parse(auditEvents);
+  });
+
+  app.get("/v1/audit-events/:audit_event_id", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "audit_events:read");
+
+    const { audit_event_id: auditEventId } = parseParams(
+      AuditEventParamsSchema,
+      request,
+    );
+    const auditEvent = await services.auditEvents.getById(
+      context,
+      auditEventId,
+    );
+
+    if (!auditEvent) {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "Audit event was not found.",
+      );
+    }
+
+    return AuditEventResourceResponseSchema.parse({
+      audit_event: auditEvent,
+    });
+  });
+
   app.get("/v1/tickets", async (request) => {
     const context = requireTenantRequestContext(request);
 
@@ -503,6 +562,26 @@ export function registerRoutes(
     }
 
     return TicketResourceResponseSchema.parse({ ticket });
+  });
+
+  app.get("/v1/tickets/:ticket_id/audit-events", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "audit_events:read");
+
+    const { ticket_id: ticketId } = parseParams(TicketParamsSchema, request);
+    const query = parseQuery(TicketAuditEventListQuerySchema, request);
+    const auditEvents = await services.auditEvents.listForTicket(
+      context,
+      ticketId,
+      query,
+    );
+
+    if (!auditEvents) {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Ticket was not found.");
+    }
+
+    return AuditEventListResponseSchema.parse(auditEvents);
   });
 
   app.patch("/v1/tickets/:ticket_id", async (request) => {

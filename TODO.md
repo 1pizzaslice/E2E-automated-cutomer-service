@@ -6,21 +6,30 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton now has tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval read-list contracts with RBAC checks and PostgreSQL-backed API integration coverage; audit read endpoint expansion is next.
-- Current milestone: Milestone 3 - backend API skeleton.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, and conversation/message/policy/KB document metadata/approval read-list skeleton contracts. No business workflow implementation yet.
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage.
+- Current milestone: Milestone 4 - event bus foundation is next.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, and ticket audit event list contracts. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Continue Milestone 3 by adding audit event read/list endpoint skeletons backed by the existing audit event table, extending RBAC per endpoint, and keeping PostgreSQL-backed API integration coverage for tenant isolation.
+> Start Milestone 4 by defining the versioned domain event envelope schema and subject naming convention, then add the first NATS JetStream publisher scaffold with contract tests. Keep event publication disabled from current CRUD skeletons until workflow-owned side effects are implemented.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Added shared audit event response schemas plus list/resource envelopes for audit contracts.
+- Added tenant-scoped audit event list/read repository helpers with `actor_type`, `entity_type`, `entity_id`, `action`, and `correlation_id` filters.
+- Added repository SQL-generation tests and live repository integration coverage for audit event read/list tenant isolation.
+- Added `GET /v1/audit-events`, `GET /v1/audit-events/{audit_event_id}`, and `GET /v1/tickets/{ticket_id}/audit-events`.
+- Added audit event service adapters that use `withTenantTransaction`; ticket audit lists return structured not-found errors for missing or cross-tenant parent tickets.
+- Expanded `packages/api/src/rbac.ts` with `audit_events:read` for platform admin, ops admin, support agent, QA reviewer, and client viewer roles.
+- Expanded generated OpenAPI paths and component schemas for audit event read/list contracts.
+- Expanded shared-schema tests, repository tests, API contract tests, and live PostgreSQL-backed API integration tests for audit event tenant isolation.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, and `TODO.md` for the audit API expansion.
 - Created feature branch `feat-api-approval-read-list` from `main` for the current Milestone 3 continuation after the sandbox could not write `.git` refs without elevated Git access and nested `feat/...` refs remained unavailable.
 - Added shared approval response schemas plus list/resource envelopes for approval contracts.
 - Added tenant-scoped approval list/read repository helpers with `status`, `ticket_id`, and `approval_type` filters.
@@ -123,6 +132,17 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm --filter @support/shared-schemas test` passes with 12 tests after the audit event contract schema expansion.
+- `pnpm --filter @support/db test` passes with 36 normal tests and 17 live integration tests skipped unless explicitly enabled after audit event repository helper coverage.
+- `pnpm --filter @support/api test` passes with 41 API contract tests and 22 live integration tests skipped unless explicitly enabled after audit event route/service expansion.
+- `pnpm format` applied formatting after the audit event API expansion.
+- `pnpm format:check` passes after the audit event API expansion.
+- `pnpm lint` passes after the audit event API expansion.
+- `pnpm typecheck` passes after the audit event API expansion.
+- `pnpm test` passes after the audit event API expansion.
+- `pnpm build` passes after the audit event API expansion.
+- `pnpm infra:up` reports the local Compose stack running and PostgreSQL healthy after the audit event API expansion.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration` initially failed inside the managed sandbox with localhost `EPERM`, then passed when rerun with approved localhost access. The passing run covered 17 DB/RLS integration tests and 22 PostgreSQL-backed API integration tests.
 - `pnpm --filter @support/shared-schemas test` passes with 11 tests after the approval contract schema expansion.
 - `pnpm --filter @support/shared-schemas typecheck` passes after the approval contract schema expansion.
 - `pnpm --filter @support/db test` passes with 34 normal tests and 16 live integration tests skipped unless explicitly enabled after approval repository helper coverage.
@@ -224,7 +244,7 @@ The next implementation task is:
 
 - GitHub Actions includes the live PostgreSQL integration test step, but the latest workflow with DB/RLS plus API integration coverage has not run remotely yet.
 - API auth is still a placeholder header contract; no real identity provider exists yet.
-- RBAC exists only for the current skeleton OpenAPI, tenant/customer/ticket list-create-read-update endpoints, and conversation/message/policy/KB document/approval read-list endpoints; it must be extended as new endpoint families are added.
+- RBAC exists only for the current skeleton OpenAPI, tenant/customer/ticket list-create-read-update endpoints, conversation/message/policy/KB document/approval/audit event read-list endpoints, and ticket audit event list endpoint; it must be extended as new endpoint families are added.
 - Tenant/customer/ticket create/update endpoints do not yet create idempotency records, audit events, or workflow side effects.
 - Conversation/message endpoints are read-list only; message ingestion, internal-note creation, outbound sends, attachment validation, and HTML sanitization enforcement remain future workflow/channel tasks.
 - KB document endpoints are metadata read-list only; creation, update, ingestion, chunking, embedding, retrieval search, audit events, and workflow side effects remain future KB/RAG tasks.
@@ -381,16 +401,16 @@ Checklist:
 - [x] Add policy endpoints. Current: read/list skeleton only; create/version/approval/activation endpoints are pending.
 - [x] Add KB metadata endpoints. Current: document metadata read/list skeleton only; create/update/ingest/search endpoints are pending.
 - [x] Add approval endpoints. Current: read/list skeleton only; approve/edit/reject/escalate action endpoints are pending.
-- [ ] Add audit read endpoints.
+- [x] Add audit read endpoints. Current: audit event read/list and ticket audit event list skeleton only; audit writes remain future workflow/service behavior.
 - [x] Add contract tests for current API skeleton.
 - [x] Add RBAC checks for current API skeleton endpoints.
-- [x] Add PostgreSQL-backed API integration tests for current tenant/customer/conversation/message/policy/KB document/approval/ticket endpoints.
+- [x] Add PostgreSQL-backed API integration tests for current tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket endpoints.
 
 Acceptance criteria:
 
-- [ ] All request/response schemas are validated.
+- [x] All request/response schemas are validated.
 - [x] OpenAPI spec is generated.
-- [ ] Contract tests cover happy and unhappy paths.
+- [x] Contract tests cover happy and unhappy paths.
 - [x] Auth and tenant context are required except health endpoints.
 
 ## Milestone 4: Event Bus Foundation
@@ -633,6 +653,17 @@ Acceptance criteria:
 ## Completed Log
 
 Use reverse chronological order.
+
+### 2026-06-23
+
+- Completed Milestone 3 audit event API expansion:
+  - Added audit event read/list skeleton endpoints backed by the existing `audit_events` table.
+  - Added ticket-scoped audit event list endpoint with parent ticket existence checks.
+  - Added route-level RBAC for `audit_events:read`.
+  - Added OpenAPI, shared schema, repository helper, API contract, repository integration, and live PostgreSQL-backed API integration coverage.
+  - Kept audit event writes, event publication, workflow side effects, and ticket lifecycle side effects for future workflow/event-bus tasks.
+- Marked the Milestone 3 API skeleton checklist complete.
+- Verification for this session is recorded in the Verification Status section above.
 
 ### 2026-06-22
 
