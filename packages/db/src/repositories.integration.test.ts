@@ -6,7 +6,9 @@ import {
   activeKbChunksForDocumentQuery,
   approvalByIdQuery,
   approvalsListQuery,
+  auditEventByIdQuery,
   auditEventsForEntityQuery,
+  auditEventsListQuery,
   conversationByIdQuery,
   conversationsListQuery,
   customerByIdQuery,
@@ -342,6 +344,35 @@ describeLive("live tenant-scoped repository queries", () => {
 
     expect(rows.map((row) => row.auditEventId)).toEqual([ids.auditA]);
     expect(rows.map((row) => row.action)).toEqual(["ticket.updated"]);
+  });
+
+  it("executes audit list and ID reads without crossing tenants", async () => {
+    const ownReadRows = await auditEventByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.auditA,
+    );
+    const otherTenantReadRows = await auditEventByIdQuery(
+      db,
+      { tenantId: ids.tenantA },
+      ids.auditB,
+    );
+    const listRows = await auditEventsListQuery(
+      db,
+      { tenantId: ids.tenantA },
+      {
+        limit: 100,
+        actorType: "system",
+        entityType: "ticket",
+        entityId: ids.sharedAuditEntity,
+        action: "ticket.updated",
+        correlationId: `${fixturePrefix}_correlation`,
+      },
+    );
+
+    expect(ownReadRows.map((row) => row.auditEventId)).toEqual([ids.auditA]);
+    expect(otherTenantReadRows).toEqual([]);
+    expect(listRows.map((row) => row.auditEventId)).toEqual([ids.auditA]);
   });
 });
 

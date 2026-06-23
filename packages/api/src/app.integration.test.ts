@@ -4,6 +4,8 @@ import {
   ApprovalListResponseSchema,
   ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
+  AuditEventListResponseSchema,
+  AuditEventResourceResponseSchema,
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
   CustomerListResponseSchema,
@@ -22,6 +24,7 @@ import {
 } from "@support/shared-schemas";
 import {
   approvals,
+  auditEvents,
   channels,
   conversations,
   createDatabase,
@@ -60,6 +63,8 @@ const ids = {
   kbDocumentB: `${fixturePrefix}_kbd_b`,
   approvalA: `${fixturePrefix}_apr_a`,
   approvalB: `${fixturePrefix}_apr_b`,
+  auditA: `${fixturePrefix}_aud_a`,
+  auditB: `${fixturePrefix}_aud_b`,
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
   ticketCreated: `${fixturePrefix}_tic_created`,
@@ -468,6 +473,75 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
   });
 
+  it("lists tenant-scoped audit events without crossing tenants", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/v1/audit-events?entity_type=ticket&action=ticket.created&limit=100",
+      headers: authHeaders("support_agent"),
+    });
+    const body = AuditEventListResponseSchema.parse(response.json());
+    const auditEventIds = body.audit_events.map(
+      (auditEvent) => auditEvent.audit_event_id,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(auditEventIds).toContain(ids.auditA);
+    expect(auditEventIds).not.toContain(ids.auditB);
+  });
+
+  it("reads tenant-scoped audit events without crossing tenants", async () => {
+    const ownResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/audit-events/${ids.auditA}`,
+      headers: authHeaders("support_agent"),
+    });
+    const otherTenantResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/audit-events/${ids.auditB}`,
+      headers: authHeaders("support_agent"),
+    });
+    const ownBody = AuditEventResourceResponseSchema.parse(ownResponse.json());
+    const otherTenantBody = ApiErrorResponseSchema.parse(
+      otherTenantResponse.json(),
+    );
+
+    expect(ownResponse.statusCode).toBe(200);
+    expect(ownBody.audit_event).toMatchObject({
+      audit_event_id: ids.auditA,
+      tenant_id: ids.tenantA,
+      entity_type: "ticket",
+      entity_id: ids.ticketA,
+      action: "ticket.created",
+    });
+    expect(otherTenantResponse.statusCode).toBe(404);
+    expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("lists tenant-scoped ticket audit events without crossing tenants", async () => {
+    const ownResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/tickets/${ids.ticketA}/audit-events?action=ticket.created&limit=100`,
+      headers: authHeaders("support_agent"),
+    });
+    const otherTenantResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/tickets/${ids.ticketB}/audit-events?action=ticket.created&limit=100`,
+      headers: authHeaders("support_agent"),
+    });
+    const ownBody = AuditEventListResponseSchema.parse(ownResponse.json());
+    const otherTenantBody = ApiErrorResponseSchema.parse(
+      otherTenantResponse.json(),
+    );
+    const auditEventIds = ownBody.audit_events.map(
+      (auditEvent) => auditEvent.audit_event_id,
+    );
+
+    expect(ownResponse.statusCode).toBe(200);
+    expect(auditEventIds).toEqual([ids.auditA]);
+    expect(otherTenantResponse.statusCode).toBe(404);
+    expect(otherTenantBody.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
   it("lists tenant-scoped tickets without crossing tenants", async () => {
     const response = await app!.inject({
       method: "GET",
@@ -684,6 +758,29 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
     },
   ]);
 
+  await db.insert(auditEvents).values([
+    {
+      auditEventId: ids.auditA,
+      tenantId: ids.tenantA,
+      actorType: "system",
+      entityType: "ticket",
+      entityId: ids.ticketA,
+      action: "ticket.created",
+      metadata: { status: "new" },
+      correlationId: `${fixturePrefix}_corr_a`,
+    },
+    {
+      auditEventId: ids.auditB,
+      tenantId: ids.tenantB,
+      actorType: "system",
+      entityType: "ticket",
+      entityId: ids.ticketB,
+      action: "ticket.created",
+      metadata: { status: "new" },
+      correlationId: `${fixturePrefix}_corr_b`,
+    },
+  ]);
+
   await db.insert(messages).values([
     {
       messageId: ids.messageA,
@@ -755,6 +852,10 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
 }
 
 async function cleanupFixtures(client: PostgresClient) {
+  await client`
+    delete from audit_events
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
   await client`
     delete from approvals
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})

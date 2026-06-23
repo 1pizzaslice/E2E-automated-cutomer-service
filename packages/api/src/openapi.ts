@@ -728,6 +728,131 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/audit-events": {
+        get: {
+          summary: "List tenant-scoped audit events",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "actor_type",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/AuditActorType" },
+            },
+            {
+              name: "entity_type",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "entity_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "action",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "correlation_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Audit event list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/AuditEventList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/audit-events/{audit_event_id}": {
+        get: {
+          summary: "Read a tenant-scoped audit event",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "audit_event_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Audit event resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/AuditEventResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/tickets/{ticket_id}/audit-events": {
+        get: {
+          summary: "List tenant-scoped audit events for a ticket",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "ticket_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "actor_type",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/AuditActorType" },
+            },
+            {
+              name: "action",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "correlation_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Ticket audit event list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/AuditEventList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -1244,6 +1369,54 @@ export function buildOpenApiDocument() {
             approvals: {
               type: "array",
               items: { $ref: "#/components/schemas/Approval" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        AuditEventResource: {
+          type: "object",
+          required: ["audit_event"],
+          properties: {
+            audit_event: { $ref: "#/components/schemas/AuditEvent" },
+          },
+        },
+        AuditActorType: {
+          enum: ["system", "ai", "human", "integration"],
+        },
+        AuditEvent: {
+          type: "object",
+          required: [
+            "audit_event_id",
+            "tenant_id",
+            "actor_type",
+            "actor_id",
+            "entity_type",
+            "entity_id",
+            "action",
+            "metadata",
+            "correlation_id",
+            "created_at",
+          ],
+          properties: {
+            audit_event_id: { type: "string" },
+            tenant_id: { type: "string" },
+            actor_type: { $ref: "#/components/schemas/AuditActorType" },
+            actor_id: { type: ["string", "null"] },
+            entity_type: { type: "string" },
+            entity_id: { type: "string" },
+            action: { type: "string" },
+            metadata: { type: "object", additionalProperties: true },
+            correlation_id: { type: ["string", "null"] },
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        AuditEventList: {
+          type: "object",
+          required: ["audit_events", "page"],
+          properties: {
+            audit_events: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AuditEvent" },
             },
             page: { $ref: "#/components/schemas/ListPage" },
           },

@@ -4,6 +4,8 @@ import {
   ApprovalListResponseSchema,
   ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
+  AuditEventListResponseSchema,
+  AuditEventResourceResponseSchema,
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
   CustomerListResponseSchema,
@@ -142,6 +144,9 @@ describe("api request context and contract errors", () => {
     expect(body.paths).toHaveProperty("/v1/kb/documents/{kb_document_id}");
     expect(body.paths).toHaveProperty("/v1/approvals");
     expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}");
+    expect(body.paths).toHaveProperty("/v1/audit-events");
+    expect(body.paths).toHaveProperty("/v1/audit-events/{audit_event_id}");
+    expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}/audit-events");
     expect(body.paths).toHaveProperty("/v1/tickets");
     expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}");
   });
@@ -539,6 +544,87 @@ describe("api tenant-scoped resource contracts", () => {
     const response = await app.inject({
       method: "GET",
       url: "/v1/approvals/apr_test",
+      headers: integrationAdminHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("lists audit event resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/audit-events?entity_type=ticket&entity_id=ticket_test&action=ticket.created&limit=10",
+      headers: authHeaders,
+    });
+    const body = AuditEventListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.audit_events).toHaveLength(1);
+    expect(body.audit_events[0]!).toMatchObject({
+      audit_event_id: "aud_test",
+      entity_type: "ticket",
+      entity_id: "ticket_test",
+      action: "ticket.created",
+    });
+  });
+
+  it("returns audit event resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/audit-events/aud_test",
+      headers: authHeaders,
+    });
+    const body = AuditEventResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.audit_event).toMatchObject({
+      audit_event_id: "aud_test",
+      tenant_id: "ten_test",
+      actor_type: "system",
+      action: "ticket.created",
+    });
+  });
+
+  it("lists ticket audit events through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tickets/ticket_test/audit-events?action=ticket.created&limit=10",
+      headers: authHeaders,
+    });
+    const body = AuditEventListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.audit_events).toHaveLength(1);
+    expect(body.audit_events[0]!).toMatchObject({
+      audit_event_id: "aud_test",
+      entity_type: "ticket",
+      entity_id: "ticket_test",
+    });
+  });
+
+  it("returns structured not found for missing ticket audit parents", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tickets/missing_ticket/audit-events",
+      headers: authHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(404);
+    expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("rejects audit event reads for roles without audit read permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/audit-events/aud_test",
       headers: integrationAdminHeaders,
     });
     const body = ApiErrorResponseSchema.parse(response.json());
@@ -1057,6 +1143,86 @@ function makeServices(
           review_notes: null,
           created_at: now,
           resolved_at: null,
+        };
+      },
+    },
+    auditEvents: {
+      async list(context, options) {
+        expectTenantContext(context);
+
+        return {
+          audit_events: [
+            {
+              audit_event_id: "aud_test",
+              tenant_id: context.tenant.tenantId,
+              actor_type: options.actor_type ?? "system",
+              actor_id: null,
+              entity_type: options.entity_type ?? "ticket",
+              entity_id: options.entity_id ?? "ticket_test",
+              action: options.action ?? "ticket.created",
+              metadata: {
+                status: "new",
+              },
+              correlation_id: options.correlation_id ?? "corr_test",
+              created_at: now,
+            },
+          ],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async listForTicket(context, ticketId, options) {
+        expectTenantContext(context);
+
+        if (ticketId !== "ticket_test") {
+          return null;
+        }
+
+        return {
+          audit_events: [
+            {
+              audit_event_id: "aud_test",
+              tenant_id: context.tenant.tenantId,
+              actor_type: options.actor_type ?? "system",
+              actor_id: null,
+              entity_type: "ticket",
+              entity_id: ticketId,
+              action: options.action ?? "ticket.created",
+              metadata: {
+                status: "new",
+              },
+              correlation_id: options.correlation_id ?? "corr_test",
+              created_at: now,
+            },
+          ],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async getById(context, auditEventId) {
+        expectTenantContext(context);
+
+        if (auditEventId !== "aud_test") {
+          return null;
+        }
+
+        return {
+          audit_event_id: "aud_test",
+          tenant_id: context.tenant.tenantId,
+          actor_type: "system",
+          actor_id: null,
+          entity_type: "ticket",
+          entity_id: "ticket_test",
+          action: "ticket.created",
+          metadata: {
+            status: "new",
+          },
+          correlation_id: "corr_test",
+          created_at: now,
         };
       },
     },

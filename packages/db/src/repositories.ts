@@ -10,6 +10,7 @@ import {
   kbDocuments,
   messages,
   type Approval,
+  type AuditEvent,
   type Conversation,
   type KbDocument,
   type Message,
@@ -69,6 +70,14 @@ export interface ApprovalListQueryOptions extends ListQueryOptions {
   readonly status?: Approval["status"];
   readonly ticketId?: string;
   readonly approvalType?: Approval["approvalType"];
+}
+
+export interface AuditEventListQueryOptions extends ListQueryOptions {
+  readonly actorType?: AuditEvent["actorType"];
+  readonly entityType?: string;
+  readonly entityId?: string;
+  readonly action?: string;
+  readonly correlationId?: string;
 }
 
 export function tenantsListQuery(
@@ -463,6 +472,58 @@ export function approvalByIdQuery(
       and(
         eq(approvals.tenantId, scope.tenantId),
         eq(approvals.approvalId, approvalId),
+      ),
+    )
+    .limit(1);
+}
+
+export function auditEventsListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: AuditEventListQueryOptions,
+) {
+  const filters: SQL[] = [eq(auditEvents.tenantId, scope.tenantId)];
+
+  if (options.actorType) {
+    filters.push(eq(auditEvents.actorType, options.actorType));
+  }
+
+  if (options.entityType) {
+    filters.push(eq(auditEvents.entityType, options.entityType));
+  }
+
+  if (options.entityId) {
+    filters.push(eq(auditEvents.entityId, options.entityId));
+  }
+
+  if (options.action) {
+    filters.push(eq(auditEvents.action, options.action));
+  }
+
+  if (options.correlationId) {
+    filters.push(eq(auditEvents.correlationId, options.correlationId));
+  }
+
+  return db
+    .select()
+    .from(auditEvents)
+    .where(and(...filters))
+    .orderBy(desc(auditEvents.createdAt), desc(auditEvents.auditEventId))
+    .limit(options.limit);
+}
+
+export function auditEventByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  auditEventId: string,
+) {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.tenantId, scope.tenantId),
+        eq(auditEvents.auditEventId, auditEventId),
       ),
     )
     .limit(1);

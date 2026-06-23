@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   approvalByIdQuery,
   approvalsListQuery,
+  auditEventByIdQuery,
+  auditEventsListQuery,
   conversationByIdQuery,
   conversationsListQuery,
   createCustomerQuery,
@@ -25,6 +27,7 @@ import {
   updateTicketByIdQuery,
   withTenantTransaction,
   type Approval,
+  type AuditEvent,
   type Conversation,
   type Customer,
   type KbDocument,
@@ -40,6 +43,8 @@ import {
 import type {
   ApprovalListResponse,
   ApprovalResponse,
+  AuditEventListResponse,
+  AuditEventResponse,
   ConversationListResponse,
   ConversationResponse,
   CustomerCreateRequest,
@@ -107,6 +112,14 @@ export interface ApprovalListOptions extends ListOptions {
   readonly status?: Approval["status"];
   readonly ticket_id?: string;
   readonly approval_type?: Approval["approvalType"];
+}
+
+export interface AuditEventListOptions extends ListOptions {
+  readonly actor_type?: AuditEvent["actorType"];
+  readonly entity_type?: string;
+  readonly entity_id?: string;
+  readonly action?: string;
+  readonly correlation_id?: string;
 }
 
 export interface ApiServices {
@@ -199,6 +212,21 @@ export interface ApiServices {
       context: TenantRequestContext,
       approvalId: string,
     ): Promise<ApprovalResponse | null>;
+  };
+  readonly auditEvents: {
+    list(
+      context: TenantRequestContext,
+      options: AuditEventListOptions,
+    ): Promise<AuditEventListResponse>;
+    listForTicket(
+      context: TenantRequestContext,
+      ticketId: string,
+      options: AuditEventListOptions,
+    ): Promise<AuditEventListResponse | null>;
+    getById(
+      context: TenantRequestContext,
+      auditEventId: string,
+    ): Promise<AuditEventResponse | null>;
   };
   readonly tickets: {
     list(
@@ -611,6 +639,89 @@ export function createDatabaseApiServices(): ApiServices {
         );
       },
     },
+    auditEvents: {
+      async list(context, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await auditEventsListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              {
+                limit: options.limit,
+                actorType: options.actor_type,
+                entityType: options.entity_type,
+                entityId: options.entity_id,
+                action: options.action,
+                correlationId: options.correlation_id,
+              },
+            );
+
+            return {
+              audit_events: rows.map(mapAuditEvent),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
+          },
+        );
+      },
+      async listForTicket(context, ticketId, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const [ticket] = await ticketByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              ticketId,
+            );
+
+            if (!ticket) {
+              return null;
+            }
+
+            const rows = await auditEventsListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              {
+                limit: options.limit,
+                actorType: options.actor_type,
+                entityType: "ticket",
+                entityId: ticketId,
+                action: options.action,
+                correlationId: options.correlation_id,
+              },
+            );
+
+            return {
+              audit_events: rows.map(mapAuditEvent),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
+          },
+        );
+      },
+      async getById(context, auditEventId) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await auditEventByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              auditEventId,
+            );
+
+            return rows[0] ? mapAuditEvent(rows[0]) : null;
+          },
+        );
+      },
+    },
     tickets: {
       async list(context, options) {
         return withTenantTransaction(
@@ -884,6 +995,21 @@ function mapApproval(row: Approval): ApprovalResponse {
     review_notes: row.reviewNotes,
     created_at: toIsoString(row.createdAt),
     resolved_at: toNullableIsoString(row.resolvedAt),
+  };
+}
+
+function mapAuditEvent(row: AuditEvent): AuditEventResponse {
+  return {
+    audit_event_id: row.auditEventId,
+    tenant_id: row.tenantId,
+    actor_type: row.actorType,
+    actor_id: row.actorId,
+    entity_type: row.entityType,
+    entity_id: row.entityId,
+    action: row.action,
+    metadata: row.metadata,
+    correlation_id: row.correlationId,
+    created_at: toIsoString(row.createdAt),
   };
 }
 

@@ -13,7 +13,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - Milestone 0 documentation harness is complete.
 - Milestone 1 backend scaffold is complete and locally verified.
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
-- Milestone 3 API skeleton has started with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval read-list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
+- Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
 
 ## Product Direction
 
@@ -135,6 +135,9 @@ API skeleton:
 
 Latest Milestone 3 API expansion:
 
+- Added tenant-scoped audit event list/read contracts with `limit`, `actor_type`, `entity_type`, `entity_id`, `action`, and `correlation_id` filters.
+- Added tenant-scoped ticket audit event list contracts under `GET /v1/tickets/{ticket_id}/audit-events` with parent ticket existence checks.
+- Added audit event shared schemas, repository helpers, service adapters, `audit_events:read` RBAC permission, generated OpenAPI paths, API contract tests, repository tests, and PostgreSQL-backed API integration tests for tenant isolation.
 - Added tenant-scoped approval list/read contracts with `limit`, `status`, `ticket_id`, and `approval_type` filters.
 - Added approval shared schemas, repository helpers, service adapters, `approvals:read` RBAC permission, generated OpenAPI paths, API contract tests, repository tests, and PostgreSQL-backed API integration tests for tenant isolation.
 - Added tenant-scoped conversation list/read contracts with `limit`, `status`, `customer_id`, and `channel_id` filters.
@@ -273,8 +276,8 @@ Fix:
 
 ## Next Recommended Task
 
-Continue Milestone 3 by expanding the API skeleton:
+Start Milestone 4 by adding the event bus foundation:
 
-1. Add audit read/list endpoint skeletons backed by the existing audit event table.
-2. Keep RBAC and PostgreSQL-backed tenant-isolation integration coverage in lockstep as each endpoint family is added.
-3. Defer approval action endpoints until the workflow-backed human approval loop is implemented.
+1. Define the versioned domain event envelope schema and subject naming convention.
+2. Add the first NATS JetStream publisher scaffold with contract tests.
+3. Keep event publication disabled from current CRUD skeletons until workflow-owned side effects are implemented.

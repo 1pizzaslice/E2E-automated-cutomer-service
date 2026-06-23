@@ -414,6 +414,44 @@ export type ApprovalResourceResponse = z.infer<
 >;
 export type ApprovalListResponse = z.infer<typeof ApprovalListResponseSchema>;
 
+export const AuditActorTypeSchema = z.enum([
+  "system",
+  "ai",
+  "human",
+  "integration",
+]);
+
+export const AuditEventResponseSchema = z.object({
+  audit_event_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  actor_type: AuditActorTypeSchema,
+  actor_id: z.string().nullable(),
+  entity_type: z.string().min(1),
+  entity_id: z.string().min(1),
+  action: z.string().min(1),
+  metadata: JsonObjectSchema,
+  correlation_id: z.string().nullable(),
+  created_at: z.string().datetime(),
+});
+
+export const AuditEventResourceResponseSchema = z.object({
+  audit_event: AuditEventResponseSchema,
+});
+
+export const AuditEventListResponseSchema = z.object({
+  audit_events: z.array(AuditEventResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export type AuditActorType = z.infer<typeof AuditActorTypeSchema>;
+export type AuditEventResponse = z.infer<typeof AuditEventResponseSchema>;
+export type AuditEventResourceResponse = z.infer<
+  typeof AuditEventResourceResponseSchema
+>;
+export type AuditEventListResponse = z.infer<
+  typeof AuditEventListResponseSchema
+>;
+
 export const TicketStatusSchema = z.enum([
   "new",
   "triaged",
