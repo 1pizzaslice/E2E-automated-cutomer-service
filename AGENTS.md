@@ -25,6 +25,21 @@ Use `docs/SOPS.md` for operations, client onboarding, QA, incident response, and
 
 Do not load every deep doc by default. Use progressive disclosure: start with `TODO.md`, `docs/README.md`, and the specific doc for the subsystem being changed.
 
+## Active Session Guardrails
+
+Before non-trivial edits:
+
+- Run `git status --short --branch`.
+- If the branch is `main` or `master`, create a short-lived feature/fix branch before editing. Direct work on `main` is allowed only when the user explicitly asks for a direct-main hotfix or baseline update.
+- Run `pnpm harness:preflight` after branching. If it fails, fix the workflow state before coding.
+
+Before ending a coding session:
+
+- Update the active milestone checklist in `TODO.md`, not just the handoff prose.
+- Add verification results and unrun-test notes to `TODO.md`.
+- Run `pnpm harness:handoff` before the final response or before pushing.
+- Push the feature/fix branch by default. Push `main` only when the user explicitly asks for direct-main work.
+
 ## Scope Rules
 
 - Backend first: APIs, workers, workflows, data, integrations, AI runtime, observability, security, and tests.
@@ -56,6 +71,8 @@ Use these commands from the repository root:
 - Stop local infrastructure: `pnpm infra:down`
 - Apply database migrations: `pnpm db:migrate`
 - Generate a Drizzle migration draft: `pnpm --filter @support/db generate:migration`
+- Run session branch preflight: `pnpm harness:preflight`
+- Run session handoff guard: `pnpm harness:handoff`
 - Lint/static checks: `pnpm lint`
 - Format check: `pnpm format:check`
 - Apply formatting: `pnpm format`
