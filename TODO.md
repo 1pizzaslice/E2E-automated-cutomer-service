@@ -6,9 +6,9 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation has started.
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation now has event schemas, subject naming, publisher wiring, explicit local NATS JetStream config, and live publish/consume integration coverage.
 - Current milestone: Milestone 4 - event bus foundation is in progress.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope schemas, tenant-aware NATS subject naming, a worker-side NATS JetStream publisher scaffold, and session harness preflight/handoff checks. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/stream setup wiring, local NATS JetStream config, live NATS publish/consume integration coverage, and session harness preflight/handoff checks. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Active Harness Guardrails
@@ -23,12 +23,22 @@ This file is the cross-session source of truth for what has been done, what is n
 
 The next implementation task is:
 
-> Continue Milestone 4 from a short-lived feature branch by adding explicit NATS JetStream stream configuration/connection wiring and a live publish/consume integration test against the local NATS service. Run `pnpm harness:preflight` before editing and keep CRUD endpoint publication disabled until Temporal workflow-owned side effects are implemented.
+> Continue Milestone 4 from a short-lived feature branch by adding the worker-side event consumer base and idempotent consumer handling/tests. Run `pnpm harness:preflight` before editing and keep CRUD endpoint event publication disabled until Temporal workflow-owned side effects are implemented.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat-milestone4-nats-stream` from `main` and ran `pnpm harness:preflight` before editing.
+- Replaced the deprecated legacy `nats` package attempt with the current official NATS.js v3 modules: `@nats-io/transport-node` and `@nats-io/jetstream`.
+- Added `packages/workers/src/event-bus.ts` with `NATS_URL` config loading, NATS connection wiring, `SUPPORT_EVENTS` stream setup, and a runtime that exposes `NatsJetStreamDomainEventPublisher`.
+- Added the explicit local NATS config at `infra/nats/server.conf`; Compose now mounts it, enables JetStream with a persisted `nats-data` volume, and health-checks JetStream readiness.
+- Added worker event bus unit tests for config parsing, stream create config, and idempotent stream create/update setup.
+- Added `packages/workers/src/event-bus.integration.test.ts`, which connects to local NATS, ensures the `SUPPORT_EVENTS` stream, publishes and consumes a tenant-scoped event, and verifies duplicate detection through the `event_id` JetStream message ID.
+- Added `pnpm --filter @support/workers test:integration` and expanded root `pnpm test:integration` to run DB/RLS, API PostgreSQL-backed integration tests, and worker NATS integration tests.
+- Updated CI to start a local NATS container with JetStream before the integration step and pass `NATS_URL`.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/DEVELOPMENT_RULES.md`, `docs/PROJECT_HISTORY.md`, and `TODO.md` for the NATS stream wiring and live integration coverage.
+- Left CRUD skeleton endpoints disconnected from event publication; workflow/service-owned side effects remain future work.
 - Added session harness guardrails to `AGENTS.md`, `docs/ENGINEERING_HARNESS.md`, and `docs/DEVELOPMENT_RULES.md` so branch creation, milestone checklist updates, and pre-push checks are in the active reading path.
 - Added `pnpm harness:preflight` and `pnpm harness:handoff` backed by `scripts/session-harness-check.mjs`; the checks fail on direct `main` work unless `ALLOW_MAIN_BRANCH=true` is explicitly set, and handoff also verifies the current milestone checklist has checked items.
 - Updated `README.md` and command docs for the new harness commands.
@@ -152,6 +162,19 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm harness:preflight` passes on branch `feat-milestone4-nats-stream`.
+- `pnpm --filter @support/workers typecheck` passes after event bus connection/stream wiring.
+- `pnpm --filter @support/workers test` passes with 8 unit tests and 1 skipped live integration test after event bus unit coverage.
+- `pnpm --filter @support/workers test:integration` initially failed inside the managed sandbox with localhost `EPERM`, then passed with approved localhost access against local NATS.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration` initially failed inside the managed sandbox with localhost PostgreSQL `EPERM`, then passed with approved localhost access. The passing run covered 17 DB/RLS integration tests, 22 PostgreSQL-backed API integration tests, and 1 worker NATS publish/consume integration test.
+- `pnpm format` applied formatting to `packages/workers/src/event-bus.ts`.
+- `pnpm format:check` passes after the NATS stream wiring and docs updates.
+- `pnpm lint` passes after the NATS stream wiring and docs updates.
+- `pnpm typecheck` passes after the NATS stream wiring and docs updates.
+- `pnpm test` passes after the NATS stream wiring and docs updates.
+- `pnpm build` passes after the NATS stream wiring and docs updates.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration` was rerun after the final docs/checks state and passes with 17 DB/RLS integration tests, 22 PostgreSQL-backed API integration tests, and 1 worker NATS publish/consume integration test.
+- `pnpm harness:handoff` passes on branch `feat-milestone4-nats-stream`.
 - `node scripts/session-harness-check.mjs --preflight` passes on branch `fix-harness-preflight-checklist`.
 - `node scripts/session-harness-check.mjs --handoff` passes on branch `fix-harness-preflight-checklist`.
 - `pnpm harness:preflight` passes on branch `fix-harness-preflight-checklist`.
@@ -462,11 +485,12 @@ Checklist:
 
 - [x] Define event envelope schema.
 - [x] Define event subject naming convention.
-- [x] Implement event publisher. Current: worker-side publisher scaffold only; live NATS connection/stream wiring is pending.
+- [x] Implement event publisher. Current: worker-side publisher plus live NATS connection/stream wiring is complete; workflow-owned event emission is pending.
 - [ ] Implement event consumer base.
 - [ ] Add idempotent consumer handling.
 - [ ] Add dead-letter/error stream strategy.
-- [ ] Add local NATS config.
+- [x] Add local NATS config.
+- [x] Add live NATS publish/consume integration test.
 - [ ] Emit message received event.
 - [ ] Emit ticket created event.
 - [ ] Emit ticket state transition events.

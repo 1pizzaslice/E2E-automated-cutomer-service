@@ -14,7 +14,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - Milestone 1 backend scaffold is complete and locally verified.
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
 - Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
-- Milestone 4 event bus foundation has started with shared v1 domain event envelope schemas, a tenant-aware NATS subject convention, and a worker-side NATS JetStream publisher scaffold. CRUD skeleton endpoints still do not publish events.
+- Milestone 4 event bus foundation has started with shared v1 domain event envelope schemas, a tenant-aware NATS subject convention, worker-side NATS JetStream publisher and connection wiring, explicit local stream config, and live NATS publish/consume integration coverage. CRUD skeleton endpoints still do not publish events.
 - The engineering harness now includes explicit branch and handoff guardrails in the active reading path plus `pnpm harness:preflight` and `pnpm harness:handoff` checks.
 
 ## Product Direction
@@ -164,7 +164,9 @@ Latest Milestone 4 event bus foundation:
 - Added `buildDomainEventSubject`, which maps `support.ticket.created.v1` style event names to tenant-aware subjects such as `support.events.tenant.ten_test.ticket.created.v1`.
 - Added subject-safe tenant token validation for event publishing.
 - Added `packages/workers/src/event-publisher.ts` with `NatsJetStreamDomainEventPublisher`, which validates envelopes, JSON-encodes events, publishes to the derived tenant-aware subject, and uses `event_id` as the JetStream message ID for duplicate detection.
-- Added shared schema and worker publisher contract tests. No live NATS stream configuration or publish/consume integration test exists yet.
+- Added `packages/workers/src/event-bus.ts` with NATS.js v3 connection wiring, `NATS_URL` config loading, `SUPPORT_EVENTS` stream setup, and publisher runtime construction.
+- Added `infra/nats/server.conf` plus a Compose `nats-data` volume so local NATS runs JetStream from explicit config.
+- Added worker event bus unit tests and a live NATS publish/consume integration test that also verifies duplicate detection through JetStream message IDs.
 - Left current CRUD skeleton endpoints disconnected from event publication; workflow/service-owned event side effects remain future work.
 
 Latest harness hardening:
@@ -195,13 +197,13 @@ The following passed locally in the cloned repo:
 - `pnpm --filter @support/api typecheck`
 - `pnpm --filter @support/shared-schemas test`
 - `pnpm --filter @support/shared-schemas typecheck`
-- `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`
+- `DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration`
 
 ## Current Architecture Follow-Ups
 
 - Repository tenant filters remain mandatory even with PostgreSQL row-level security.
 - API and worker database code must set transaction-local `app.current_tenant_id` before tenant-scoped operations. The DB package now provides `withTenantTransaction`, which also sets `support_app` as the transaction-local role before repository work.
-- CI includes a live PostgreSQL integration test job step, but the remote workflow result has not been observed yet.
+- CI includes live PostgreSQL and NATS integration coverage, but the remote workflow result has not been observed yet.
 - Current API auth is still placeholder header-based identity, not a real identity provider. The API now enforces a role-to-permission matrix for the current OpenAPI, tenant, customer, conversation, message, policy, KB document, approval, and ticket endpoint families.
 
 ## Errors Encountered And Fixes
@@ -295,8 +297,8 @@ Fix:
 
 ## Next Recommended Task
 
-Start Milestone 4 by adding the event bus foundation:
+Continue Milestone 4 by adding the event consumer base:
 
-1. Define the versioned domain event envelope schema and subject naming convention.
-2. Add the first NATS JetStream publisher scaffold with contract tests.
-3. Keep event publication disabled from current CRUD skeletons until workflow-owned side effects are implemented.
+1. Define the worker-side consumer abstraction and handler contract for validated domain events.
+2. Add idempotent consumer handling and duplicate-event tests before attaching business handlers.
+3. Keep CRUD endpoint event emission disabled until workflow/service-owned side effects are implemented.

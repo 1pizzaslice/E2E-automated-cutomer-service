@@ -1009,6 +1009,10 @@ Current implementation:
 - NATS JetStream subjects use `support.events.tenant.{tenant_id}.{domain}.{fact}.v1`, for example `support.events.tenant.ten_test.ticket.created.v1`.
 - Event `tenant_id` values used in subjects may contain letters, numbers, underscores, and hyphens only. This keeps tenant tokens safe for NATS subject routing.
 - `packages/workers/src/event-publisher.ts` provides the first `NatsJetStreamDomainEventPublisher` scaffold. It validates the envelope, publishes the JSON-encoded event to the tenant-aware subject, and passes `event_id` as the JetStream message ID for duplicate detection.
+- `packages/workers/src/event-bus.ts` provides local NATS connection and stream setup wiring using the official NATS.js v3 modules. It reads `NATS_URL`, connects to NATS, ensures the `SUPPORT_EVENTS` stream, and uses `support.events.tenant.*.*.*.v1` as the stream subject filter.
+- The `SUPPORT_EVENTS` stream uses limits retention, file storage, one replica for local development, direct reads enabled, and a 10 minute duplicate window so `event_id` based publish de-dupe works in JetStream.
+- `infra/nats/server.conf` enables local JetStream with a persisted Compose `nats-data` volume.
+- `packages/workers/src/event-bus.integration.test.ts` verifies live local NATS publish, consume, and duplicate detection behavior.
 - Current CRUD skeleton endpoints do not emit domain events yet. Event publication remains workflow/service-owned future behavior.
 
 ## 19. Temporal Workflows
@@ -1173,7 +1177,7 @@ Commands:
 
 - Apply local migrations: `pnpm db:migrate`.
 - Generate future migration drafts: `pnpm --filter @support/db generate:migration`.
-- Run live PostgreSQL integration tests for DB/RLS and API tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket endpoints: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`.
+- Run live integration tests for DB/RLS, API tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket endpoints, and NATS publish/consume behavior: `DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration`.
 
 Initial schema choices:
 

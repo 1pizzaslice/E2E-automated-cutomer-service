@@ -7,9 +7,12 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:integration": "RUN_WORKER_INTEGRATION_TESTS=true vitest run src/event-bus.integration.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
     "@support/shared-schemas": "workspace:*"
   }
 }
