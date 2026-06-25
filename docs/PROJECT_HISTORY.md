@@ -15,6 +15,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
 - Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
 - Milestone 4 event bus foundation has started with shared v1 domain event envelope schemas, a tenant-aware NATS subject convention, and a worker-side NATS JetStream publisher scaffold. CRUD skeleton endpoints still do not publish events.
+- The engineering harness now includes explicit branch and handoff guardrails in the active reading path plus `pnpm harness:preflight` and `pnpm harness:handoff` checks.
 
 ## Product Direction
 
@@ -165,6 +166,14 @@ Latest Milestone 4 event bus foundation:
 - Added `packages/workers/src/event-publisher.ts` with `NatsJetStreamDomainEventPublisher`, which validates envelopes, JSON-encodes events, publishes to the derived tenant-aware subject, and uses `event_id` as the JetStream message ID for duplicate detection.
 - Added shared schema and worker publisher contract tests. No live NATS stream configuration or publish/consume integration test exists yet.
 - Left current CRUD skeleton endpoints disconnected from event publication; workflow/service-owned event side effects remain future work.
+
+Latest harness hardening:
+
+- Promoted the short-lived branch rule from the deeper harness/ADR docs into `AGENTS.md`, `TODO.md`, and development rules.
+- Added `scripts/session-harness-check.mjs` plus `pnpm harness:preflight` and `pnpm harness:handoff`.
+- The preflight check fails on direct `main` or `master` work unless `ALLOW_MAIN_BRANCH=true` is explicitly set.
+- The handoff check also verifies that the active milestone checklist in `TODO.md` has checked items, reducing the chance that only handoff prose is updated.
+- Updated the Milestone 4 checklist to mark completed event foundation items.
 
 ## Verification Completed
 

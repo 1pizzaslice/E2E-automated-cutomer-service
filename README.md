@@ -27,6 +27,8 @@ The docs are intentionally split by purpose so future AI sessions do not need to
 
 ```bash
 pnpm install
+pnpm harness:preflight
+pnpm harness:handoff
 pnpm lint
 pnpm format:check
 pnpm typecheck

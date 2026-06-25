@@ -81,16 +81,20 @@ Every non-trivial task should follow this loop:
 
 1. Read `AGENTS.md`.
 2. Read `TODO.md`.
-3. Read relevant docs.
-4. Inspect code and tests.
-5. Restate the goal and acceptance criteria internally.
-6. Implement the smallest coherent change.
-7. Add or update tests.
-8. Run targeted checks.
-9. Review the diff.
-10. Update docs.
-11. Update `TODO.md`.
-12. Summarize result, verification, and next step.
+3. Run `git status --short --branch`.
+4. Create a short-lived feature/fix branch before non-trivial edits unless the user explicitly approves direct-main work.
+5. Run `pnpm harness:preflight`.
+6. Read relevant docs.
+7. Inspect code and tests.
+8. Restate the goal and acceptance criteria internally.
+9. Implement the smallest coherent change.
+10. Add or update tests.
+11. Run targeted checks.
+12. Review the diff.
+13. Update docs.
+14. Update `TODO.md`, including the active milestone checklist.
+15. Run `pnpm harness:handoff`.
+16. Summarize result, verification, and next step.
 
 ## 2.1 Branching Strategy
 
@@ -102,6 +106,12 @@ After the baseline is stable, use short-lived feature branches for each coherent
 - `feat/api-skeleton`
 - `feat/event-bus-foundation`
 - `feat/temporal-ticket-workflow`
+
+Active rule:
+
+- If `git status --short --branch` shows `main` or `master`, branch before non-trivial edits.
+- Run `pnpm harness:preflight` before implementation and `pnpm harness:handoff` before final response or push.
+- Push the feature/fix branch by default. Push `main` only when the user explicitly asks for direct-main work.
 
 Before merging a feature branch back to `main`:
 

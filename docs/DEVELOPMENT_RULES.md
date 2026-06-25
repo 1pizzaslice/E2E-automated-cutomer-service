@@ -57,6 +57,21 @@ Before ending a session:
 
 Do not leave a future agent dependent on chat history.
 
+## 3.1 Branch And Handoff Guardrails
+
+Before non-trivial edits:
+
+- Run `git status --short --branch`.
+- If the current branch is `main` or `master`, create a short-lived feature/fix branch before editing unless the user explicitly approves direct-main work.
+- Run `pnpm harness:preflight` after branching.
+
+Before final response or push:
+
+- Update the active milestone checklist in `TODO.md`, not just the session summary.
+- Record verification and unrun-test notes in `TODO.md`.
+- Run `pnpm harness:handoff`.
+- Push the feature/fix branch by default. Push `main` only when the user explicitly asks for direct-main work.
+
 ## 4. Architecture Layering
 
 Each backend domain should follow a predictable dependency direction:
@@ -335,6 +350,8 @@ Run from the repository root:
 
 ```bash
 pnpm install
+pnpm harness:preflight
+pnpm harness:handoff
 pnpm lint
 pnpm format:check
 pnpm typecheck

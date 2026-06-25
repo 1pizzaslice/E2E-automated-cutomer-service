@@ -8,19 +8,31 @@ This file is the cross-session source of truth for what has been done, what is n
 
 - Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation has started.
 - Current milestone: Milestone 4 - event bus foundation is in progress.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope schemas, tenant-aware NATS subject naming, and a worker-side NATS JetStream publisher scaffold. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope schemas, tenant-aware NATS subject naming, a worker-side NATS JetStream publisher scaffold, and session harness preflight/handoff checks. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
+
+## Active Harness Guardrails
+
+- Start non-trivial work from a short-lived feature/fix branch. Do not work directly on `main` unless the user explicitly approves direct-main work.
+- Run `pnpm harness:preflight` after branching.
+- Before ending a coding session, update the active milestone checklist below as well as the session handoff text.
+- Run `pnpm harness:handoff` before final response or push.
+- Push feature/fix branches by default. Push `main` only when explicitly requested.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Continue Milestone 4 by adding explicit NATS JetStream stream configuration/connection wiring and a live publish/consume integration test against the local NATS service. Keep CRUD endpoint publication disabled until Temporal workflow-owned side effects are implemented.
+> Continue Milestone 4 from a short-lived feature branch by adding explicit NATS JetStream stream configuration/connection wiring and a live publish/consume integration test against the local NATS service. Run `pnpm harness:preflight` before editing and keep CRUD endpoint publication disabled until Temporal workflow-owned side effects are implemented.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Added session harness guardrails to `AGENTS.md`, `docs/ENGINEERING_HARNESS.md`, and `docs/DEVELOPMENT_RULES.md` so branch creation, milestone checklist updates, and pre-push checks are in the active reading path.
+- Added `pnpm harness:preflight` and `pnpm harness:handoff` backed by `scripts/session-harness-check.mjs`; the checks fail on direct `main` work unless `ALLOW_MAIN_BRANCH=true` is explicitly set, and handoff also verifies the current milestone checklist has checked items.
+- Updated `README.md` and command docs for the new harness commands.
+- Corrected the Milestone 4 checklist to mark the completed event envelope, subject convention, publisher scaffold, and event schema test work.
 - Started Milestone 4 event bus foundation.
 - Added shared v1 domain event names and `DomainEventEnvelopeSchema` in `packages/shared-schemas`.
 - Added `buildDomainEventSubject` with the tenant-aware NATS subject convention `support.events.tenant.{tenant_id}.{domain}.{fact}.v1`.
@@ -140,6 +152,16 @@ The next implementation task is:
 
 ### Verification Status
 
+- `node scripts/session-harness-check.mjs --preflight` passes on branch `fix-harness-preflight-checklist`.
+- `node scripts/session-harness-check.mjs --handoff` passes on branch `fix-harness-preflight-checklist`.
+- `pnpm harness:preflight` passes on branch `fix-harness-preflight-checklist`.
+- `pnpm harness:handoff` passes on branch `fix-harness-preflight-checklist`.
+- `pnpm format` applied formatting to `scripts/session-harness-check.mjs`.
+- `pnpm format:check` passes after the harness guardrail updates.
+- `pnpm lint` passes after the harness guardrail updates.
+- `pnpm typecheck` passes after the harness guardrail updates.
+- `pnpm test` passes after the harness guardrail updates.
+- `pnpm build` passes after the harness guardrail updates.
 - `pnpm --filter @support/shared-schemas test` initially failed inside the managed sandbox with a pnpm store SQLite access error, then passed with 14 tests when rerun with approved pnpm store access after the event envelope schema expansion.
 - `pnpm --filter @support/shared-schemas typecheck` passed after the event envelope schema expansion.
 - `pnpm --filter @support/workers test` initially failed inside the managed sandbox with a pnpm store SQLite access error, then passed with 3 tests when rerun with approved pnpm store access after the NATS JetStream publisher scaffold.
@@ -438,9 +460,9 @@ Goal: Add versioned domain events and NATS JetStream.
 
 Checklist:
 
-- [ ] Define event envelope schema.
-- [ ] Define event subject naming convention.
-- [ ] Implement event publisher.
+- [x] Define event envelope schema.
+- [x] Define event subject naming convention.
+- [x] Implement event publisher. Current: worker-side publisher scaffold only; live NATS connection/stream wiring is pending.
 - [ ] Implement event consumer base.
 - [ ] Add idempotent consumer handling.
 - [ ] Add dead-letter/error stream strategy.
@@ -448,14 +470,14 @@ Checklist:
 - [ ] Emit message received event.
 - [ ] Emit ticket created event.
 - [ ] Emit ticket state transition events.
-- [ ] Add event schema tests.
+- [x] Add event schema tests.
 - [ ] Add consumer idempotency tests.
 
 Acceptance criteria:
 
-- [ ] Events are versioned.
+- [x] Events are versioned.
 - [ ] Consumers are idempotent.
-- [ ] Event publication includes correlation and causation IDs.
+- [x] Event publication includes correlation and causation IDs. Current: enforced by the shared envelope and publisher validation; real workflow-owned emission remains pending.
 
 ## Milestone 5: Temporal Workflow Foundation
 

@@ -11,6 +11,8 @@
     "dev": "pnpm --filter @support/api dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "harness:handoff": "node scripts/session-harness-check.mjs --handoff",
+    "harness:preflight": "node scripts/session-harness-check.mjs --preflight",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "lint": "pnpm -r lint && python3 -m compileall ai",
