@@ -6,21 +6,29 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage.
-- Current milestone: Milestone 4 - event bus foundation is next.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, and ticket audit event list contracts. No business workflow implementation yet.
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation has started.
+- Current milestone: Milestone 4 - event bus foundation is in progress.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope schemas, tenant-aware NATS subject naming, and a worker-side NATS JetStream publisher scaffold. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Next Recommended Task
 
 The next implementation task is:
 
-> Start Milestone 4 by defining the versioned domain event envelope schema and subject naming convention, then add the first NATS JetStream publisher scaffold with contract tests. Keep event publication disabled from current CRUD skeletons until workflow-owned side effects are implemented.
+> Continue Milestone 4 by adding explicit NATS JetStream stream configuration/connection wiring and a live publish/consume integration test against the local NATS service. Keep CRUD endpoint publication disabled until Temporal workflow-owned side effects are implemented.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Started Milestone 4 event bus foundation.
+- Added shared v1 domain event names and `DomainEventEnvelopeSchema` in `packages/shared-schemas`.
+- Added `buildDomainEventSubject` with the tenant-aware NATS subject convention `support.events.tenant.{tenant_id}.{domain}.{fact}.v1`.
+- Added subject-safe tenant token validation for event publishing.
+- Added `packages/workers/src/event-publisher.ts` with `NatsJetStreamDomainEventPublisher`, which validates envelopes, JSON-encodes events, publishes to the derived subject, and uses `event_id` as the JetStream message ID for duplicate detection.
+- Added shared schema and worker publisher contract tests.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, and `TODO.md` for the event bus foundation.
+- Left CRUD skeleton endpoints disconnected from event publication; workflow/service-owned side effects remain future work.
 - Added shared audit event response schemas plus list/resource envelopes for audit contracts.
 - Added tenant-scoped audit event list/read repository helpers with `actor_type`, `entity_type`, `entity_id`, `action`, and `correlation_id` filters.
 - Added repository SQL-generation tests and live repository integration coverage for audit event read/list tenant isolation.
@@ -132,6 +140,17 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm --filter @support/shared-schemas test` initially failed inside the managed sandbox with a pnpm store SQLite access error, then passed with 14 tests when rerun with approved pnpm store access after the event envelope schema expansion.
+- `pnpm --filter @support/shared-schemas typecheck` passed after the event envelope schema expansion.
+- `pnpm --filter @support/workers test` initially failed inside the managed sandbox with a pnpm store SQLite access error, then passed with 3 tests when rerun with approved pnpm store access after the NATS JetStream publisher scaffold.
+- `pnpm --filter @support/workers typecheck` passed after fixing the negative test fixture cast for the NATS JetStream publisher scaffold.
+- `pnpm format` applied formatting to the new event schema/publisher files.
+- `pnpm format:check` passes after the event bus foundation.
+- `pnpm lint` passes after the event bus foundation.
+- `pnpm typecheck` passes after the event bus foundation.
+- `pnpm test` passes after the event bus foundation.
+- `pnpm build` passes after the event bus foundation.
+- `pnpm test:integration` was not run in this session because the change added deterministic event contract and publisher unit coverage only; live NATS stream configuration and publish/consume integration coverage is the next Milestone 4 task.
 - `pnpm --filter @support/shared-schemas test` passes with 12 tests after the audit event contract schema expansion.
 - `pnpm --filter @support/db test` passes with 36 normal tests and 17 live integration tests skipped unless explicitly enabled after audit event repository helper coverage.
 - `pnpm --filter @support/api test` passes with 41 API contract tests and 22 live integration tests skipped unless explicitly enabled after audit event route/service expansion.

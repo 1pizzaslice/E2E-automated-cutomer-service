@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, and Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list, create, read, and update contracts; conversation/message/policy/KB document metadata/approval/audit event read-list contracts; and ticket audit event list contracts. No business workflow implementation yet.
+Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, and the first Milestone 4 event bus foundation with shared v1 domain event envelope schemas plus a worker-side NATS JetStream publisher scaffold. No business workflow implementation yet.
 
 ## Start Here
 
@@ -86,6 +86,16 @@ Services:
 - MinIO API: `http://localhost:9000`
 - MinIO console: `http://localhost:9001`
 - OpenTelemetry collector: `localhost:4317` and `localhost:4318`
+
+## Current Event Bus Foundation
+
+Implemented contracts:
+
+- Shared `DomainEventEnvelopeSchema` and allowed `support.*.v1` event names in `@support/shared-schemas`.
+- Tenant-aware NATS subject convention: `support.events.tenant.{tenant_id}.{domain}.{fact}.v1`.
+- Worker-side `NatsJetStreamDomainEventPublisher` scaffold that validates envelopes, JSON-encodes events, and uses `event_id` as the JetStream message ID.
+
+Current CRUD skeleton endpoints do not publish events. Event publication remains future workflow/service-owned behavior.
 
 ## Current API Skeleton
 

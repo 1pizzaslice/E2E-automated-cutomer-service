@@ -253,7 +253,19 @@ Required tests:
 - Policy activation audited.
 - Integration config update audited.
 
-### 3.13 Database And Repositories
+### 3.13 Event Bus
+
+Required tests:
+
+- Domain event envelopes validate required IDs, actor, tenant, correlation, causation, timestamp, schema version, and payload fields.
+- Unsupported event names or schema versions are rejected.
+- Subject builders create tenant-aware, versioned NATS subjects.
+- Subject builders reject tenant IDs that are unsafe for NATS subject tokens.
+- JetStream publishers validate envelopes before publishing.
+- JetStream publishers use `event_id` as the JetStream message ID for duplicate detection.
+- Live NATS publish/consume tests should be added when the stream configuration is introduced.
+
+### 3.14 Database And Repositories
 
 Required tests:
 
@@ -281,6 +293,11 @@ Current Milestone 3 API skeleton coverage:
 - `packages/shared-schemas/src/index.test.ts` validates structured API errors, tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket resource responses, list envelopes, create request schemas, and non-empty update request schemas.
 - `packages/api/src/app.test.ts` covers public health/readiness, auth-required errors, tenant-context-required errors, authenticated OpenAPI document access, request ID echoing, RBAC denial for protected tenant/customer/conversation/policy/KB document/approval/audit event operations, tenant path mismatch rejection, tenant/customer/ticket list-create-read-update response schemas, conversation/message/policy/KB document/approval/audit event read-list response schemas, empty patch-body validation, and structured not-found errors.
 - `packages/api/src/app.integration.test.ts` applies pending SQL migrations, seeds two synthetic tenants, exercises the PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket endpoints through HTTP, verifies role denial for tenant reads, verifies tenant A can list/read its own customer/conversation/message/policy/KB document/approval/audit event/ticket resources without seeing tenant B resources, verifies tenant A receives structured not-found errors for tenant B customer/conversation/message/policy/KB document/approval/audit event/ticket IDs and cross-tenant ticket audit parents, and cleans up fixture rows.
+
+Current Milestone 4 event bus foundation coverage:
+
+- `packages/shared-schemas/src/index.test.ts` validates v1 domain event envelopes, rejects unsupported event versions/names, and checks tenant-aware NATS subject construction.
+- `packages/workers/src/event-publisher.test.ts` verifies the NATS JetStream publisher scaffold validates envelopes before publishing, sends JSON payloads to tenant-aware subjects, and uses `event_id` as the JetStream message ID.
 
 ## 4. Golden Dataset
 

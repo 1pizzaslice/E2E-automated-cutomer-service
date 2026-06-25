@@ -14,6 +14,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - Milestone 1 backend scaffold is complete and locally verified.
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
 - Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
+- Milestone 4 event bus foundation has started with shared v1 domain event envelope schemas, a tenant-aware NATS subject convention, and a worker-side NATS JetStream publisher scaffold. CRUD skeleton endpoints still do not publish events.
 
 ## Product Direction
 
@@ -155,6 +156,15 @@ Latest Milestone 3 API expansion:
 - Expanded RBAC permissions for tenant/customer/ticket list, create, and update operations.
 - Added repository helpers for tenant/customer/ticket list/create/update operations while preserving explicit tenant scopes on tenant-scoped helpers.
 - Expanded shared schema, API contract, repository SQL, and live PostgreSQL-backed API integration tests.
+
+Latest Milestone 4 event bus foundation:
+
+- Added shared v1 domain event names and `DomainEventEnvelopeSchema` in `packages/shared-schemas`.
+- Added `buildDomainEventSubject`, which maps `support.ticket.created.v1` style event names to tenant-aware subjects such as `support.events.tenant.ten_test.ticket.created.v1`.
+- Added subject-safe tenant token validation for event publishing.
+- Added `packages/workers/src/event-publisher.ts` with `NatsJetStreamDomainEventPublisher`, which validates envelopes, JSON-encodes events, publishes to the derived tenant-aware subject, and uses `event_id` as the JetStream message ID for duplicate detection.
+- Added shared schema and worker publisher contract tests. No live NATS stream configuration or publish/consume integration test exists yet.
+- Left current CRUD skeleton endpoints disconnected from event publication; workflow/service-owned event side effects remain future work.
 
 ## Verification Completed
 

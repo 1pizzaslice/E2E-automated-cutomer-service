@@ -10,6 +10,7 @@ import {
   CustomerCreateRequestSchema,
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
+  DomainEventEnvelopeSchema,
   KbDocumentListResponseSchema,
   KbDocumentResourceResponseSchema,
   TenantCreateRequestSchema,
@@ -23,6 +24,7 @@ import {
   TicketListResponseSchema,
   TicketResourceResponseSchema,
   TicketUpdateRequestSchema,
+  buildDomainEventSubject,
   createHealthResponse,
 } from "./index.js";
 
@@ -41,6 +43,58 @@ describe("shared health schema", () => {
         status: "ok",
         timestamp: new Date().toISOString(),
         version: "0.1.0",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("shared event contract schemas", () => {
+  const event = {
+    event_id: "evt_test",
+    event_name: "support.ticket.created.v1",
+    schema_version: "1",
+    tenant_id: "ten_test",
+    correlation_id: "corr_test",
+    causation_id: "req_test",
+    occurred_at: "2026-06-25T00:00:00.000Z",
+    actor: {
+      type: "system",
+      id: "workflow",
+    },
+    payload: {
+      ticket_id: "ticket_test",
+      status: "new",
+    },
+  } as const;
+
+  it("validates versioned domain event envelopes and builds tenant-aware subjects", () => {
+    const parsed = DomainEventEnvelopeSchema.parse(event);
+
+    expect(parsed).toEqual(event);
+    expect(buildDomainEventSubject(parsed)).toBe(
+      "support.events.tenant.ten_test.ticket.created.v1",
+    );
+  });
+
+  it("rejects unsupported event versions and unsafe subject tenant tokens", () => {
+    expect(() =>
+      DomainEventEnvelopeSchema.parse({
+        ...event,
+        schema_version: "2",
+      }),
+    ).toThrow();
+
+    expect(() =>
+      DomainEventEnvelopeSchema.parse({
+        ...event,
+        event_name: "support.ticket.created",
+      }),
+    ).toThrow();
+
+    expect(() =>
+      DomainEventEnvelopeSchema.parse({
+        ...event,
+        tenant_id: "tenant.with.dot",
       }),
     ).toThrow();
   });

@@ -82,6 +82,78 @@ export const RoleNameSchema = z.enum([
 
 export type RoleName = z.infer<typeof RoleNameSchema>;
 
+export const DomainEventNameSchema = z.enum([
+  "support.message.received.v1",
+  "support.conversation.updated.v1",
+  "support.ticket.created.v1",
+  "support.ticket.triaged.v1",
+  "support.ticket.priority_changed.v1",
+  "support.ticket.assignment_changed.v1",
+  "support.ticket.sla_breached.v1",
+  "support.ai_run.started.v1",
+  "support.ai_run.completed.v1",
+  "support.tool_call.completed.v1",
+  "support.approval.requested.v1",
+  "support.approval.completed.v1",
+  "support.message.sent.v1",
+  "support.ticket.resolved.v1",
+  "support.ticket.closed.v1",
+  "support.qa.review_created.v1",
+]);
+
+export const DomainEventSchemaVersionSchema = z.literal("1");
+
+export const DomainEventActorTypeSchema = z.enum([
+  "system",
+  "ai",
+  "human",
+  "integration",
+]);
+
+export const DomainEventSubjectTenantIdSchema = z
+  .string()
+  .min(1)
+  .regex(/^[A-Za-z0-9_-]+$/, {
+    message:
+      "Event tenant IDs used in NATS subjects may only contain letters, numbers, underscores, and hyphens.",
+  });
+
+export const DomainEventEnvelopeSchema = z
+  .object({
+    event_id: z.string().min(1),
+    event_name: DomainEventNameSchema,
+    schema_version: DomainEventSchemaVersionSchema,
+    tenant_id: DomainEventSubjectTenantIdSchema,
+    correlation_id: z.string().min(1),
+    causation_id: z.string().min(1),
+    occurred_at: z.string().datetime(),
+    actor: z
+      .object({
+        type: DomainEventActorTypeSchema,
+        id: z.string().min(1).nullable(),
+      })
+      .strict(),
+    payload: JsonObjectSchema,
+  })
+  .strict();
+
+export type DomainEventName = z.infer<typeof DomainEventNameSchema>;
+export type DomainEventSchemaVersion = z.infer<
+  typeof DomainEventSchemaVersionSchema
+>;
+export type DomainEventActorType = z.infer<typeof DomainEventActorTypeSchema>;
+export type DomainEventEnvelope = z.infer<typeof DomainEventEnvelopeSchema>;
+
+export function buildDomainEventSubject(
+  event: Pick<DomainEventEnvelope, "event_name" | "tenant_id">,
+): string {
+  const tenantId = DomainEventSubjectTenantIdSchema.parse(event.tenant_id);
+  const eventName = DomainEventNameSchema.parse(event.event_name);
+  const eventNameWithoutNamespace = eventName.replace(/^support\./, "");
+
+  return `support.events.tenant.${tenantId}.${eventNameWithoutNamespace}`;
+}
+
 export const TenantResponseSchema = z.object({
   tenant_id: z.string().min(1),
   name: z.string().min(1),

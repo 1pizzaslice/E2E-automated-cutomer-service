@@ -1002,6 +1002,15 @@ Current implementation:
 
 Required event names are listed in `PLAN.md`.
 
+Current implementation:
+
+- `packages/shared-schemas` exports `DomainEventEnvelopeSchema`, `DomainEventNameSchema`, and `buildDomainEventSubject` for the v1 domain event contract.
+- The allowed v1 event names are the `support.*.v1` names listed in `PLAN.md`.
+- NATS JetStream subjects use `support.events.tenant.{tenant_id}.{domain}.{fact}.v1`, for example `support.events.tenant.ten_test.ticket.created.v1`.
+- Event `tenant_id` values used in subjects may contain letters, numbers, underscores, and hyphens only. This keeps tenant tokens safe for NATS subject routing.
+- `packages/workers/src/event-publisher.ts` provides the first `NatsJetStreamDomainEventPublisher` scaffold. It validates the envelope, publishes the JSON-encoded event to the tenant-aware subject, and passes `event_id` as the JetStream message ID for duplicate detection.
+- Current CRUD skeleton endpoints do not emit domain events yet. Event publication remains workflow/service-owned future behavior.
+
 ## 19. Temporal Workflows
 
 ### 19.1 TicketLifecycleWorkflow
