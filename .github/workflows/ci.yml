@@ -54,10 +54,23 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Start NATS
+        run: |
+          docker run -d --name support-nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
+          for i in {1..30}; do
+            if curl -fsS "http://localhost:8222/healthz?js-enabled-only=true"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs support-nats
+          exit 1
+
       - name: Integration test
         run: pnpm test:integration
         env:
           DATABASE_URL: postgres://support:support@localhost:5432/support
+          NATS_URL: nats://localhost:4222
 
       - name: Build
         run: pnpm build

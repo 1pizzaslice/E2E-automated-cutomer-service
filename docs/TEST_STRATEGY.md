@@ -298,6 +298,8 @@ Current Milestone 4 event bus foundation coverage:
 
 - `packages/shared-schemas/src/index.test.ts` validates v1 domain event envelopes, rejects unsupported event versions/names, and checks tenant-aware NATS subject construction.
 - `packages/workers/src/event-publisher.test.ts` verifies the NATS JetStream publisher scaffold validates envelopes before publishing, sends JSON payloads to tenant-aware subjects, and uses `event_id` as the JetStream message ID.
+- `packages/workers/src/event-bus.test.ts` verifies local event bus config loading, stream create config, and idempotent create/update stream setup behavior.
+- `packages/workers/src/event-bus.integration.test.ts` connects to local NATS, ensures the `SUPPORT_EVENTS` stream, publishes a tenant-scoped event, consumes it from JetStream, and verifies duplicate publish detection through `event_id`.
 
 ## 4. Golden Dataset
 
@@ -415,14 +417,14 @@ pnpm test:integration
 pnpm test:py
 ```
 
-Run live database integration tests with the local infrastructure database:
+Run live integration tests with the local infrastructure PostgreSQL and NATS services:
 
 ```bash
 pnpm infra:up
-DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration
+DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration
 ```
 
-CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service. The root command currently runs DB repository/RLS integration tests first, then API PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket integration tests.
+CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service and a local NATS container with JetStream enabled. The root command currently runs DB repository/RLS integration tests first, API PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket integration tests second, and worker NATS publish/consume integration tests last.
 
 Current Python tests use standard library `unittest` because `uv` is not installed locally. When the LangGraph AI runtime is implemented, add the chosen Python dependency manager and update this file with the real eval/test commands.
 

@@ -27,10 +27,22 @@ services:
 
   nats:
     image: nats:2.12-alpine
-    command: ["-js", "-m", "8222"]
+    command: ["-c", "/etc/nats/nats-server.conf"]
     ports:
       - "4222:4222"
       - "8222:8222"
+    volumes:
+      - ./nats/server.conf:/etc/nats/nats-server.conf:ro
+      - nats-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null 'http://127.0.0.1:8222/healthz?js-enabled-only=true'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   temporal:
     image: temporalio/auto-setup:latest
@@ -79,4 +91,5 @@ services:
 
 volumes:
   postgres-data:
+  nats-data:
   minio-data:
