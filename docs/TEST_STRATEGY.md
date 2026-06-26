@@ -217,6 +217,14 @@ Required tests:
 - SLA timer fires.
 - Workflow replay remains deterministic.
 
+Current Milestone 5 Temporal foundation coverage:
+
+- `packages/workers/src/ticket-lifecycle-activities.test.ts` verifies the ticket lifecycle `emitDomainEvent` activity adapter uses the shared domain-event helper behavior for ticket-created and ticket-triaged events.
+- `packages/workers/src/temporal-worker.test.ts` verifies Temporal worker config defaults and environment overrides.
+- `packages/workers/src/ticket-lifecycle-workflow.test.ts` is an opt-in live Temporal workflow test. It starts `ticketLifecycleWorkflow` against a running Temporal service, verifies the workflow reaches the approval wait state, resumes on `approval_completed`, and deduplicates repeated inbound message/customer-reply signals.
+- The live workflow test is skipped in default `pnpm test` runs. Run it after `pnpm infra:up` with `TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow`.
+- Replay-history tests, SLA timer tests, activity retry policy tests, AI failure routing tests, and outbound/approval action integration tests remain pending.
+
 ### 3.10 AI Runtime
 
 Required tests:
@@ -427,7 +435,13 @@ pnpm infra:up
 DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration
 ```
 
-CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service and a local NATS container with JetStream enabled. The root command currently runs DB repository/RLS integration tests first, API PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket integration tests second, and worker NATS publish/consume integration tests last.
+Run the opt-in live Temporal workflow test against the local Compose Temporal service:
+
+```bash
+TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow
+```
+
+CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service and a local NATS container with JetStream enabled. The root command currently runs DB repository/RLS integration tests first, API PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket integration tests second, and worker NATS publish/consume integration tests last. The opt-in Temporal workflow test is not yet part of root CI integration because CI does not currently start a Temporal service.
 
 Current Python tests use standard library `unittest` because `uv` is not installed locally. When the LangGraph AI runtime is implemented, add the chosen Python dependency manager and update this file with the real eval/test commands.
 
