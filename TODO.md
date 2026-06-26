@@ -6,9 +6,9 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation now has event schemas, subject naming, publisher wiring, explicit local NATS JetStream config, and live publish/consume integration coverage.
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation now has event schemas, subject naming, publisher wiring, explicit local NATS JetStream config, worker-side consumer base/idempotency handling, and live publish/consume integration coverage.
 - Current milestone: Milestone 4 - event bus foundation is in progress.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/stream setup wiring, local NATS JetStream config, live NATS publish/consume integration coverage, and session harness preflight/handoff checks. No business workflow implementation yet.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/stream setup wiring, worker-side NATS JetStream consumer base with storage-agnostic idempotency handling, local NATS JetStream config, live NATS publish/consume integration coverage, and session harness preflight/handoff checks. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Active Harness Guardrails
@@ -23,12 +23,18 @@ This file is the cross-session source of truth for what has been done, what is n
 
 The next implementation task is:
 
-> Continue Milestone 4 from a short-lived feature branch by adding the worker-side event consumer base and idempotent consumer handling/tests. Run `pnpm harness:preflight` before editing and keep CRUD endpoint event publication disabled until Temporal workflow-owned side effects are implemented.
+> Continue Milestone 4 from a short-lived feature branch by adding the dead-letter/error stream strategy for failed or invalid event consumer messages. Keep CRUD endpoint event publication disabled until Temporal workflow-owned side effects are implemented.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat-milestone4-event-consumers` from `main` and ran `pnpm harness:preflight` before editing.
+- Added `packages/workers/src/event-consumer.ts` with durable pull-consumer config/setup helpers, one-message `processNext()` handling, payload/schema validation, subject/envelope mismatch rejection, ack/nak/term behavior, and handler context propagation.
+- Added `DomainEventConsumerIdempotencyStore` plus `InMemoryDomainEventConsumerIdempotencyStore` for deterministic idempotency tests. Completed duplicate events are acked without handler reruns, in-progress duplicates are nacked, failed handler attempts are marked failed and can retry, and invalid envelopes are termed.
+- Added `packages/workers/src/event-consumer.test.ts` for durable consumer create/update helpers, idempotent processing paths, invalid payload handling, handler failure retry behavior, and `processNext()`.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, and `TODO.md` for the worker consumer base and idempotency handling.
+- Kept CRUD skeleton endpoints disconnected from event publication; workflow/service-owned side effects remain future work.
 - Created feature branch `feat-milestone4-nats-stream` from `main` and ran `pnpm harness:preflight` before editing.
 - Replaced the deprecated legacy `nats` package attempt with the current official NATS.js v3 modules: `@nats-io/transport-node` and `@nats-io/jetstream`.
 - Added `packages/workers/src/event-bus.ts` with `NATS_URL` config loading, NATS connection wiring, `SUPPORT_EVENTS` stream setup, and a runtime that exposes `NatsJetStreamDomainEventPublisher`.
@@ -162,6 +168,16 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm harness:preflight` initially failed inside the managed sandbox with a pnpm store SQLite access error and registry fetch restriction, then passed with approved pnpm store/network access on branch `feat-milestone4-event-consumers`.
+- `pnpm --filter @support/workers test` passes with 18 unit tests and 1 skipped live integration test after the event consumer base/idempotency coverage.
+- `pnpm --filter @support/workers typecheck` passes after the event consumer base/idempotency coverage.
+- `pnpm format` applied formatting to `packages/workers/src/event-consumer.ts` and `packages/workers/src/event-consumer.test.ts`.
+- `pnpm format:check` passes after the event consumer base/idempotency coverage and docs updates.
+- `pnpm lint` passes after the event consumer base/idempotency coverage and docs updates.
+- `pnpm typecheck` passes after the event consumer base/idempotency coverage and docs updates.
+- `pnpm test` passes after the event consumer base/idempotency coverage and docs updates.
+- `pnpm build` passes after the event consumer base/idempotency coverage and docs updates.
+- `pnpm test:integration` was not rerun because this change adds deterministic consumer base/idempotency unit coverage only and does not change live NATS stream configuration or publish/consume behavior.
 - `pnpm harness:preflight` passes on branch `feat-milestone4-nats-stream`.
 - `pnpm --filter @support/workers typecheck` passes after event bus connection/stream wiring.
 - `pnpm --filter @support/workers test` passes with 8 unit tests and 1 skipped live integration test after event bus unit coverage.
@@ -486,8 +502,8 @@ Checklist:
 - [x] Define event envelope schema.
 - [x] Define event subject naming convention.
 - [x] Implement event publisher. Current: worker-side publisher plus live NATS connection/stream wiring is complete; workflow-owned event emission is pending.
-- [ ] Implement event consumer base.
-- [ ] Add idempotent consumer handling.
+- [x] Implement event consumer base. Current: durable pull-consumer setup helpers and one-message `processNext()` base are implemented in workers.
+- [x] Add idempotent consumer handling. Current: storage-agnostic idempotency store contract plus in-memory implementation are covered by unit tests; a PostgreSQL-backed adapter remains future side-effecting consumer work.
 - [ ] Add dead-letter/error stream strategy.
 - [x] Add local NATS config.
 - [x] Add live NATS publish/consume integration test.
@@ -495,12 +511,12 @@ Checklist:
 - [ ] Emit ticket created event.
 - [ ] Emit ticket state transition events.
 - [x] Add event schema tests.
-- [ ] Add consumer idempotency tests.
+- [x] Add consumer idempotency tests.
 
 Acceptance criteria:
 
 - [x] Events are versioned.
-- [ ] Consumers are idempotent.
+- [x] Consumers are idempotent. Current: the worker consumer base deduplicates completed events per consumer/tenant/event through the injected idempotency store and nacks in-progress duplicates instead of running concurrent handler work.
 - [x] Event publication includes correlation and causation IDs. Current: enforced by the shared envelope and publisher validation; real workflow-owned emission remains pending.
 
 ## Milestone 5: Temporal Workflow Foundation
@@ -719,6 +735,16 @@ Acceptance criteria:
 
 Use reverse chronological order.
 
+### 2026-06-26
+
+- Continued Milestone 4 event bus foundation:
+  - Added worker-side durable pull-consumer config/setup helpers.
+  - Added one-message event consumer processing with schema validation, subject/envelope validation, handler context, and ack/nak/term handling.
+  - Added storage-agnostic consumer idempotency handling with an in-memory implementation for deterministic tests.
+  - Added consumer idempotency tests for completed duplicates, in-progress duplicates, handler failure retry, invalid payload termination, and `processNext()`.
+  - Kept CRUD event publication disabled until workflow/service-owned side effects are implemented.
+- Verification for this session is recorded in the Verification Status section above.
+
 ### 2026-06-23
 
 - Completed Milestone 3 audit event API expansion:
@@ -815,6 +841,19 @@ Use reverse chronological order.
 ## Verification Log
 
 Use reverse chronological order.
+
+### 2026-06-26
+
+- Verified session preflight with `pnpm harness:preflight` after creating branch `feat-milestone4-event-consumers`; the first sandboxed run failed on pnpm store/registry access, and the approved rerun passed.
+- Verified worker unit tests with `pnpm --filter @support/workers test`.
+- Verified worker typecheck with `pnpm --filter @support/workers typecheck`.
+- Applied formatting with `pnpm format`.
+- Verified formatting with `pnpm format:check`.
+- Verified static checks with `pnpm lint`.
+- Verified repo typecheck with `pnpm typecheck`.
+- Verified repo tests with `pnpm test`.
+- Verified package builds with `pnpm build`.
+- Did not rerun `pnpm test:integration`; this session did not change live PostgreSQL or NATS integration behavior.
 
 ### 2026-06-19
 

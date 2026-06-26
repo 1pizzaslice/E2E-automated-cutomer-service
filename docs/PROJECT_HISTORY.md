@@ -14,7 +14,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - Milestone 1 backend scaffold is complete and locally verified.
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
 - Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
-- Milestone 4 event bus foundation has started with shared v1 domain event envelope schemas, a tenant-aware NATS subject convention, worker-side NATS JetStream publisher and connection wiring, explicit local stream config, and live NATS publish/consume integration coverage. CRUD skeleton endpoints still do not publish events.
+- Milestone 4 event bus foundation has started with shared v1 domain event envelope schemas, a tenant-aware NATS subject convention, worker-side NATS JetStream publisher/consumer base and connection wiring, explicit local stream config, idempotent consumer handling tests, and live NATS publish/consume integration coverage. CRUD skeleton endpoints still do not publish events.
 - The engineering harness now includes explicit branch and handoff guardrails in the active reading path plus `pnpm harness:preflight` and `pnpm harness:handoff` checks.
 
 ## Product Direction
@@ -165,8 +165,9 @@ Latest Milestone 4 event bus foundation:
 - Added subject-safe tenant token validation for event publishing.
 - Added `packages/workers/src/event-publisher.ts` with `NatsJetStreamDomainEventPublisher`, which validates envelopes, JSON-encodes events, publishes to the derived tenant-aware subject, and uses `event_id` as the JetStream message ID for duplicate detection.
 - Added `packages/workers/src/event-bus.ts` with NATS.js v3 connection wiring, `NATS_URL` config loading, `SUPPORT_EVENTS` stream setup, and publisher runtime construction.
+- Added `packages/workers/src/event-consumer.ts` with durable pull-consumer config/setup helpers, one-message `processNext()` handling, payload/subject validation, ack/nak/term behavior, and an injected idempotency store contract with an in-memory implementation for deterministic tests.
 - Added `infra/nats/server.conf` plus a Compose `nats-data` volume so local NATS runs JetStream from explicit config.
-- Added worker event bus unit tests and a live NATS publish/consume integration test that also verifies duplicate detection through JetStream message IDs.
+- Added worker event bus unit tests, consumer idempotency tests, and a live NATS publish/consume integration test that also verifies duplicate detection through JetStream message IDs.
 - Left current CRUD skeleton endpoints disconnected from event publication; workflow/service-owned event side effects remain future work.
 
 Latest harness hardening:
