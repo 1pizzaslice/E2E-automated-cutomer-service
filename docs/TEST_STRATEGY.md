@@ -299,6 +299,7 @@ Current Milestone 4 event bus foundation coverage:
 - `packages/shared-schemas/src/index.test.ts` validates v1 domain event envelopes, rejects unsupported event versions/names, and checks tenant-aware NATS subject construction.
 - `packages/workers/src/event-publisher.test.ts` verifies the NATS JetStream publisher scaffold validates envelopes before publishing, sends JSON payloads to tenant-aware subjects, and uses `event_id` as the JetStream message ID.
 - `packages/workers/src/event-bus.test.ts` verifies local event bus config loading, stream create config, and idempotent create/update stream setup behavior.
+- `packages/workers/src/event-consumer.test.ts` verifies durable consumer config/create/update helpers, event payload and subject validation, completed duplicate ack/skip behavior, in-progress duplicate nak behavior, handler failure retry behavior, invalid envelope termination, and the one-message `processNext()` wrapper.
 - `packages/workers/src/event-bus.integration.test.ts` connects to local NATS, ensures the `SUPPORT_EVENTS` stream, publishes a tenant-scoped event, consumes it from JetStream, and verifies duplicate publish detection through `event_id`.
 
 ## 4. Golden Dataset

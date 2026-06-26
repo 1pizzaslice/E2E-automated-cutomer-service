@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, and the first Milestone 4 event bus foundation with shared v1 domain event envelope schemas, explicit NATS JetStream stream setup, worker-side publisher wiring, and live publish/consume integration coverage. No business workflow implementation yet.
+Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, and the first Milestone 4 event bus foundation with shared v1 domain event envelope schemas, explicit NATS JetStream stream setup, worker-side publisher wiring, worker-side consumer base/idempotency handling, and live publish/consume integration coverage. No business workflow implementation yet.
 
 ## Start Here
 
@@ -97,6 +97,7 @@ Implemented contracts:
 - Tenant-aware NATS subject convention: `support.events.tenant.{tenant_id}.{domain}.{fact}.v1`.
 - Worker-side `NatsJetStreamDomainEventPublisher` scaffold that validates envelopes, JSON-encodes events, and uses `event_id` as the JetStream message ID.
 - Worker-side NATS event bus wiring in `packages/workers/src/event-bus.ts`, which loads `NATS_URL`, connects through the official NATS.js v3 Node transport, ensures the `SUPPORT_EVENTS` stream with subjects `support.events.tenant.*.*.*.v1`, and exposes a publisher runtime.
+- Worker-side consumer base in `packages/workers/src/event-consumer.ts`, including durable pull-consumer config/setup helpers, payload and subject validation, ack/nak/term handling, and storage-agnostic event idempotency with an in-memory implementation for deterministic tests.
 - Local NATS config in `infra/nats/server.conf` enables JetStream with a persisted Compose volume.
 - Live worker integration coverage publishes, consumes, and duplicate-detects a tenant-scoped domain event against local NATS.
 
