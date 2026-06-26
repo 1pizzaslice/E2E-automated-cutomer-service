@@ -110,6 +110,13 @@ export const DomainEventActorTypeSchema = z.enum([
   "integration",
 ]);
 
+export const DomainEventActorSchema = z
+  .object({
+    type: DomainEventActorTypeSchema,
+    id: z.string().min(1).nullable(),
+  })
+  .strict();
+
 export const DomainEventSubjectTenantIdSchema = z
   .string()
   .min(1)
@@ -127,13 +134,47 @@ export const DomainEventEnvelopeSchema = z
     correlation_id: z.string().min(1),
     causation_id: z.string().min(1),
     occurred_at: z.string().datetime(),
-    actor: z
-      .object({
-        type: DomainEventActorTypeSchema,
-        id: z.string().min(1).nullable(),
-      })
-      .strict(),
+    actor: DomainEventActorSchema,
     payload: JsonObjectSchema,
+  })
+  .strict()
+  .superRefine((event, ctx) => {
+    const payloadSchema = getDomainEventPayloadSchema(event.event_name);
+    const parsedPayload = payloadSchema.safeParse(event.payload);
+
+    if (!parsedPayload.success) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["payload"],
+        message: `Invalid payload for ${event.event_name}: ${parsedPayload.error.message}`,
+      });
+    }
+  });
+
+export const SupportEventErrorKindSchema = z.enum([
+  "invalid_envelope",
+  "handler_failed",
+]);
+
+export const SupportEventErrorRecordSchema = z
+  .object({
+    error_id: z.string().min(1),
+    error_kind: SupportEventErrorKindSchema,
+    consumer_name: z.string().min(1),
+    stream_name: z.string().min(1),
+    original_subject: z.string().min(1),
+    original_sequence: z.number().int().nonnegative(),
+    event_id: z.string().min(1).nullable(),
+    event_name: DomainEventNameSchema.nullable(),
+    tenant_id: DomainEventSubjectTenantIdSchema.nullable(),
+    correlation_id: z.string().min(1).nullable(),
+    causation_id: z.string().min(1).nullable(),
+    occurred_at: z.string().datetime(),
+    redelivered: z.boolean(),
+    delivery_count: z.number().int().positive().nullable(),
+    will_retry: z.boolean(),
+    error_name: z.string().min(1).nullable(),
+    error_message: z.string().min(1),
   })
   .strict();
 
@@ -142,7 +183,12 @@ export type DomainEventSchemaVersion = z.infer<
   typeof DomainEventSchemaVersionSchema
 >;
 export type DomainEventActorType = z.infer<typeof DomainEventActorTypeSchema>;
+export type DomainEventActor = z.infer<typeof DomainEventActorSchema>;
 export type DomainEventEnvelope = z.infer<typeof DomainEventEnvelopeSchema>;
+export type SupportEventErrorKind = z.infer<typeof SupportEventErrorKindSchema>;
+export type SupportEventErrorRecord = z.infer<
+  typeof SupportEventErrorRecordSchema
+>;
 
 export function buildDomainEventSubject(
   event: Pick<DomainEventEnvelope, "event_name" | "tenant_id">,
@@ -635,3 +681,200 @@ export type TicketResourceResponse = z.infer<
 export type TicketListResponse = z.infer<typeof TicketListResponseSchema>;
 export type TicketCreateRequest = z.infer<typeof TicketCreateRequestSchema>;
 export type TicketUpdateRequest = z.infer<typeof TicketUpdateRequestSchema>;
+
+export const MessageReceivedEventPayloadSchema = z
+  .object({
+    message_id: z.string().min(1),
+    conversation_id: z.string().min(1),
+    ticket_id: z.string().min(1).nullable(),
+    channel_id: z.string().min(1),
+    direction: z.literal("inbound"),
+    external_message_id: z.string().min(1).nullable(),
+    external_thread_id: z.string().min(1).nullable(),
+    idempotency_key: z.string().min(1).nullable(),
+    received_at: z.string().datetime(),
+  })
+  .strict();
+
+export const ConversationUpdatedEventPayloadSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    status: ConversationStatusSchema,
+    last_message_at: z.string().datetime().nullable(),
+    metadata: JsonObjectSchema,
+  })
+  .strict();
+
+export const TicketCreatedEventPayloadSchema = z
+  .object({
+    ticket_id: z.string().min(1),
+    conversation_id: z.string().min(1),
+    customer_id: z.string().min(1),
+    status: z.literal("new"),
+    priority: TicketPrioritySchema,
+    automation_mode: AutomationModeSchema,
+    assigned_queue: z.string().min(1).nullable(),
+    assigned_user_id: z.string().min(1).nullable(),
+    opened_at: z.string().datetime(),
+  })
+  .strict();
+
+export const TicketStateTransitionEventNameSchema = z.enum([
+  "support.ticket.triaged.v1",
+  "support.ticket.resolved.v1",
+  "support.ticket.closed.v1",
+]);
+
+export const TicketStateTransitionEventPayloadSchema = z
+  .object({
+    ticket_id: z.string().min(1),
+    from_status: TicketStatusSchema,
+    to_status: TicketStatusSchema,
+    reason_code: z.string().min(1).nullable(),
+    metadata: JsonObjectSchema,
+  })
+  .strict();
+
+export const TicketPriorityChangedEventPayloadSchema = z
+  .object({
+    ticket_id: z.string().min(1),
+    previous_priority: TicketPrioritySchema,
+    new_priority: TicketPrioritySchema,
+    reason_code: z.string().min(1).nullable(),
+    metadata: JsonObjectSchema,
+  })
+  .strict();
+
+export const TicketAssignmentChangedEventPayloadSchema = z
+  .object({
+    ticket_id: z.string().min(1),
+    previous_assigned_queue: z.string().min(1).nullable(),
+    new_assigned_queue: z.string().min(1).nullable(),
+    previous_assigned_user_id: z.string().min(1).nullable(),
+    new_assigned_user_id: z.string().min(1).nullable(),
+    reason_code: z.string().min(1).nullable(),
+    metadata: JsonObjectSchema,
+  })
+  .strict();
+
+export const TicketSlaBreachedEventPayloadSchema = z
+  .object({
+    ticket_id: z.string().min(1),
+    breached_deadline: z.enum([
+      "first_response",
+      "next_response",
+      "resolution",
+    ]),
+    due_at: z.string().datetime(),
+    metadata: JsonObjectSchema,
+  })
+  .strict();
+
+export const AiRunStartedEventPayloadSchema = z
+  .object({
+    ai_run_id: z.string().min(1),
+    ticket_id: z.string().min(1),
+  })
+  .strict();
+
+export const AiRunCompletedEventPayloadSchema = z
+  .object({
+    ai_run_id: z.string().min(1),
+    ticket_id: z.string().min(1),
+    status: z.string().min(1),
+    metadata: JsonObjectSchema,
+  })
+  .strict();
+
+export const ToolCallCompletedEventPayloadSchema = z
+  .object({
+    tool_call_id: z.string().min(1),
+    ticket_id: z.string().min(1),
+    tool_name: z.string().min(1),
+    status: z.string().min(1),
+    metadata: JsonObjectSchema,
+  })
+  .strict();
+
+export const ApprovalRequestedEventPayloadSchema = z
+  .object({
+    approval_id: z.string().min(1),
+    ticket_id: z.string().min(1),
+    approval_type: ApprovalTypeSchema,
+  })
+  .strict();
+
+export const ApprovalCompletedEventPayloadSchema = z
+  .object({
+    approval_id: z.string().min(1),
+    ticket_id: z.string().min(1),
+    status: ApprovalStatusSchema,
+  })
+  .strict();
+
+export const MessageSentEventPayloadSchema = z
+  .object({
+    message_id: z.string().min(1),
+    conversation_id: z.string().min(1),
+    ticket_id: z.string().min(1).nullable(),
+    channel_id: z.string().min(1),
+    sent_at: z.string().datetime(),
+  })
+  .strict();
+
+export const QaReviewCreatedEventPayloadSchema = z
+  .object({
+    qa_review_id: z.string().min(1),
+    ticket_id: z.string().min(1),
+  })
+  .strict();
+
+export type MessageReceivedEventPayload = z.infer<
+  typeof MessageReceivedEventPayloadSchema
+>;
+export type TicketCreatedEventPayload = z.infer<
+  typeof TicketCreatedEventPayloadSchema
+>;
+export type TicketStateTransitionEventName = z.infer<
+  typeof TicketStateTransitionEventNameSchema
+>;
+export type TicketStateTransitionEventPayload = z.infer<
+  typeof TicketStateTransitionEventPayloadSchema
+>;
+
+function getDomainEventPayloadSchema(
+  eventName: DomainEventName,
+): z.ZodType<unknown> {
+  switch (eventName) {
+    case "support.message.received.v1":
+      return MessageReceivedEventPayloadSchema;
+    case "support.conversation.updated.v1":
+      return ConversationUpdatedEventPayloadSchema;
+    case "support.ticket.created.v1":
+      return TicketCreatedEventPayloadSchema;
+    case "support.ticket.triaged.v1":
+    case "support.ticket.resolved.v1":
+    case "support.ticket.closed.v1":
+      return TicketStateTransitionEventPayloadSchema;
+    case "support.ticket.priority_changed.v1":
+      return TicketPriorityChangedEventPayloadSchema;
+    case "support.ticket.assignment_changed.v1":
+      return TicketAssignmentChangedEventPayloadSchema;
+    case "support.ticket.sla_breached.v1":
+      return TicketSlaBreachedEventPayloadSchema;
+    case "support.ai_run.started.v1":
+      return AiRunStartedEventPayloadSchema;
+    case "support.ai_run.completed.v1":
+      return AiRunCompletedEventPayloadSchema;
+    case "support.tool_call.completed.v1":
+      return ToolCallCompletedEventPayloadSchema;
+    case "support.approval.requested.v1":
+      return ApprovalRequestedEventPayloadSchema;
+    case "support.approval.completed.v1":
+      return ApprovalCompletedEventPayloadSchema;
+    case "support.message.sent.v1":
+      return MessageSentEventPayloadSchema;
+    case "support.qa.review_created.v1":
+      return QaReviewCreatedEventPayloadSchema;
+  }
+}

@@ -11,8 +11,10 @@ import {
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
   DomainEventEnvelopeSchema,
+  MessageReceivedEventPayloadSchema,
   KbDocumentListResponseSchema,
   KbDocumentResourceResponseSchema,
+  SupportEventErrorRecordSchema,
   TenantCreateRequestSchema,
   TenantListResponseSchema,
   HealthResponseSchema,
@@ -21,8 +23,10 @@ import {
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
   TicketCreateRequestSchema,
+  TicketCreatedEventPayloadSchema,
   TicketListResponseSchema,
   TicketResourceResponseSchema,
+  TicketStateTransitionEventPayloadSchema,
   TicketUpdateRequestSchema,
   buildDomainEventSubject,
   createHealthResponse,
@@ -63,7 +67,14 @@ describe("shared event contract schemas", () => {
     },
     payload: {
       ticket_id: "ticket_test",
+      conversation_id: "cnv_test",
+      customer_id: "cus_test",
       status: "new",
+      priority: "p2",
+      automation_mode: "human_approve",
+      assigned_queue: null,
+      assigned_user_id: null,
+      opened_at: "2026-06-25T00:00:00.000Z",
     },
   } as const;
 
@@ -97,6 +108,75 @@ describe("shared event contract schemas", () => {
         tenant_id: "tenant.with.dot",
       }),
     ).toThrow();
+  });
+
+  it("validates milestone event payload contracts by event name", () => {
+    expect(
+      MessageReceivedEventPayloadSchema.parse({
+        message_id: "msg_test",
+        conversation_id: "cnv_test",
+        ticket_id: "ticket_test",
+        channel_id: "chn_test",
+        direction: "inbound",
+        external_message_id: "external_msg_test",
+        external_thread_id: "thread_test",
+        idempotency_key: "idem_msg_test",
+        received_at: "2026-06-25T00:00:00.000Z",
+      }),
+    ).toMatchObject({ direction: "inbound" });
+
+    expect(TicketCreatedEventPayloadSchema.parse(event.payload)).toEqual(
+      event.payload,
+    );
+
+    expect(
+      TicketStateTransitionEventPayloadSchema.parse({
+        ticket_id: "ticket_test",
+        from_status: "new",
+        to_status: "triaged",
+        reason_code: "ai_triage_completed",
+        metadata: {},
+      }),
+    ).toMatchObject({ to_status: "triaged" });
+  });
+
+  it("rejects domain envelopes with payloads that do not match the event name", () => {
+    expect(() =>
+      DomainEventEnvelopeSchema.parse({
+        ...event,
+        payload: {
+          ticket_id: "ticket_test",
+          status: "new",
+        },
+      }),
+    ).toThrow(/Invalid payload for support.ticket.created.v1/);
+  });
+
+  it("validates structured support event error records", () => {
+    expect(
+      SupportEventErrorRecordSchema.parse({
+        error_id: "event_error_test",
+        error_kind: "handler_failed",
+        consumer_name: "ticket_projection",
+        stream_name: "SUPPORT_EVENTS",
+        original_subject: "support.events.tenant.ten_test.ticket.created.v1",
+        original_sequence: 7,
+        event_id: "evt_test",
+        event_name: "support.ticket.created.v1",
+        tenant_id: "ten_test",
+        correlation_id: "corr_test",
+        causation_id: "req_test",
+        occurred_at: "2026-06-25T00:00:00.000Z",
+        redelivered: true,
+        delivery_count: 5,
+        will_retry: false,
+        error_name: "Error",
+        error_message: "handler failed",
+      }),
+    ).toMatchObject({
+      error_kind: "handler_failed",
+      will_retry: false,
+    });
   });
 });
 

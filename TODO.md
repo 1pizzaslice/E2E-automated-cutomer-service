@@ -6,9 +6,9 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation now has event schemas, subject naming, publisher wiring, explicit local NATS JetStream config, worker-side consumer base/idempotency handling, and live publish/consume integration coverage.
-- Current milestone: Milestone 4 - event bus foundation is in progress.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/stream setup wiring, worker-side NATS JetStream consumer base with storage-agnostic idempotency handling, local NATS JetStream config, live NATS publish/consume integration coverage, and session harness preflight/handoff checks. No business workflow implementation yet.
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage.
+- Current milestone: Milestone 4 - event bus foundation is complete; Milestone 5 Temporal workflow foundation is next.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope/payload schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/domain/error stream setup wiring, worker-side NATS JetStream event emit helpers, worker-side NATS JetStream consumer base with storage-agnostic idempotency/error handling, local NATS JetStream config, live NATS publish/consume integration coverage, and session harness preflight/handoff checks. No business workflow implementation yet.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Active Harness Guardrails
@@ -23,12 +23,20 @@ This file is the cross-session source of truth for what has been done, what is n
 
 The next implementation task is:
 
-> Continue Milestone 4 from a short-lived feature branch by adding the dead-letter/error stream strategy for failed or invalid event consumer messages. Keep CRUD endpoint event publication disabled until Temporal workflow-owned side effects are implemented.
+> Start Milestone 5 from a short-lived feature branch by adding the Temporal worker package scaffold and deterministic ticket workflow skeleton. Reuse the Milestone 4 domain event emit helpers from workflow activities, and keep API CRUD endpoints disconnected from direct event side effects.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat-milestone4-domain-events` from updated `main` after the prior consumer branch was merged, then ran `pnpm harness:preflight`.
+- Completed Milestone 4 event bus foundation by adding event-name-specific domain payload validation in `packages/shared-schemas/src/index.ts`, including message received, ticket created, ticket transition, ticket priority/assignment/SLA, AI run, tool call, approval, message sent, and QA review payload schemas.
+- Added `SupportEventErrorRecordSchema` plus worker-side `packages/workers/src/event-errors.ts` for structured error-record publishing under `support.events.errors.>`.
+- Extended `packages/workers/src/event-bus.ts` to ensure both `SUPPORT_EVENTS` and `SUPPORT_EVENT_ERRORS` streams and expose both domain event and error publishers.
+- Extended `packages/workers/src/event-consumer.ts` so invalid envelopes publish error records before terming, handler failures publish retryable error records before nacking, and handler failures at max delivery publish non-retryable error records before terming.
+- Added `packages/workers/src/domain-events.ts` with schema-validated emit helpers for message received, ticket created, and ticket state transition events. These helpers are intended for future Temporal workflow activities; CRUD skeleton endpoints remain disconnected from event side effects.
+- Added shared-schema tests, worker emit helper tests, error publisher tests, expanded consumer error-strategy tests, and live NATS integration coverage for structured event error publish/consume behavior.
+- Updated `README.md`, `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, and `TODO.md` for Milestone 4 completion.
 - Created feature branch `feat-milestone4-event-consumers` from `main` and ran `pnpm harness:preflight` before editing.
 - Added `packages/workers/src/event-consumer.ts` with durable pull-consumer config/setup helpers, one-message `processNext()` handling, payload/schema validation, subject/envelope mismatch rejection, ack/nak/term behavior, and handler context propagation.
 - Added `DomainEventConsumerIdempotencyStore` plus `InMemoryDomainEventConsumerIdempotencyStore` for deterministic idempotency tests. Completed duplicate events are acked without handler reruns, in-progress duplicates are nacked, failed handler attempts are marked failed and can retry, and invalid envelopes are termed.
@@ -168,6 +176,20 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm harness:preflight` passed on branch `feat-milestone4-domain-events`.
+- `pnpm --filter @support/shared-schemas test` passes with 17 tests after event payload/error schema coverage.
+- `pnpm --filter @support/shared-schemas typecheck` passes after event payload/error schema coverage.
+- `pnpm --filter @support/workers test` passes with 31 tests and 2 skipped live integration tests after event emit helper, error publisher, and consumer dead-letter/error strategy coverage.
+- `pnpm --filter @support/workers typecheck` passes after event emit helper, error publisher, and consumer dead-letter/error strategy coverage.
+- `pnpm format` applied formatting to the changed event contract and worker files.
+- `pnpm format:check` passes after Milestone 4 event payload/error stream completion.
+- `pnpm lint` passes after Milestone 4 event payload/error stream completion.
+- `pnpm typecheck` passes after Milestone 4 event payload/error stream completion.
+- `pnpm test` passes after Milestone 4 event payload/error stream completion, including Python scaffold tests.
+- `pnpm build` passes after Milestone 4 event payload/error stream completion.
+- `pnpm infra:up` reports the local Compose stack running and PostgreSQL healthy before live integration verification.
+- `DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration` initially failed inside the managed sandbox with localhost PostgreSQL `EPERM`, then passed with approved localhost access. The passing run covered 17 DB/RLS integration tests, 22 PostgreSQL-backed API integration tests, and 2 worker NATS integration tests, including structured event error publish/consume behavior.
+- `pnpm harness:handoff` initially failed after `Current milestone` was advanced to Milestone 5 before any Milestone 5 checklist work existed, then passed after keeping Milestone 4 as the active completed milestone and recording Milestone 5 as the next task.
 - `pnpm harness:preflight` initially failed inside the managed sandbox with a pnpm store SQLite access error and registry fetch restriction, then passed with approved pnpm store/network access on branch `feat-milestone4-event-consumers`.
 - `pnpm --filter @support/workers test` passes with 18 unit tests and 1 skipped live integration test after the event consumer base/idempotency coverage.
 - `pnpm --filter @support/workers typecheck` passes after the event consumer base/idempotency coverage.
@@ -501,15 +523,15 @@ Checklist:
 
 - [x] Define event envelope schema.
 - [x] Define event subject naming convention.
-- [x] Implement event publisher. Current: worker-side publisher plus live NATS connection/stream wiring is complete; workflow-owned event emission is pending.
+- [x] Implement event publisher. Current: worker-side publisher plus live NATS connection/domain/error stream wiring and workflow-ready emit helpers are complete.
 - [x] Implement event consumer base. Current: durable pull-consumer setup helpers and one-message `processNext()` base are implemented in workers.
 - [x] Add idempotent consumer handling. Current: storage-agnostic idempotency store contract plus in-memory implementation are covered by unit tests; a PostgreSQL-backed adapter remains future side-effecting consumer work.
-- [ ] Add dead-letter/error stream strategy.
+- [x] Add dead-letter/error stream strategy. Current: invalid envelopes and handler failures publish structured records to `SUPPORT_EVENT_ERRORS`; max-delivery handler failures are termed after error publication.
 - [x] Add local NATS config.
 - [x] Add live NATS publish/consume integration test.
-- [ ] Emit message received event.
-- [ ] Emit ticket created event.
-- [ ] Emit ticket state transition events.
+- [x] Emit message received event. Current: schema-validated worker emit helper exists for future workflow activity use; CRUD endpoints do not publish events directly.
+- [x] Emit ticket created event. Current: schema-validated worker emit helper exists for future workflow activity use; CRUD endpoints do not publish events directly.
+- [x] Emit ticket state transition events. Current: schema-validated worker emit helper supports triaged/resolved/closed transition events for future workflow activity use.
 - [x] Add event schema tests.
 - [x] Add consumer idempotency tests.
 
@@ -737,6 +759,13 @@ Use reverse chronological order.
 
 ### 2026-06-26
 
+- Completed Milestone 4 event bus foundation:
+  - Added event-name-specific payload validation and structured event error record schemas.
+  - Added workflow-ready emit helpers for message received, ticket created, and ticket state transition domain events.
+  - Added `SUPPORT_EVENT_ERRORS` stream setup and structured event-error publishing.
+  - Extended consumer processing to publish invalid-envelope and handler-failure records, retry recoverable failures, and term max-delivery failures after recording them.
+  - Kept CRUD skeleton endpoints disconnected from direct event side effects; Temporal workflow/activity code remains the owner for real business event emission.
+  - Added unit and live integration coverage for domain event payloads, emit helpers, error publisher behavior, consumer error handling, and error stream publish/consume behavior.
 - Continued Milestone 4 event bus foundation:
   - Added worker-side durable pull-consumer config/setup helpers.
   - Added one-message event consumer processing with schema validation, subject/envelope validation, handler context, and ack/nak/term handling.

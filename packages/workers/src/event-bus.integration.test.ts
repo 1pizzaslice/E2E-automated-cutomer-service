@@ -1,14 +1,17 @@
 import { DeliverPolicy } from "@nats-io/jetstream";
 import {
   buildDomainEventSubject,
+  type SupportEventErrorRecord,
   type DomainEventEnvelope,
 } from "@support/shared-schemas";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  SUPPORT_EVENT_ERRORS_STREAM,
   SUPPORT_EVENTS_STREAM,
   connectNatsEventBus,
   type NatsEventBusRuntime,
 } from "./event-bus.js";
+import { buildSupportEventErrorSubject } from "./event-errors.js";
 
 const describeLive =
   process.env.RUN_WORKER_INTEGRATION_TESTS === "true"
@@ -22,7 +25,7 @@ describeLive("live NATS JetStream event bus", () => {
 
   beforeAll(async () => {
     runtime = await connectNatsEventBus();
-    await runtime.ensureStream();
+    await runtime.ensureStreams();
   });
 
   afterAll(async () => {
@@ -78,6 +81,47 @@ describeLive("live NATS JetStream event bus", () => {
       });
     }
   });
+
+  it("publishes and consumes structured event error records", async () => {
+    if (!runtime) {
+      throw new Error("NATS event bus runtime was not initialized");
+    }
+
+    const record = makeErrorRecord();
+    const subject = buildSupportEventErrorSubject(record);
+    const consumer = await runtime.jetStream.consumers.get(
+      SUPPORT_EVENT_ERRORS_STREAM,
+      {
+        deliver_policy: DeliverPolicy.All,
+        filter_subjects: [subject],
+      },
+    );
+
+    try {
+      const receipt = await runtime.errorPublisher.publish(record);
+      const message = await consumer.next({ expires: 1_000 });
+
+      expect(receipt).toEqual({
+        error_id: record.error_id,
+        subject,
+        stream: SUPPORT_EVENT_ERRORS_STREAM,
+        sequence: expect.any(Number),
+        duplicate: false,
+      });
+      expect(message).not.toBeNull();
+      expect(message?.subject).toBe(subject);
+      expect(message?.json()).toEqual(record);
+      message?.ack();
+    } finally {
+      await consumer.delete();
+      await runtime.jetStreamManager.streams.purge(
+        SUPPORT_EVENT_ERRORS_STREAM,
+        {
+          filter: subject,
+        },
+      );
+    }
+  });
 });
 
 function makeEvent(): DomainEventEnvelope {
@@ -95,7 +139,36 @@ function makeEvent(): DomainEventEnvelope {
     },
     payload: {
       ticket_id: `${fixturePrefix}_tic`,
+      conversation_id: `${fixturePrefix}_cnv`,
+      customer_id: `${fixturePrefix}_cus`,
       status: "new",
+      priority: "p2",
+      automation_mode: "human_approve",
+      assigned_queue: null,
+      assigned_user_id: null,
+      opened_at: "2026-06-25T00:00:00.000Z",
     },
+  };
+}
+
+function makeErrorRecord(): SupportEventErrorRecord {
+  return {
+    error_id: `${fixturePrefix}_event_error`,
+    error_kind: "handler_failed",
+    consumer_name: "ticket_projection",
+    stream_name: SUPPORT_EVENTS_STREAM,
+    original_subject: `support.events.tenant.${fixturePrefix}_ten.ticket.created.v1`,
+    original_sequence: 7,
+    event_id: `${fixturePrefix}_evt_ticket_created`,
+    event_name: "support.ticket.created.v1",
+    tenant_id: `${fixturePrefix}_ten`,
+    correlation_id: `${fixturePrefix}_corr`,
+    causation_id: `${fixturePrefix}_req`,
+    occurred_at: "2026-06-25T00:00:00.000Z",
+    redelivered: true,
+    delivery_count: 5,
+    will_retry: false,
+    error_name: "Error",
+    error_message: "handler failed",
   };
 }

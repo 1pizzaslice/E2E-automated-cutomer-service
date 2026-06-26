@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, and the first Milestone 4 event bus foundation with shared v1 domain event envelope schemas, explicit NATS JetStream stream setup, worker-side publisher wiring, worker-side consumer base/idempotency handling, and live publish/consume integration coverage. No business workflow implementation yet.
+Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, and Milestone 4 event bus foundation with typed v1 domain event payload schemas, explicit NATS JetStream domain/error stream setup, worker-side publisher wiring, worker-side emit helpers, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. No business workflow implementation yet.
 
 ## Start Here
 
@@ -94,14 +94,16 @@ Services:
 Implemented contracts:
 
 - Shared `DomainEventEnvelopeSchema` and allowed `support.*.v1` event names in `@support/shared-schemas`.
+- Event-name-specific payload validation for v1 domain events, including message received, ticket created, ticket state transition, ticket priority/assignment/SLA, AI run, tool call, approval, message sent, and QA review events.
 - Tenant-aware NATS subject convention: `support.events.tenant.{tenant_id}.{domain}.{fact}.v1`.
 - Worker-side `NatsJetStreamDomainEventPublisher` scaffold that validates envelopes, JSON-encodes events, and uses `event_id` as the JetStream message ID.
-- Worker-side NATS event bus wiring in `packages/workers/src/event-bus.ts`, which loads `NATS_URL`, connects through the official NATS.js v3 Node transport, ensures the `SUPPORT_EVENTS` stream with subjects `support.events.tenant.*.*.*.v1`, and exposes a publisher runtime.
-- Worker-side consumer base in `packages/workers/src/event-consumer.ts`, including durable pull-consumer config/setup helpers, payload and subject validation, ack/nak/term handling, and storage-agnostic event idempotency with an in-memory implementation for deterministic tests.
+- Worker-side emit helpers in `packages/workers/src/domain-events.ts` for message received, ticket created, and ticket state transition domain events.
+- Worker-side NATS event bus wiring in `packages/workers/src/event-bus.ts`, which loads `NATS_URL`, connects through the official NATS.js v3 Node transport, ensures the `SUPPORT_EVENTS` stream with subjects `support.events.tenant.*.*.*.v1`, ensures the `SUPPORT_EVENT_ERRORS` stream with subjects `support.events.errors.>`, and exposes publisher/error-publisher runtime helpers.
+- Worker-side consumer base in `packages/workers/src/event-consumer.ts`, including durable pull-consumer config/setup helpers, payload and subject validation, ack/nak/term handling, structured error-record publishing for invalid or failed messages, and storage-agnostic event idempotency with an in-memory implementation for deterministic tests.
 - Local NATS config in `infra/nats/server.conf` enables JetStream with a persisted Compose volume.
-- Live worker integration coverage publishes, consumes, and duplicate-detects a tenant-scoped domain event against local NATS.
+- Live worker integration coverage publishes, consumes, and duplicate-detects a tenant-scoped domain event against local NATS, and publishes/consumes a structured event error record.
 
-Current CRUD skeleton endpoints do not publish events. Event publication remains future workflow/service-owned behavior.
+Current CRUD skeleton endpoints do not publish events. The emit helpers are ready for future Temporal workflow/service-owned side effects.
 
 ## Current API Skeleton
 

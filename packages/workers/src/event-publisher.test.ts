@@ -87,7 +87,14 @@ function makeEvent(): DomainEventEnvelope {
     },
     payload: {
       ticket_id: "ticket_test",
+      conversation_id: "cnv_test",
+      customer_id: "cus_test",
       status: "new",
+      priority: "p2",
+      automation_mode: "human_approve",
+      assigned_queue: null,
+      assigned_user_id: null,
+      opened_at: "2026-06-25T00:00:00.000Z",
     },
   };
 }

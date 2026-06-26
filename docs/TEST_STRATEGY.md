@@ -296,11 +296,13 @@ Current Milestone 3 API skeleton coverage:
 
 Current Milestone 4 event bus foundation coverage:
 
-- `packages/shared-schemas/src/index.test.ts` validates v1 domain event envelopes, rejects unsupported event versions/names, and checks tenant-aware NATS subject construction.
+- `packages/shared-schemas/src/index.test.ts` validates v1 domain event envelopes, rejects unsupported event versions/names, checks event-name-specific payload validation, validates structured event error records, and checks tenant-aware NATS subject construction.
+- `packages/workers/src/domain-events.test.ts` verifies worker-side emit helpers for message received, ticket created, and ticket state transition events build schema-valid envelopes and publish through an injected domain event publisher.
 - `packages/workers/src/event-publisher.test.ts` verifies the NATS JetStream publisher scaffold validates envelopes before publishing, sends JSON payloads to tenant-aware subjects, and uses `event_id` as the JetStream message ID.
-- `packages/workers/src/event-bus.test.ts` verifies local event bus config loading, stream create config, and idempotent create/update stream setup behavior.
-- `packages/workers/src/event-consumer.test.ts` verifies durable consumer config/create/update helpers, event payload and subject validation, completed duplicate ack/skip behavior, in-progress duplicate nak behavior, handler failure retry behavior, invalid envelope termination, and the one-message `processNext()` wrapper.
-- `packages/workers/src/event-bus.integration.test.ts` connects to local NATS, ensures the `SUPPORT_EVENTS` stream, publishes a tenant-scoped event, consumes it from JetStream, and verifies duplicate publish detection through `event_id`.
+- `packages/workers/src/event-errors.test.ts` verifies structured event error records publish to the error subject namespace, use `error_id` as the JetStream message ID, and validate records before publishing.
+- `packages/workers/src/event-bus.test.ts` verifies local event bus config loading, domain/error stream create config, and idempotent create/update stream setup behavior.
+- `packages/workers/src/event-consumer.test.ts` verifies durable consumer config/create/update helpers, event payload and subject validation, completed duplicate ack/skip behavior, in-progress duplicate nak behavior, handler failure retry behavior, invalid envelope error publishing and termination, max-delivery dead-letter termination, and the one-message `processNext()` wrapper.
+- `packages/workers/src/event-bus.integration.test.ts` connects to local NATS, ensures the `SUPPORT_EVENTS` and `SUPPORT_EVENT_ERRORS` streams, publishes a tenant-scoped event, consumes it from JetStream, verifies duplicate publish detection through `event_id`, and verifies structured event error publish/consume behavior.
 
 ## 4. Golden Dataset
 
