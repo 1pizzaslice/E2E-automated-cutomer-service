@@ -9,13 +9,13 @@ This file records what has happened so far so a new human or AI agent can unders
 - GitHub repo cloned at `/home/anish/CODE01/STARTUPS/E2E-automated-cutomer-service`.
 - Backend scaffold has a local `main` commit.
 - No frontend has been implemented.
-- No full business workflows have been implemented yet. The first Temporal ticket lifecycle workflow shell exists, but DB mutation, AI graph calls, SLA timers, outbound sends, and API start/signal wiring remain pending.
+- No full business workflows have been implemented yet. The first Temporal ticket lifecycle workflow shell exists with first-response SLA timer breach behavior, but DB mutation, AI graph calls, next-response/resolution SLA timers, outbound sends, and API start/signal wiring remain pending.
 - Milestone 0 documentation harness is complete.
 - Milestone 1 backend scaffold is complete and locally verified.
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
 - Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
 - Milestone 4 event bus foundation is complete with shared v1 domain event envelope and payload schemas, a tenant-aware NATS subject convention, worker-side NATS JetStream publisher/consumer base and connection wiring, explicit domain/error stream config, idempotent consumer handling, structured consumer error records, workflow-ready event emit helpers, and live NATS publish/consume integration coverage. CRUD skeleton endpoints still do not publish events.
-- Milestone 5 Temporal workflow foundation has started with Temporal TypeScript SDK dependencies, worker config/runtime scaffolding, a deterministic ticket lifecycle workflow shell, activity contracts/placeholders, a domain-event activity adapter that reuses the Milestone 4 emit helpers, offline unit coverage, and an opt-in live Temporal workflow test.
+- Milestone 5 Temporal workflow foundation has started with Temporal TypeScript SDK dependencies, worker config/runtime scaffolding, a deterministic ticket lifecycle workflow shell, activity contracts/placeholders, first-response SLA timer behavior, a domain-event activity adapter that reuses the Milestone 4 emit helpers, offline unit coverage, and an opt-in live Temporal workflow test with replay coverage.
 - The engineering harness now includes explicit branch and handoff guardrails in the active reading path plus `pnpm harness:preflight` and `pnpm harness:handoff` checks.
 
 ## Product Direction
@@ -179,10 +179,11 @@ Latest Milestone 5 Temporal workflow foundation:
 - Added Temporal TypeScript SDK dependencies to `@support/workers` and approved the required pnpm build scripts for `@swc/core` and `protobufjs`.
 - Added `packages/workers/src/temporal-worker.ts` for Temporal worker config/runtime scaffolding with local defaults for `localhost:7233`, namespace `default`, and task queue `support-ticket-lifecycle`.
 - Added `packages/workers/src/workflows/ticket-lifecycle-types.ts` and `packages/workers/src/workflows/ticket-lifecycle-workflow.ts`.
-- The first workflow shell defines message/customer-reply, approval-completed, manual-escalation, and close-request signals, a state query, ticket create/load and triage activity calls, workflow-owned domain event emission activity calls, approval waiting/resume behavior, audit activity calls, and inbound message signal dedupe.
-- Added `packages/workers/src/activities/ticket-lifecycle-activities.ts`, whose `emitDomainEvent` activity adapter reuses `emitTicketCreatedEvent` and `emitTicketStateTransitionEvent` through an injected `DomainEventPublisher`.
+- The workflow shell defines message/customer-reply, approval-completed, manual-escalation, and close-request signals, a state query, ticket create/load and triage activity calls, workflow-owned domain event emission activity calls, first-response SLA timer wait/breach behavior, approval waiting/resume behavior, audit activity calls, and inbound message signal dedupe.
+- Added `packages/workers/src/activities/ticket-lifecycle-activities.ts`, whose `emitDomainEvent` activity adapter reuses `emitTicketCreatedEvent`, `emitTicketStateTransitionEvent`, and `emitTicketSlaBreachedEvent` through an injected `DomainEventPublisher`.
+- Added explicit ticket lifecycle activity retry-policy constants, side-effect activity call-site retry options, first-response SLA breach event/audit workflow handling, and live workflow history replay coverage.
 - Added offline unit coverage for the activity adapter and Temporal worker config.
-- Added `pnpm --filter @support/workers test:workflow`, an opt-in live Temporal workflow test that runs against local Compose Temporal and covers approval wait/resume plus duplicate inbound message signal handling.
+- Added `pnpm --filter @support/workers test:workflow`, an opt-in live Temporal workflow test that runs against local Compose Temporal and covers approval wait/resume, duplicate inbound message signal handling, first-response SLA timer breach, and workflow replay safety.
 - CRUD skeleton endpoints still do not start or signal workflows.
 
 Latest harness hardening:
@@ -314,8 +315,8 @@ Fix:
 
 ## Next Recommended Task
 
-Continue Milestone 4 by adding the event consumer base:
+Continue Milestone 5 by adding the next workflow behavior slice:
 
-1. Define the worker-side consumer abstraction and handler contract for validated domain events.
-2. Add idempotent consumer handling and duplicate-event tests before attaching business handlers.
-3. Keep CRUD endpoint event emission disabled until workflow/service-owned side effects are implemented.
+1. Add the AI graph activity placeholder contract for ticket triage/drafting inputs and structured outputs.
+2. Add deterministic workflow tests for AI activity success and failure-to-human routing without calling real LLMs.
+3. Keep API workflow start/signal wiring, outbound sends, and real DB/audit/approval persistence behind activity boundaries until their contracts are ready.

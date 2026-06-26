@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildMessageReceivedEvent,
   buildTicketCreatedEvent,
+  buildTicketSlaBreachedEvent,
   buildTicketStateTransitionEvent,
   emitMessageReceivedEvent,
   emitTicketCreatedEvent,
+  emitTicketSlaBreachedEvent,
   emitTicketStateTransitionEvent,
   type DomainEventEmissionMetadata,
 } from "./domain-events.js";
@@ -100,6 +102,37 @@ describe("domain event emit helpers", () => {
     });
 
     await emitTicketStateTransitionEvent(publisher, input);
+    expect(publisher.events[0]).toEqual(event);
+  });
+
+  it("builds and emits ticket SLA breach events", async () => {
+    const publisher = new FakeDomainEventPublisher();
+    const input = {
+      ...makeMetadata("evt_ticket_sla_breached"),
+      payload: {
+        ticket_id: "ticket_test",
+        breached_deadline: "first_response" as const,
+        due_at: "2026-06-25T00:15:00.000Z",
+        metadata: {
+          source: "temporal_timer",
+        },
+      },
+    };
+
+    const event = buildTicketSlaBreachedEvent(input);
+
+    expect(event).toMatchObject({
+      event_name: "support.ticket.sla_breached.v1",
+      payload: {
+        ticket_id: "ticket_test",
+        breached_deadline: "first_response",
+      },
+    });
+    expect(buildDomainEventSubject(event)).toBe(
+      "support.events.tenant.ten_test.ticket.sla_breached.v1",
+    );
+
+    await emitTicketSlaBreachedEvent(publisher, input);
     expect(publisher.events[0]).toEqual(event);
   });
 

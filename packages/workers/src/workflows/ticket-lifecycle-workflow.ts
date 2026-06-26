@@ -10,6 +10,7 @@ import type { TicketLifecycleActivities } from "../activities/ticket-lifecycle-a
 import type {
   CreateOrUpdateTicketActivityResult,
   RunInitialTriageActivityResult,
+  TicketLifecycleSlaTimer,
   TicketLifecycleApprovalCompletedSignal,
   TicketLifecycleCloseRequestedSignal,
   TicketLifecycleManualEscalationSignal,
@@ -19,12 +20,14 @@ import type {
   TicketLifecycleWorkflowResult,
   TicketLifecycleWorkflowState,
 } from "./ticket-lifecycle-types.js";
+import {
+  TICKET_LIFECYCLE_DEFAULT_ACTIVITY_RETRY_POLICY,
+  TICKET_LIFECYCLE_SIDE_EFFECT_ACTIVITY_RETRY_POLICY,
+} from "./ticket-lifecycle-types.js";
 
 const activities = proxyActivities<TicketLifecycleActivities>({
   startToCloseTimeout: "1 minute",
-  retry: {
-    maximumAttempts: 3,
-  },
+  retry: TICKET_LIFECYCLE_DEFAULT_ACTIVITY_RETRY_POLICY,
 });
 
 export const messageReceivedSignal =
@@ -48,6 +51,8 @@ export async function ticketLifecycleWorkflow(
   let ticketResult: CreateOrUpdateTicketActivityResult | null = null;
   let triage: RunInitialTriageActivityResult | null = null;
   let approvalId: string | null = null;
+  let firstResponseSlaTimer: TicketLifecycleSlaTimer | null = null;
+  let slaBreach: TicketLifecycleSlaTimer | null = null;
   const signalState: {
     approvalResult: TicketLifecycleApprovalCompletedSignal | null;
     manualEscalation: TicketLifecycleManualEscalationSignal | null;
@@ -69,6 +74,9 @@ export async function ticketLifecycleWorkflow(
     manual_escalation_reason_code:
       signalState.manualEscalation?.reason_code ?? null,
     close_reason_code: signalState.closeRequest?.reason_code ?? null,
+    first_response_due_at: firstResponseSlaTimer?.due_at ?? null,
+    sla_breached_deadline: slaBreach?.deadline_type ?? null,
+    sla_breached_due_at: slaBreach?.due_at ?? null,
     triage_route: triage?.route ?? null,
   });
 
@@ -93,9 +101,13 @@ export async function ticketLifecycleWorkflow(
 
   phase = "creating_ticket";
   ticketResult = await activities.createOrUpdateTicket(input);
+  firstResponseSlaTimer = findSlaTimer(
+    ticketResult.sla_timers,
+    "first_response",
+  );
 
   if (ticketResult.created) {
-    await activities.emitDomainEvent({
+    await emitDomainEvent({
       event_type: "ticket_created",
       event_id: buildWorkflowEventId(input, "ticket-created"),
       tenant_id: input.tenant_id,
@@ -113,7 +125,7 @@ export async function ticketLifecycleWorkflow(
   });
 
   if (ticketResult.ticket.status !== triage.status) {
-    await activities.emitDomainEvent({
+    await emitDomainEvent({
       event_type: "ticket_state_transition",
       event_id: buildWorkflowEventId(input, "ticket-triaged"),
       tenant_id: input.tenant_id,
@@ -131,7 +143,7 @@ export async function ticketLifecycleWorkflow(
 
   if (triage.route === "manual_escalation") {
     phase = "manual_escalated";
-    await activities.recordAuditEvent({
+    await recordAuditEvent({
       tenant_id: input.tenant_id,
       ticket_id: input.ticket_id,
       correlation_id: input.correlation_id,
@@ -156,17 +168,48 @@ export async function ticketLifecycleWorkflow(
   });
   approvalId = approval.approval_id;
 
-  await condition(
+  const approvalWaitResult = await waitForApprovalSignalOrFirstResponseSla(
+    firstResponseSlaTimer,
     () =>
       signalState.approvalResult !== null ||
       signalState.manualEscalation !== null ||
       signalState.closeRequest !== null,
   );
 
-  if (signalState.manualEscalation !== null) {
+  if (approvalWaitResult === "sla_breached" && firstResponseSlaTimer !== null) {
+    slaBreach = firstResponseSlaTimer;
+    phase = "sla_breached";
+    await emitDomainEvent({
+      event_type: "ticket_sla_breached",
+      event_id: buildWorkflowEventId(input, "ticket-sla-first-response"),
+      tenant_id: input.tenant_id,
+      correlation_id: input.correlation_id,
+      causation_id: input.initial_message_id,
+      actor: workflowActor(),
+      ticket_id: input.ticket_id,
+      breached_deadline: firstResponseSlaTimer.deadline_type,
+      due_at: firstResponseSlaTimer.due_at,
+      metadata: {
+        source: "temporal_timer",
+        approval_id: approvalId,
+      },
+    });
+    await recordAuditEvent({
+      tenant_id: input.tenant_id,
+      ticket_id: input.ticket_id,
+      correlation_id: input.correlation_id,
+      action: "ticket.sla_breached",
+      actor: workflowActor(),
+      metadata: {
+        breached_deadline: firstResponseSlaTimer.deadline_type,
+        due_at: firstResponseSlaTimer.due_at,
+        approval_id: approvalId,
+      },
+    });
+  } else if (signalState.manualEscalation !== null) {
     const manualEscalation = signalState.manualEscalation;
     phase = "manual_escalated";
-    await activities.recordAuditEvent({
+    await recordAuditEvent({
       tenant_id: input.tenant_id,
       ticket_id: input.ticket_id,
       correlation_id: input.correlation_id,
@@ -184,7 +227,7 @@ export async function ticketLifecycleWorkflow(
   } else if (signalState.closeRequest !== null) {
     const closeRequest = signalState.closeRequest;
     phase = "closed";
-    await activities.recordAuditEvent({
+    await recordAuditEvent({
       tenant_id: input.tenant_id,
       ticket_id: input.ticket_id,
       correlation_id: input.correlation_id,
@@ -201,7 +244,7 @@ export async function ticketLifecycleWorkflow(
   } else if (signalState.approvalResult !== null) {
     const approvalResult = signalState.approvalResult;
     phase = "completed";
-    await activities.recordAuditEvent({
+    await recordAuditEvent({
       tenant_id: input.tenant_id,
       ticket_id: input.ticket_id,
       correlation_id: input.correlation_id,
@@ -239,6 +282,64 @@ async function recordReceivedMessage(
   });
 }
 
+async function waitForApprovalSignalOrFirstResponseSla(
+  timer: TicketLifecycleSlaTimer | null,
+  signalReceived: () => boolean,
+): Promise<"signal_received" | "sla_breached"> {
+  if (signalReceived()) {
+    return "signal_received";
+  }
+
+  if (timer === null) {
+    await condition(signalReceived);
+    return "signal_received";
+  }
+
+  if (!Number.isFinite(timer.timer_ms)) {
+    throw new Error(`Invalid SLA timer duration: ${timer.timer_ms}`);
+  }
+
+  if (timer.timer_ms <= 0) {
+    return "sla_breached";
+  }
+
+  const timerMs = Math.trunc(timer.timer_ms);
+  const signaledBeforeDeadline = await condition(signalReceived, timerMs);
+
+  return signaledBeforeDeadline ? "signal_received" : "sla_breached";
+}
+
+function findSlaTimer(
+  timers: readonly TicketLifecycleSlaTimer[],
+  deadlineType: TicketLifecycleSlaTimer["deadline_type"],
+): TicketLifecycleSlaTimer | null {
+  return timers.find((timer) => timer.deadline_type === deadlineType) ?? null;
+}
+
+async function emitDomainEvent(
+  input: Parameters<TicketLifecycleActivities["emitDomainEvent"]>[0],
+): Promise<void> {
+  await activities.emitDomainEvent.executeWithOptions(
+    {
+      startToCloseTimeout: "30 seconds",
+      retry: TICKET_LIFECYCLE_SIDE_EFFECT_ACTIVITY_RETRY_POLICY,
+    },
+    [input],
+  );
+}
+
+async function recordAuditEvent(
+  input: Parameters<TicketLifecycleActivities["recordAuditEvent"]>[0],
+): Promise<void> {
+  await activities.recordAuditEvent.executeWithOptions(
+    {
+      startToCloseTimeout: "30 seconds",
+      retry: TICKET_LIFECYCLE_SIDE_EFFECT_ACTIVITY_RETRY_POLICY,
+    },
+    [input],
+  );
+}
+
 function workflowActor() {
   return {
     type: "system" as const,
@@ -271,5 +372,8 @@ function resultFromState(
     approval_status: state.approval_status,
     manual_escalation_reason_code: state.manual_escalation_reason_code,
     close_reason_code: state.close_reason_code,
+    first_response_due_at: state.first_response_due_at,
+    sla_breached_deadline: state.sla_breached_deadline,
+    sla_breached_due_at: state.sla_breached_due_at,
   };
 }

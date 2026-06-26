@@ -31,6 +31,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
 
   it("creates and triages a ticket, then waits for approval completion", async () => {
     const calls: ActivityCall[] = [];
+    let workflowHistory: unknown = null;
     const taskQueue = `ticket-lifecycle-${randomUUID()}`;
     const worker = await Worker.create({
       connection: testEnv.nativeConnection,
@@ -40,11 +41,12 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
     });
 
     const result = await worker.runUntil(async () => {
+      const workflowId = `ticket-lifecycle-${randomUUID()}`;
       const handle = await testEnv.client.workflow.start(
         ticketLifecycleWorkflow,
         {
           taskQueue,
-          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          workflowId,
           args: [makeWorkflowInput()],
         },
       );
@@ -65,7 +67,9 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
         notes: null,
       });
 
-      return await handle.result();
+      const workflowResult = await handle.result();
+      workflowHistory = await handle.fetchHistory();
+      return workflowResult;
     });
 
     expect(result).toEqual({
@@ -77,6 +81,9 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       approval_status: "approved",
       manual_escalation_reason_code: null,
       close_reason_code: null,
+      first_response_due_at: null,
+      sla_breached_deadline: null,
+      sla_breached_due_at: null,
     });
     expect(calls.map((call) => call.name)).toEqual([
       "createOrUpdateTicket",
@@ -86,6 +93,18 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "createApproval",
       "recordAuditEvent:approval.completed",
     ]);
+    expect(workflowHistory).not.toBeNull();
+    if (workflowHistory === null) {
+      throw new Error("Expected workflow history to be fetched");
+    }
+    await expect(
+      Worker.runReplayHistory(
+        {
+          workflowsPath: workflowsPath(),
+        },
+        workflowHistory,
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("deduplicates repeated inbound message signals", async () => {
@@ -154,6 +173,58 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
         .map((call) => call.message_id),
     ).toEqual(["msg_followup", "msg_followup_2"]);
   });
+
+  it("fires the first-response SLA timer while waiting for approval", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls, {
+        firstResponseTimer: {
+          due_at: "2026-06-26T00:15:00.000Z",
+          timer_ms: 1,
+        },
+      }),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      return await handle.result();
+    });
+
+    expect(result).toEqual({
+      tenant_id: "ten_test",
+      ticket_id: "ticket_test",
+      phase: "sla_breached",
+      processed_message_ids: ["msg_initial"],
+      approval_id: "apr_test",
+      approval_status: null,
+      manual_escalation_reason_code: null,
+      close_reason_code: null,
+      first_response_due_at: "2026-06-26T00:15:00.000Z",
+      sla_breached_deadline: "first_response",
+      sla_breached_due_at: "2026-06-26T00:15:00.000Z",
+    });
+    expect(calls.map((call) => call.name)).toEqual([
+      "createOrUpdateTicket",
+      "emitDomainEvent:ticket_created",
+      "runInitialTriage",
+      "emitDomainEvent:ticket_state_transition",
+      "createApproval",
+      "emitDomainEvent:ticket_sla_breached",
+      "recordAuditEvent:ticket.sla_breached",
+    ]);
+  });
 });
 
 interface ActivityCall {
@@ -165,10 +236,21 @@ interface WorkflowHandleForTest {
   query(name: "ticket_lifecycle_state"): Promise<TicketLifecycleWorkflowState>;
 }
 
-function makeActivities(calls: ActivityCall[]): TicketLifecycleActivities {
+interface ActivityFixtureOptions {
+  readonly firstResponseTimer?: {
+    readonly due_at: string;
+    readonly timer_ms: number;
+  };
+}
+
+function makeActivities(
+  calls: ActivityCall[],
+  options: ActivityFixtureOptions = {},
+): TicketLifecycleActivities {
   return {
     async createOrUpdateTicket() {
       calls.push({ name: "createOrUpdateTicket" });
+      const firstResponseTimer = options.firstResponseTimer ?? null;
       return {
         ticket: {
           ticket_id: "ticket_test",
@@ -179,10 +261,24 @@ function makeActivities(calls: ActivityCall[]): TicketLifecycleActivities {
           automation_mode: "human_approve",
           assigned_queue: null,
           assigned_user_id: null,
+          sla_policy_id: firstResponseTimer === null ? null : "sla_test",
           opened_at: "2026-06-26T00:00:00.000Z",
+          first_response_due_at: firstResponseTimer?.due_at ?? null,
+          next_response_due_at: null,
+          resolution_due_at: null,
         },
         created: true,
         previous_status: null,
+        sla_timers:
+          firstResponseTimer === null
+            ? []
+            : [
+                {
+                  deadline_type: "first_response",
+                  due_at: firstResponseTimer.due_at,
+                  timer_ms: firstResponseTimer.timer_ms,
+                },
+              ],
       };
     },
     async runInitialTriage() {
