@@ -7,6 +7,7 @@ import {
 } from "@nats-io/jetstream";
 import {
   buildDomainEventSubject,
+  type SupportEventErrorRecord,
   type DomainEventEnvelope,
 } from "@support/shared-schemas";
 import { describe, expect, it, vi } from "vitest";
@@ -26,6 +27,10 @@ import {
   type JetStreamPullConsumer,
 } from "./event-consumer.js";
 import { SUPPORT_EVENTS_STREAM, SUPPORT_EVENTS_SUBJECT } from "./event-bus.js";
+import type {
+  SupportEventErrorPublishReceipt,
+  SupportEventErrorPublisher,
+} from "./event-errors.js";
 
 describe("support event consumer config", () => {
   it("builds durable pull consumer create config", () => {
@@ -272,6 +277,46 @@ describe("processDomainEventMessage", () => {
     expect(message.terms).toEqual(["invalid domain event envelope"]);
   });
 
+  it("publishes invalid payloads to the event error stream before terming", async () => {
+    const invalidPayload = {
+      ...makeEvent(),
+      payload: {
+        ticket_id: "ticket_test",
+        status: "new",
+      },
+    };
+    const message = new FakeJetStreamDomainEventMessage(invalidPayload);
+    const errorPublisher = new FakeSupportEventErrorPublisher();
+
+    const result = await processDomainEventMessage(message, {
+      consumerName: "ticket_projection",
+      idempotencyStore: new InMemoryDomainEventConsumerIdempotencyStore(),
+      handler: vi.fn(),
+      errorPublisher,
+      now: () => new Date("2026-06-26T00:00:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      status: "invalid",
+      errorRecord: {
+        error_kind: "invalid_envelope",
+        event_id: "evt_test",
+        event_name: "support.ticket.created.v1",
+        tenant_id: "ten_test",
+        will_retry: false,
+      },
+    });
+    expect(errorPublisher.records).toHaveLength(1);
+    expect(errorPublisher.records[0]).toMatchObject({
+      error_id:
+        "event_error:ticket_projection:SUPPORT_EVENTS:7:invalid_envelope:unknown:evt_test",
+      occurred_at: "2026-06-26T00:00:00.000Z",
+      original_subject: buildDomainEventSubject(makeEvent()),
+      delivery_count: null,
+    });
+    expect(message.terms).toEqual(["invalid domain event envelope"]);
+  });
+
   it("terms events whose payload subject does not match the NATS subject", async () => {
     const event = makeEvent();
     const message = new FakeJetStreamDomainEventMessage(
@@ -290,6 +335,72 @@ describe("processDomainEventMessage", () => {
     expect(result.status).toBe("invalid");
     expect(handler).not.toHaveBeenCalled();
     expect(message.terms).toEqual(["invalid domain event envelope"]);
+  });
+
+  it("publishes retryable handler failures to the event error stream", async () => {
+    const event = makeEvent();
+    const error = new Error("handler failed");
+    const message = new FakeJetStreamDomainEventMessage(
+      event,
+      buildDomainEventSubject(event),
+      2,
+    );
+    const errorPublisher = new FakeSupportEventErrorPublisher();
+
+    const result = await processDomainEventMessage(message, {
+      consumerName: "ticket_projection",
+      idempotencyStore: new InMemoryDomainEventConsumerIdempotencyStore(),
+      handler: vi.fn().mockRejectedValue(error),
+      errorPublisher,
+      now: () => new Date("2026-06-26T00:00:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      deadLettered: false,
+      errorRecord: {
+        error_kind: "handler_failed",
+        event_id: event.event_id,
+        delivery_count: 2,
+        will_retry: true,
+        error_message: "handler failed",
+      },
+    });
+    expect(errorPublisher.records).toHaveLength(1);
+    expect(message.naks).toEqual([SUPPORT_EVENT_CONSUMER_NAK_DELAY_MS]);
+    expect(message.terms).toEqual([]);
+  });
+
+  it("dead-letters handler failures after max deliveries", async () => {
+    const event = makeEvent();
+    const message = new FakeJetStreamDomainEventMessage(
+      event,
+      buildDomainEventSubject(event),
+      SUPPORT_EVENT_CONSUMER_MAX_DELIVER,
+    );
+    const errorPublisher = new FakeSupportEventErrorPublisher();
+
+    const result = await processDomainEventMessage(message, {
+      consumerName: "ticket_projection",
+      idempotencyStore: new InMemoryDomainEventConsumerIdempotencyStore(),
+      handler: vi.fn().mockRejectedValue(new Error("handler failed")),
+      errorPublisher,
+      now: () => new Date("2026-06-26T00:00:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      deadLettered: true,
+      errorRecord: {
+        delivery_count: SUPPORT_EVENT_CONSUMER_MAX_DELIVER,
+        will_retry: false,
+      },
+    });
+    expect(message.acks).toBe(0);
+    expect(message.naks).toEqual([]);
+    expect(message.terms).toEqual([
+      "domain event handler failed after max deliveries",
+    ]);
   });
 });
 
@@ -331,6 +442,7 @@ describe("NatsJetStreamDomainEventConsumer", () => {
 class FakeJetStreamDomainEventMessage implements JetStreamDomainEventMessage {
   readonly seq = 7;
   readonly redelivered = false;
+  readonly deliveryCount?: number;
   acks = 0;
   readonly naks: number[] = [];
   readonly terms: string[] = [];
@@ -338,7 +450,10 @@ class FakeJetStreamDomainEventMessage implements JetStreamDomainEventMessage {
   constructor(
     private readonly payload: unknown,
     readonly subject = buildDomainEventSubject(payload as DomainEventEnvelope),
-  ) {}
+    deliveryCount?: number,
+  ) {
+    this.deliveryCount = deliveryCount;
+  }
 
   json<T = unknown>(): T {
     return this.payload as T;
@@ -354,6 +469,24 @@ class FakeJetStreamDomainEventMessage implements JetStreamDomainEventMessage {
 
   term(reason?: string): void {
     this.terms.push(reason ?? "");
+  }
+}
+
+class FakeSupportEventErrorPublisher implements SupportEventErrorPublisher {
+  readonly records: SupportEventErrorRecord[] = [];
+
+  async publish(
+    record: SupportEventErrorRecord,
+  ): Promise<SupportEventErrorPublishReceipt> {
+    this.records.push(record);
+
+    return {
+      error_id: record.error_id,
+      subject: "support.events.errors.test",
+      stream: "SUPPORT_EVENT_ERRORS",
+      sequence: 1,
+      duplicate: false,
+    };
   }
 }
 
@@ -392,7 +525,14 @@ function makeEvent(): DomainEventEnvelope {
     },
     payload: {
       ticket_id: "ticket_test",
+      conversation_id: "cnv_test",
+      customer_id: "cus_test",
       status: "new",
+      priority: "p2",
+      automation_mode: "human_approve",
+      assigned_queue: null,
+      assigned_user_id: null,
+      opened_at: "2026-06-25T00:00:00.000Z",
     },
   };
 }
