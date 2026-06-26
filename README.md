@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, and the first Milestone 5 Temporal ticket workflow shell. Full business workflow implementation is still pending.
+Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, and the Milestone 5 Temporal ticket workflow shell with first-response SLA timer behavior. Full business workflow implementation is still pending.
 
 ## Start Here
 
@@ -104,7 +104,7 @@ Implemented contracts:
 - Event-name-specific payload validation for v1 domain events, including message received, ticket created, ticket state transition, ticket priority/assignment/SLA, AI run, tool call, approval, message sent, and QA review events.
 - Tenant-aware NATS subject convention: `support.events.tenant.{tenant_id}.{domain}.{fact}.v1`.
 - Worker-side `NatsJetStreamDomainEventPublisher` scaffold that validates envelopes, JSON-encodes events, and uses `event_id` as the JetStream message ID.
-- Worker-side emit helpers in `packages/workers/src/domain-events.ts` for message received, ticket created, and ticket state transition domain events.
+- Worker-side emit helpers in `packages/workers/src/domain-events.ts` for message received, ticket created, ticket state transition, and ticket SLA breach domain events.
 - Worker-side NATS event bus wiring in `packages/workers/src/event-bus.ts`, which loads `NATS_URL`, connects through the official NATS.js v3 Node transport, ensures the `SUPPORT_EVENTS` stream with subjects `support.events.tenant.*.*.*.v1`, ensures the `SUPPORT_EVENT_ERRORS` stream with subjects `support.events.errors.>`, and exposes publisher/error-publisher runtime helpers.
 - Worker-side consumer base in `packages/workers/src/event-consumer.ts`, including durable pull-consumer config/setup helpers, payload and subject validation, ack/nak/term handling, structured error-record publishing for invalid or failed messages, and storage-agnostic event idempotency with an in-memory implementation for deterministic tests.
 - Local NATS config in `infra/nats/server.conf` enables JetStream with a persisted Compose volume.
@@ -118,9 +118,9 @@ Implemented contracts:
 
 - Temporal TypeScript SDK dependencies are installed in `@support/workers`.
 - `packages/workers/src/temporal-worker.ts` loads Temporal worker config from `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_TASK_QUEUE`, defaulting to local Compose Temporal and the `support-ticket-lifecycle` task queue.
-- `packages/workers/src/workflows/ticket-lifecycle-workflow.ts` defines the deterministic ticket lifecycle shell. It creates or loads ticket state through an activity, emits workflow-owned ticket-created and ticket-triaged domain events through activities, runs a triage activity, creates an approval for the human-approval route, waits for approval/manual-escalation/close signals, and deduplicates repeated inbound message signals.
-- `packages/workers/src/activities/ticket-lifecycle-activities.ts` provides an activity adapter that reuses the Milestone 4 domain event emit helpers. DB mutation, AI runtime, approval creation, inbound persistence, audit writes, SLA timers, and outbound sends are still explicit activity boundaries for future implementation.
-- Default unit coverage stays offline. The opt-in workflow test runs against local Temporal with `RUN_TEMPORAL_WORKFLOW_TESTS=true` via `pnpm --filter @support/workers test:workflow`.
+- `packages/workers/src/workflows/ticket-lifecycle-workflow.ts` defines the deterministic ticket lifecycle shell. It creates or loads ticket state through an activity, captures activity-provided first-response SLA timer data, emits workflow-owned ticket-created and ticket-triaged domain events through activities, runs a triage activity, creates an approval for the human-approval route, waits for approval/manual-escalation/close signals or a first-response SLA breach, and deduplicates repeated inbound message signals.
+- `packages/workers/src/activities/ticket-lifecycle-activities.ts` provides an activity adapter that reuses the Milestone 4 domain event emit helpers for ticket-created, ticket-transition, and ticket-SLA-breached events. DB mutation, AI runtime, approval persistence, inbound persistence, audit persistence, next-response/resolution SLA timers, and outbound sends are still explicit activity boundaries for future implementation.
+- Default unit coverage stays offline. The opt-in workflow test runs against local Temporal with `RUN_TEMPORAL_WORKFLOW_TESTS=true` via `pnpm --filter @support/workers test:workflow` and covers approval wait/resume, inbound signal dedupe, first-response SLA timer breach, and workflow history replay.
 
 Current CRUD skeleton endpoints still do not start or signal workflows.
 

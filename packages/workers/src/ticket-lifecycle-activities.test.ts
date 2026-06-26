@@ -52,8 +52,25 @@ describe("ticket lifecycle activities", () => {
         classifier: "baseline",
       },
     });
+    await activities.emitDomainEvent({
+      event_type: "ticket_sla_breached",
+      event_id: "evt_ticket_sla_breached",
+      tenant_id: "ten_test",
+      correlation_id: "corr_test",
+      causation_id: "msg_initial",
+      actor: {
+        type: "system",
+        id: "workflow",
+      },
+      ticket_id: "ticket_test",
+      breached_deadline: "first_response",
+      due_at: "2026-06-26T00:15:00.000Z",
+      metadata: {
+        source: "temporal_timer",
+      },
+    });
 
-    expect(publisher.events).toHaveLength(2);
+    expect(publisher.events).toHaveLength(3);
     expect(publisher.events).toEqual([
       expect.objectContaining({
         event_id: "evt_ticket_created",
@@ -71,6 +88,15 @@ describe("ticket lifecycle activities", () => {
         payload: expect.objectContaining({
           from_status: "new",
           to_status: "triaged",
+        }),
+      }),
+      expect.objectContaining({
+        event_id: "evt_ticket_sla_breached",
+        event_name: "support.ticket.sla_breached.v1",
+        occurred_at: "2026-06-26T00:00:00.000Z",
+        payload: expect.objectContaining({
+          breached_deadline: "first_response",
+          due_at: "2026-06-26T00:15:00.000Z",
         }),
       }),
     ]);
@@ -105,6 +131,7 @@ function makeActivityImplementations(): Omit<
         ticket: makeTicketSnapshot(),
         created: true,
         previous_status: null,
+        sla_timers: [],
       };
     },
     async runInitialTriage() {
@@ -136,6 +163,10 @@ function makeTicketSnapshot() {
     automation_mode: "human_approve" as const,
     assigned_queue: null,
     assigned_user_id: null,
+    sla_policy_id: null,
     opened_at: "2026-06-26T00:00:00.000Z",
+    first_response_due_at: null,
+    next_response_due_at: null,
+    resolution_due_at: null,
   };
 }

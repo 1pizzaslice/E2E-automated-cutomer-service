@@ -1,5 +1,6 @@
 import {
   emitTicketCreatedEvent,
+  emitTicketSlaBreachedEvent,
   emitTicketStateTransitionEvent,
 } from "../domain-events.js";
 import type { DomainEventPublisher } from "../event-publisher.js";
@@ -66,6 +67,24 @@ export function createTicketLifecycleActivities(
             assigned_queue: input.ticket.assigned_queue,
             assigned_user_id: input.ticket.assigned_user_id,
             opened_at: input.ticket.opened_at,
+          },
+        });
+        return;
+      }
+
+      if (input.event_type === "ticket_sla_breached") {
+        await emitTicketSlaBreachedEvent(dependencies.domainEventPublisher, {
+          event_id: input.event_id,
+          tenant_id: input.tenant_id,
+          correlation_id: input.correlation_id,
+          causation_id: input.causation_id,
+          occurred_at: occurredAt,
+          actor: input.actor,
+          payload: {
+            ticket_id: input.ticket_id,
+            breached_deadline: input.breached_deadline,
+            due_at: input.due_at,
+            metadata: input.metadata,
           },
         });
         return;

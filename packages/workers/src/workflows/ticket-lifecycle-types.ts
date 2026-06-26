@@ -8,6 +8,28 @@ import type {
 
 export const TICKET_LIFECYCLE_TASK_QUEUE = "support-ticket-lifecycle";
 export const TICKET_LIFECYCLE_WORKFLOW_TYPE = "ticketLifecycleWorkflow";
+export const TICKET_LIFECYCLE_DEFAULT_ACTIVITY_RETRY_POLICY = {
+  initialInterval: "1 second",
+  backoffCoefficient: 2,
+  maximumInterval: "30 seconds",
+  maximumAttempts: 3,
+  nonRetryableErrorTypes: [
+    "ValidationError",
+    "NonRetryableActivityError",
+    "TenantAccessDenied",
+  ],
+};
+export const TICKET_LIFECYCLE_SIDE_EFFECT_ACTIVITY_RETRY_POLICY = {
+  initialInterval: "1 second",
+  backoffCoefficient: 2,
+  maximumInterval: "1 minute",
+  maximumAttempts: 5,
+  nonRetryableErrorTypes: [
+    "ValidationError",
+    "NonRetryableActivityError",
+    "TenantAccessDenied",
+  ],
+};
 
 export interface TicketLifecycleWorkflowInput {
   readonly tenant_id: string;
@@ -51,9 +73,15 @@ export type TicketLifecycleWorkflowPhase =
   | "creating_ticket"
   | "triaging"
   | "waiting_for_approval"
+  | "sla_breached"
   | "manual_escalated"
   | "closed"
   | "completed";
+
+export type TicketLifecycleSlaDeadline =
+  | "first_response"
+  | "next_response"
+  | "resolution";
 
 export interface TicketLifecycleTicketSnapshot {
   readonly ticket_id: string;
@@ -64,7 +92,17 @@ export interface TicketLifecycleTicketSnapshot {
   readonly automation_mode: AutomationMode;
   readonly assigned_queue: string | null;
   readonly assigned_user_id: string | null;
+  readonly sla_policy_id: string | null;
   readonly opened_at: string;
+  readonly first_response_due_at: string | null;
+  readonly next_response_due_at: string | null;
+  readonly resolution_due_at: string | null;
+}
+
+export interface TicketLifecycleSlaTimer {
+  readonly deadline_type: TicketLifecycleSlaDeadline;
+  readonly due_at: string;
+  readonly timer_ms: number;
 }
 
 export interface CreateOrUpdateTicketActivityInput extends TicketLifecycleWorkflowInput {}
@@ -73,6 +111,7 @@ export interface CreateOrUpdateTicketActivityResult {
   readonly ticket: TicketLifecycleTicketSnapshot;
   readonly created: boolean;
   readonly previous_status: TicketStatus | null;
+  readonly sla_timers: readonly TicketLifecycleSlaTimer[];
 }
 
 export interface RunInitialTriageActivityInput {
@@ -118,7 +157,8 @@ export interface RecordAuditEventActivityInput {
 
 export type EmitTicketLifecycleDomainEventActivityInput =
   | EmitTicketCreatedDomainEventInput
-  | EmitTicketStateTransitionDomainEventInput;
+  | EmitTicketStateTransitionDomainEventInput
+  | EmitTicketSlaBreachedDomainEventInput;
 
 export interface EmitTicketCreatedDomainEventInput {
   readonly event_type: "ticket_created";
@@ -145,6 +185,19 @@ export interface EmitTicketStateTransitionDomainEventInput {
   readonly metadata: Record<string, unknown>;
 }
 
+export interface EmitTicketSlaBreachedDomainEventInput {
+  readonly event_type: "ticket_sla_breached";
+  readonly event_id: string;
+  readonly tenant_id: string;
+  readonly correlation_id: string;
+  readonly causation_id: string;
+  readonly actor: DomainEventActor;
+  readonly ticket_id: string;
+  readonly breached_deadline: TicketLifecycleSlaDeadline;
+  readonly due_at: string;
+  readonly metadata: Record<string, unknown>;
+}
+
 export interface TicketLifecycleWorkflowResult {
   readonly tenant_id: string;
   readonly ticket_id: string;
@@ -156,6 +209,9 @@ export interface TicketLifecycleWorkflowResult {
     | null;
   readonly manual_escalation_reason_code: string | null;
   readonly close_reason_code: string | null;
+  readonly first_response_due_at: string | null;
+  readonly sla_breached_deadline: TicketLifecycleSlaDeadline | null;
+  readonly sla_breached_due_at: string | null;
 }
 
 export interface TicketLifecycleWorkflowState extends TicketLifecycleWorkflowResult {

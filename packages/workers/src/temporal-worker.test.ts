@@ -5,7 +5,11 @@ import {
   loadTemporalWorkerConfig,
   ticketLifecycleWorkflowsPath,
 } from "./temporal-worker.js";
-import { TICKET_LIFECYCLE_TASK_QUEUE } from "./workflows/ticket-lifecycle-types.js";
+import {
+  TICKET_LIFECYCLE_DEFAULT_ACTIVITY_RETRY_POLICY,
+  TICKET_LIFECYCLE_SIDE_EFFECT_ACTIVITY_RETRY_POLICY,
+  TICKET_LIFECYCLE_TASK_QUEUE,
+} from "./workflows/ticket-lifecycle-types.js";
 
 describe("temporal worker scaffold", () => {
   it("loads local Temporal defaults", () => {
@@ -34,5 +38,30 @@ describe("temporal worker scaffold", () => {
     expect(ticketLifecycleWorkflowsPath()).toMatch(
       /workflows\/ticket-lifecycle-workflow\.js$/,
     );
+  });
+
+  it("keeps ticket lifecycle activity retry policies explicit", () => {
+    expect(TICKET_LIFECYCLE_DEFAULT_ACTIVITY_RETRY_POLICY).toEqual({
+      initialInterval: "1 second",
+      backoffCoefficient: 2,
+      maximumInterval: "30 seconds",
+      maximumAttempts: 3,
+      nonRetryableErrorTypes: [
+        "ValidationError",
+        "NonRetryableActivityError",
+        "TenantAccessDenied",
+      ],
+    });
+    expect(TICKET_LIFECYCLE_SIDE_EFFECT_ACTIVITY_RETRY_POLICY).toEqual({
+      initialInterval: "1 second",
+      backoffCoefficient: 2,
+      maximumInterval: "1 minute",
+      maximumAttempts: 5,
+      nonRetryableErrorTypes: [
+        "ValidationError",
+        "NonRetryableActivityError",
+        "TenantAccessDenied",
+      ],
+    });
   });
 });
