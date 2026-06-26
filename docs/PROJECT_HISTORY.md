@@ -9,12 +9,13 @@ This file records what has happened so far so a new human or AI agent can unders
 - GitHub repo cloned at `/home/anish/CODE01/STARTUPS/E2E-automated-cutomer-service`.
 - Backend scaffold has a local `main` commit.
 - No frontend has been implemented.
-- No business workflows have been implemented yet.
+- No full business workflows have been implemented yet. The first Temporal ticket lifecycle workflow shell exists, but DB mutation, AI graph calls, SLA timers, outbound sends, and API start/signal wiring remain pending.
 - Milestone 0 documentation harness is complete.
 - Milestone 1 backend scaffold is complete and locally verified.
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
 - Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
 - Milestone 4 event bus foundation is complete with shared v1 domain event envelope and payload schemas, a tenant-aware NATS subject convention, worker-side NATS JetStream publisher/consumer base and connection wiring, explicit domain/error stream config, idempotent consumer handling, structured consumer error records, workflow-ready event emit helpers, and live NATS publish/consume integration coverage. CRUD skeleton endpoints still do not publish events.
+- Milestone 5 Temporal workflow foundation has started with Temporal TypeScript SDK dependencies, worker config/runtime scaffolding, a deterministic ticket lifecycle workflow shell, activity contracts/placeholders, a domain-event activity adapter that reuses the Milestone 4 emit helpers, offline unit coverage, and an opt-in live Temporal workflow test.
 - The engineering harness now includes explicit branch and handoff guardrails in the active reading path plus `pnpm harness:preflight` and `pnpm harness:handoff` checks.
 
 ## Product Direction
@@ -173,6 +174,17 @@ Latest Milestone 4 event bus foundation:
 - Added shared event payload/error tests, worker event emit helper tests, worker event bus/error publisher unit tests, consumer idempotency/error strategy tests, and a live NATS publish/consume integration test that verifies domain event duplicate detection plus structured event error publish/consume behavior.
 - Left current CRUD skeleton endpoints disconnected from event publication; the emit helpers are intended for future workflow/service-owned event side effects.
 
+Latest Milestone 5 Temporal workflow foundation:
+
+- Added Temporal TypeScript SDK dependencies to `@support/workers` and approved the required pnpm build scripts for `@swc/core` and `protobufjs`.
+- Added `packages/workers/src/temporal-worker.ts` for Temporal worker config/runtime scaffolding with local defaults for `localhost:7233`, namespace `default`, and task queue `support-ticket-lifecycle`.
+- Added `packages/workers/src/workflows/ticket-lifecycle-types.ts` and `packages/workers/src/workflows/ticket-lifecycle-workflow.ts`.
+- The first workflow shell defines message/customer-reply, approval-completed, manual-escalation, and close-request signals, a state query, ticket create/load and triage activity calls, workflow-owned domain event emission activity calls, approval waiting/resume behavior, audit activity calls, and inbound message signal dedupe.
+- Added `packages/workers/src/activities/ticket-lifecycle-activities.ts`, whose `emitDomainEvent` activity adapter reuses `emitTicketCreatedEvent` and `emitTicketStateTransitionEvent` through an injected `DomainEventPublisher`.
+- Added offline unit coverage for the activity adapter and Temporal worker config.
+- Added `pnpm --filter @support/workers test:workflow`, an opt-in live Temporal workflow test that runs against local Compose Temporal and covers approval wait/resume plus duplicate inbound message signal handling.
+- CRUD skeleton endpoints still do not start or signal workflows.
+
 Latest harness hardening:
 
 - Promoted the short-lived branch rule from the deeper harness/ADR docs into `AGENTS.md`, `TODO.md`, and development rules.
@@ -202,6 +214,7 @@ The following passed locally in the cloned repo:
 - `pnpm --filter @support/shared-schemas test`
 - `pnpm --filter @support/shared-schemas typecheck`
 - `DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration`
+- `TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow`
 
 ## Current Architecture Follow-Ups
 

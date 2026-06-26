@@ -371,6 +371,7 @@ Current command meanings:
 - `pnpm typecheck`: TypeScript typechecking across packages.
 - `pnpm test`: TypeScript package tests plus Python scaffold tests.
 - `pnpm test:integration`: opt-in live DB/RLS, API, and worker event bus integration tests. Currently requires `DATABASE_URL` for PostgreSQL and uses `NATS_URL` for NATS, for example `DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration` after `pnpm infra:up`.
+- `TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow`: opt-in live Temporal workflow test against the local Compose Temporal service. Keep this explicit until CI starts Temporal.
 - `pnpm test:py`: Python stdlib `unittest` discovery under `ai/`.
 - `pnpm dev`: API service in watch mode.
 

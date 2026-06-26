@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, and Milestone 4 event bus foundation with typed v1 domain event payload schemas, explicit NATS JetStream domain/error stream setup, worker-side publisher wiring, worker-side emit helpers, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. No business workflow implementation yet.
+Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, and the first Milestone 5 Temporal ticket workflow shell. Full business workflow implementation is still pending.
 
 ## Start Here
 
@@ -33,6 +33,7 @@ pnpm lint
 pnpm format:check
 pnpm typecheck
 pnpm test
+pnpm --filter @support/workers test:workflow
 pnpm build
 pnpm test:integration
 pnpm db:migrate
@@ -77,6 +78,12 @@ Live integration tests require the local PostgreSQL and NATS services. They cove
 DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://localhost:4222 pnpm test:integration
 ```
 
+The live Temporal workflow test is explicit because it requires a running Temporal service:
+
+```bash
+TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow
+```
+
 Services:
 
 - API: `http://localhost:3000`
@@ -104,6 +111,18 @@ Implemented contracts:
 - Live worker integration coverage publishes, consumes, and duplicate-detects a tenant-scoped domain event against local NATS, and publishes/consumes a structured event error record.
 
 Current CRUD skeleton endpoints do not publish events. The emit helpers are ready for future Temporal workflow/service-owned side effects.
+
+## Current Temporal Workflow Foundation
+
+Implemented contracts:
+
+- Temporal TypeScript SDK dependencies are installed in `@support/workers`.
+- `packages/workers/src/temporal-worker.ts` loads Temporal worker config from `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_TASK_QUEUE`, defaulting to local Compose Temporal and the `support-ticket-lifecycle` task queue.
+- `packages/workers/src/workflows/ticket-lifecycle-workflow.ts` defines the deterministic ticket lifecycle shell. It creates or loads ticket state through an activity, emits workflow-owned ticket-created and ticket-triaged domain events through activities, runs a triage activity, creates an approval for the human-approval route, waits for approval/manual-escalation/close signals, and deduplicates repeated inbound message signals.
+- `packages/workers/src/activities/ticket-lifecycle-activities.ts` provides an activity adapter that reuses the Milestone 4 domain event emit helpers. DB mutation, AI runtime, approval creation, inbound persistence, audit writes, SLA timers, and outbound sends are still explicit activity boundaries for future implementation.
+- Default unit coverage stays offline. The opt-in workflow test runs against local Temporal with `RUN_TEMPORAL_WORKFLOW_TESTS=true` via `pnpm --filter @support/workers test:workflow`.
+
+Current CRUD skeleton endpoints still do not start or signal workflows.
 
 ## Current API Skeleton
 

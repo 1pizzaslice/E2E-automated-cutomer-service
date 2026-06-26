@@ -1064,6 +1064,17 @@ Workflow outline:
 9. Update ticket state.
 10. Schedule follow-up or QA.
 
+Current implementation:
+
+- `packages/workers/src/workflows/ticket-lifecycle-types.ts` defines the first ticket lifecycle workflow input, signal, activity, event-emission, result, and query-state contracts.
+- `packages/workers/src/workflows/ticket-lifecycle-workflow.ts` defines `ticketLifecycleWorkflow` and the `message_received`, `customer_replied`, `approval_completed`, `manual_escalation_requested`, and `close_requested` signals plus the `ticket_lifecycle_state` query.
+- The workflow definition is intentionally deterministic: it does not import Node APIs, NATS clients, DB clients, schema validators, or AI/runtime code; all side effects run through Temporal activities.
+- The current workflow shell calls `createOrUpdateTicket`, emits ticket-created and ticket-triaged domain events through `emitDomainEvent`, runs `runInitialTriage`, creates a pending approval for the human-approval route, waits for approval/manual-escalation/close signals, records audit through `recordAuditEvent`, and deduplicates repeated inbound message/customer-reply signals by `message_id`.
+- `packages/workers/src/activities/ticket-lifecycle-activities.ts` provides the first activity adapter for `emitDomainEvent`; it reuses `emitTicketCreatedEvent` and `emitTicketStateTransitionEvent` from the Milestone 4 domain-event helpers through an injected `DomainEventPublisher`.
+- `packages/workers/src/temporal-worker.ts` provides worker config/runtime scaffolding for local Temporal at `localhost:7233`, namespace `default`, and task queue `support-ticket-lifecycle`.
+- API CRUD endpoints still do not start or signal workflows. Inbound channel intake and approval action endpoints will own start/signal calls in later milestones.
+- Ticket DB mutation, AI graph execution, approval persistence, audit persistence, SLA timers, outbound sends, and retry/idempotency persistence are activity contracts/placeholders only in this slice.
+
 ### 19.2 KbIngestionWorkflow
 
 Inputs:

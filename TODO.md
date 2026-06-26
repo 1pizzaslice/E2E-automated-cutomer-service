@@ -6,9 +6,9 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage.
-- Current milestone: Milestone 4 - event bus foundation is complete; Milestone 5 Temporal workflow foundation is next.
-- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope/payload schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/domain/error stream setup wiring, worker-side NATS JetStream event emit helpers, worker-side NATS JetStream consumer base with storage-agnostic idempotency/error handling, local NATS JetStream config, live NATS publish/consume integration coverage, and session harness preflight/handoff checks. No business workflow implementation yet.
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation has started with the first deterministic ticket workflow shell.
+- Current milestone: Milestone 5 - Temporal workflow foundation is in progress.
+- Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope/payload schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/domain/error stream setup wiring, worker-side NATS JetStream event emit helpers, worker-side NATS JetStream consumer base with storage-agnostic idempotency/error handling, local NATS JetStream config, live NATS publish/consume integration coverage, Temporal worker config/runtime scaffold, deterministic ticket lifecycle workflow shell, workflow activity contracts/placeholders, workflow-owned domain event emission activity adapter, opt-in live Temporal workflow test coverage, and session harness preflight/handoff checks. Full business workflow implementation is still pending.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
 ## Active Harness Guardrails
@@ -23,12 +23,23 @@ This file is the cross-session source of truth for what has been done, what is n
 
 The next implementation task is:
 
-> Start Milestone 5 from a short-lived feature branch by adding the Temporal worker package scaffold and deterministic ticket workflow skeleton. Reuse the Milestone 4 domain event emit helpers from workflow activities, and keep API CRUD endpoints disconnected from direct event side effects.
+> Continue Milestone 5 by implementing the next workflow slice: add deterministic SLA timer behavior and retry-policy/replay-safety coverage around `ticketLifecycleWorkflow`, while keeping DB, AI runtime, outbound sends, and API start/signal wiring behind activity boundaries until their contracts are ready.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat-milestone5-temporal-foundation` from `main` and ran `pnpm harness:preflight`.
+- Added Temporal TypeScript SDK dependencies to `@support/workers`, plus `@temporalio/testing` for opt-in workflow execution tests.
+- Approved the new pnpm build scripts for `@swc/core` and `protobufjs` in `pnpm-workspace.yaml`.
+- Added `packages/workers/src/temporal-worker.ts` for Temporal worker config/runtime scaffolding with local defaults for `localhost:7233`, namespace `default`, and task queue `support-ticket-lifecycle`.
+- Added `packages/workers/src/workflows/ticket-lifecycle-types.ts` and `packages/workers/src/workflows/ticket-lifecycle-workflow.ts` for the first deterministic ticket lifecycle workflow shell.
+- The workflow shell defines `message_received`, `customer_replied`, `approval_completed`, `manual_escalation_requested`, and `close_requested` signals plus the `ticket_lifecycle_state` query.
+- The workflow creates/loads ticket state through an activity, emits ticket-created and ticket-triaged domain events through an activity, runs triage through an activity, creates approval through an activity, waits for approval/manual-escalation/close signals, records audit through an activity, and deduplicates repeated inbound message/customer-reply signals by `message_id`.
+- Added `packages/workers/src/activities/ticket-lifecycle-activities.ts`; its `emitDomainEvent` activity adapter reuses the Milestone 4 `emitTicketCreatedEvent` and `emitTicketStateTransitionEvent` helpers through an injected `DomainEventPublisher`.
+- Added offline unit tests for the activity adapter and Temporal worker config.
+- Added `pnpm --filter @support/workers test:workflow`, an opt-in live Temporal workflow test that runs against local Compose Temporal and covers approval wait/resume plus duplicate inbound message signal handling.
+- Kept API CRUD endpoints disconnected from workflow starts/signals and direct event side effects.
 - Created feature branch `feat-milestone4-domain-events` from updated `main` after the prior consumer branch was merged, then ran `pnpm harness:preflight`.
 - Completed Milestone 4 event bus foundation by adding event-name-specific domain payload validation in `packages/shared-schemas/src/index.ts`, including message received, ticket created, ticket transition, ticket priority/assignment/SLA, AI run, tool call, approval, message sent, and QA review payload schemas.
 - Added `SupportEventErrorRecordSchema` plus worker-side `packages/workers/src/event-errors.ts` for structured error-record publishing under `support.events.errors.>`.
@@ -176,6 +187,18 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm harness:preflight` passed on branch `feat-milestone5-temporal-foundation`.
+- `pnpm --filter @support/workers test` passes with 35 tests and 4 skipped opt-in/live tests after the Temporal worker scaffold, activity adapter, and default-off workflow test coverage.
+- `pnpm --filter @support/workers typecheck` passes after the Temporal workflow scaffold.
+- `pnpm infra:up` reports the local Compose stack running and PostgreSQL healthy before live Temporal workflow verification.
+- `TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow` initially failed inside the managed sandbox with localhost `EPERM`, then passed with approved localhost access against local Compose Temporal. The passing run covered approval wait/resume and duplicate inbound message signal handling.
+- `pnpm format` applied formatting to the new Temporal workflow, activity, test, package metadata, and docs files.
+- `pnpm format:check` passes after the Temporal workflow foundation slice.
+- `pnpm lint` passes after the Temporal workflow foundation slice.
+- `pnpm typecheck` passes after the Temporal workflow foundation slice.
+- `pnpm test` passes after the Temporal workflow foundation slice, including Python scaffold tests; the live Temporal workflow test remains opt-in and skipped by default.
+- `pnpm build` passes after the Temporal workflow foundation slice.
+- `pnpm test:integration` was not rerun because this slice does not change live PostgreSQL or NATS integration behavior; the new live Temporal verification is covered by `pnpm --filter @support/workers test:workflow`.
 - `pnpm harness:preflight` passed on branch `feat-milestone4-domain-events`.
 - `pnpm --filter @support/shared-schemas test` passes with 17 tests after event payload/error schema coverage.
 - `pnpm --filter @support/shared-schemas typecheck` passes after event payload/error schema coverage.
@@ -348,6 +371,8 @@ The next implementation task is:
 - API auth is still a placeholder header contract; no real identity provider exists yet.
 - RBAC exists only for the current skeleton OpenAPI, tenant/customer/ticket list-create-read-update endpoints, conversation/message/policy/KB document/approval/audit event read-list endpoints, and ticket audit event list endpoint; it must be extended as new endpoint families are added.
 - Tenant/customer/ticket create/update endpoints do not yet create idempotency records, audit events, or workflow side effects.
+- API endpoints do not yet start or signal Temporal workflows.
+- The ticket lifecycle workflow shell does not yet implement SLA timers, AI graph activities, outbound send activities, retry-policy tests, replay-history tests, or real DB/audit/approval persistence.
 - Conversation/message endpoints are read-list only; message ingestion, internal-note creation, outbound sends, attachment validation, and HTML sanitization enforcement remain future workflow/channel tasks.
 - KB document endpoints are metadata read-list only; creation, update, ingestion, chunking, embedding, retrieval search, audit events, and workflow side effects remain future KB/RAG tasks.
 - Approval endpoints are read-list only; approve/edit/reject/escalate actions, Temporal signals, audit events, outbound side effects, and workflow resume behavior remain future human-approval-loop tasks.
@@ -547,15 +572,15 @@ Goal: Implement durable ticket workflow shell.
 
 Checklist:
 
-- [ ] Add Temporal worker package.
-- [ ] Define ticket workflow.
-- [ ] Define message ingest signal.
-- [ ] Define approval signal.
+- [x] Add Temporal worker package. Current: Temporal SDK dependencies and worker config/runtime scaffold exist in `@support/workers`.
+- [x] Define ticket workflow. Current: deterministic `ticketLifecycleWorkflow` shell exists; full DB/AI/SLA/outbound behavior remains activity-bound future work.
+- [x] Define message ingest signal. Current: `message_received` and `customer_replied` signals dedupe by `message_id`.
+- [x] Define approval signal. Current: `approval_completed` resumes the workflow from the approval wait state.
 - [ ] Define SLA timer activity.
 - [ ] Define AI activity placeholder.
 - [ ] Define outbound send activity placeholder.
-- [ ] Define audit activity.
-- [ ] Add deterministic workflow tests.
+- [x] Define audit activity. Current: `recordAuditEvent` activity contract exists; persistence implementation remains future work.
+- [x] Add deterministic workflow tests. Current: default-off live Temporal test covers approval wait/resume and inbound signal dedupe; more replay/timer/failure coverage remains pending.
 - [ ] Add retry policy tests.
 - [ ] Add workflow replay safety check.
 
@@ -563,8 +588,8 @@ Acceptance criteria:
 
 - [ ] Inbound message starts or signals a workflow.
 - [ ] Workflow updates ticket state through allowed transitions.
-- [ ] Workflow can wait for human approval.
-- [ ] Workflow tests pass without real LLM calls.
+- [x] Workflow can wait for human approval.
+- [x] Workflow tests pass without real LLM calls.
 
 ## Milestone 6: Channel Intake
 
@@ -758,6 +783,15 @@ Acceptance criteria:
 Use reverse chronological order.
 
 ### 2026-06-26
+
+- Started Milestone 5 Temporal workflow foundation:
+  - Added Temporal SDK dependencies and worker config/runtime scaffold in `@support/workers`.
+  - Added deterministic ticket lifecycle workflow shell with message/customer-reply, approval-completed, manual-escalation, and close-request signals plus state query.
+  - Added activity contracts/placeholders for ticket create/load, triage, approval creation, inbound persistence, audit writes, and domain event emission.
+  - Added `emitDomainEvent` activity adapter that reuses the Milestone 4 ticket-created and ticket-transition domain event emit helpers.
+  - Added offline unit coverage and opt-in live Temporal workflow coverage against local Compose Temporal.
+  - Kept API CRUD endpoints disconnected from workflow starts/signals and direct event side effects.
+- Verification for this session is recorded in the Verification Status section above.
 
 - Completed Milestone 4 event bus foundation:
   - Added event-name-specific payload validation and structured event error record schemas.
