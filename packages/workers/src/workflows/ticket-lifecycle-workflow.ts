@@ -11,6 +11,7 @@ import type {
   CreateOrUpdateTicketActivityResult,
   RunAiGraphActivityResult,
   RunInitialTriageActivityResult,
+  SendOutboundMessageActivityResult,
   TicketLifecycleSlaTimer,
   TicketLifecycleApprovalCompletedSignal,
   TicketLifecycleCloseRequestedSignal,
@@ -53,6 +54,7 @@ export async function ticketLifecycleWorkflow(
   let triage: RunInitialTriageActivityResult | null = null;
   let aiGraphResult: RunAiGraphActivityResult | null = null;
   let approvalId: string | null = null;
+  let outboundResult: SendOutboundMessageActivityResult | null = null;
   let firstResponseSlaTimer: TicketLifecycleSlaTimer | null = null;
   let slaBreach: TicketLifecycleSlaTimer | null = null;
   const signalState: {
@@ -87,6 +89,7 @@ export async function ticketLifecycleWorkflow(
         : null,
     ai_failure_code:
       aiGraphResult?.status === "failed" ? aiGraphResult.error_code : null,
+    outbound_message_id: outboundResult?.message_id ?? null,
     triage_route: triage?.route ?? null,
   });
 
@@ -278,7 +281,6 @@ export async function ticketLifecycleWorkflow(
     });
   } else if (signalState.approvalResult !== null) {
     const approvalResult = signalState.approvalResult;
-    phase = "completed";
     await recordAuditEvent({
       tenant_id: input.tenant_id,
       ticket_id: input.ticket_id,
@@ -295,6 +297,76 @@ export async function ticketLifecycleWorkflow(
         notes: approvalResult.notes,
       },
     });
+
+    if (
+      approvalResult.status === "approved" ||
+      approvalResult.status === "edited"
+    ) {
+      phase = "sending_response";
+      const outbound = await sendOutboundMessage({
+        tenant_id: input.tenant_id,
+        ticket_id: input.ticket_id,
+        conversation_id: ticketResult.ticket.conversation_id,
+        correlation_id: input.correlation_id,
+        approval_id: approvalResult.approval_id,
+        approval_status: approvalResult.status,
+        idempotency_key: buildOutboundIdempotencyKey(
+          input,
+          approvalResult.approval_id,
+        ),
+      });
+      outboundResult = outbound;
+      await emitDomainEvent({
+        event_type: "message_sent",
+        event_id: buildWorkflowEventId(input, "message-sent"),
+        tenant_id: input.tenant_id,
+        correlation_id: input.correlation_id,
+        causation_id: approvalResult.approval_id,
+        actor: workflowActor(),
+        message_id: outbound.message_id,
+        conversation_id: outbound.conversation_id,
+        ticket_id: input.ticket_id,
+        channel_id: outbound.channel_id,
+        sent_at: outbound.sent_at,
+      });
+      await recordAuditEvent({
+        tenant_id: input.tenant_id,
+        ticket_id: input.ticket_id,
+        correlation_id: input.correlation_id,
+        action: "message.sent",
+        actor: workflowActor(),
+        metadata: {
+          message_id: outbound.message_id,
+          conversation_id: outbound.conversation_id,
+          channel_id: outbound.channel_id,
+          external_message_id: outbound.external_message_id,
+          approval_id: approvalResult.approval_id,
+          approval_status: approvalResult.status,
+          sent_at: outbound.sent_at,
+        },
+      });
+      phase = "responded";
+    } else if (approvalResult.status === "escalated") {
+      phase = "manual_escalated";
+      await recordAuditEvent({
+        tenant_id: input.tenant_id,
+        ticket_id: input.ticket_id,
+        correlation_id: input.correlation_id,
+        action: "ticket.manual_escalated",
+        actor: {
+          type: "human",
+          id: approvalResult.actor_id,
+        },
+        metadata: {
+          approval_id: approvalResult.approval_id,
+          decided_at: approvalResult.decided_at,
+          notes: approvalResult.notes,
+          source: "approval_escalation",
+        },
+      });
+    } else {
+      phase = "completed";
+    }
   }
 
   await condition(allHandlersFinished);
@@ -437,6 +509,18 @@ async function recordAuditEvent(
   );
 }
 
+async function sendOutboundMessage(
+  input: Parameters<TicketLifecycleActivities["sendOutboundMessage"]>[0],
+): Promise<SendOutboundMessageActivityResult> {
+  return activities.sendOutboundMessage.executeWithOptions(
+    {
+      startToCloseTimeout: "1 minute",
+      retry: TICKET_LIFECYCLE_SIDE_EFFECT_ACTIVITY_RETRY_POLICY,
+    },
+    [input],
+  );
+}
+
 function workflowActor() {
   return {
     type: "system" as const,
@@ -455,6 +539,13 @@ function buildWorkflowEventId(
     input.initial_message_id,
     eventName,
   ].join(":");
+}
+
+function buildOutboundIdempotencyKey(
+  input: TicketLifecycleWorkflowInput,
+  approvalId: string,
+): string {
+  return ["outbound", input.tenant_id, input.ticket_id, approvalId].join(":");
 }
 
 function resultFromState(
@@ -476,5 +567,6 @@ function resultFromState(
     ai_status: state.ai_status,
     ai_automation_mode: state.ai_automation_mode,
     ai_failure_code: state.ai_failure_code,
+    outbound_message_id: state.outbound_message_id,
   };
 }

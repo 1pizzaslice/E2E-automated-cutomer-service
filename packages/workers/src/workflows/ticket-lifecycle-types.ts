@@ -75,6 +75,8 @@ export type TicketLifecycleWorkflowPhase =
   | "running_ai"
   | "waiting_for_approval"
   | "sla_breached"
+  | "sending_response"
+  | "responded"
   | "manual_escalated"
   | "closed"
   | "completed";
@@ -223,6 +225,27 @@ export interface CreateApprovalActivityResult {
   readonly status: "pending";
 }
 
+export type TicketLifecycleOutboundApprovalStatus = "approved" | "edited";
+
+export interface SendOutboundMessageActivityInput {
+  readonly tenant_id: string;
+  readonly ticket_id: string;
+  readonly conversation_id: string;
+  readonly correlation_id: string;
+  readonly approval_id: string;
+  readonly approval_status: TicketLifecycleOutboundApprovalStatus;
+  readonly idempotency_key: string;
+}
+
+export interface SendOutboundMessageActivityResult {
+  readonly status: "sent";
+  readonly message_id: string;
+  readonly conversation_id: string;
+  readonly channel_id: string;
+  readonly external_message_id: string | null;
+  readonly sent_at: string;
+}
+
 export interface RecordInboundMessageActivityInput extends TicketLifecycleWorkflowInput {
   readonly message: TicketLifecycleMessageReceivedSignal;
 }
@@ -239,7 +262,8 @@ export interface RecordAuditEventActivityInput {
 export type EmitTicketLifecycleDomainEventActivityInput =
   | EmitTicketCreatedDomainEventInput
   | EmitTicketStateTransitionDomainEventInput
-  | EmitTicketSlaBreachedDomainEventInput;
+  | EmitTicketSlaBreachedDomainEventInput
+  | EmitMessageSentDomainEventInput;
 
 export interface EmitTicketCreatedDomainEventInput {
   readonly event_type: "ticket_created";
@@ -279,6 +303,20 @@ export interface EmitTicketSlaBreachedDomainEventInput {
   readonly metadata: Record<string, unknown>;
 }
 
+export interface EmitMessageSentDomainEventInput {
+  readonly event_type: "message_sent";
+  readonly event_id: string;
+  readonly tenant_id: string;
+  readonly correlation_id: string;
+  readonly causation_id: string;
+  readonly actor: DomainEventActor;
+  readonly message_id: string;
+  readonly conversation_id: string;
+  readonly ticket_id: string;
+  readonly channel_id: string;
+  readonly sent_at: string;
+}
+
 export interface TicketLifecycleWorkflowResult {
   readonly tenant_id: string;
   readonly ticket_id: string;
@@ -297,6 +335,7 @@ export interface TicketLifecycleWorkflowResult {
   readonly ai_status: RunAiGraphActivityResult["status"] | null;
   readonly ai_automation_mode: AutomationMode | null;
   readonly ai_failure_code: string | null;
+  readonly outbound_message_id: string | null;
 }
 
 export interface TicketLifecycleWorkflowState extends TicketLifecycleWorkflowResult {

@@ -69,8 +69,24 @@ describe("ticket lifecycle activities", () => {
         source: "temporal_timer",
       },
     });
+    await activities.emitDomainEvent({
+      event_type: "message_sent",
+      event_id: "evt_message_sent",
+      tenant_id: "ten_test",
+      correlation_id: "corr_test",
+      causation_id: "apr_test",
+      actor: {
+        type: "system",
+        id: "workflow",
+      },
+      message_id: "msg_outbound_test",
+      conversation_id: "cnv_test",
+      ticket_id: "ticket_test",
+      channel_id: "chn_email",
+      sent_at: "2026-06-26T00:20:00.000Z",
+    });
 
-    expect(publisher.events).toHaveLength(3);
+    expect(publisher.events).toHaveLength(4);
     expect(publisher.events).toEqual([
       expect.objectContaining({
         event_id: "evt_ticket_created",
@@ -97,6 +113,18 @@ describe("ticket lifecycle activities", () => {
         payload: expect.objectContaining({
           breached_deadline: "first_response",
           due_at: "2026-06-26T00:15:00.000Z",
+        }),
+      }),
+      expect.objectContaining({
+        event_id: "evt_message_sent",
+        event_name: "support.message.sent.v1",
+        occurred_at: "2026-06-26T00:00:00.000Z",
+        payload: expect.objectContaining({
+          message_id: "msg_outbound_test",
+          conversation_id: "cnv_test",
+          ticket_id: "ticket_test",
+          channel_id: "chn_email",
+          sent_at: "2026-06-26T00:20:00.000Z",
         }),
       }),
     ]);
@@ -158,6 +186,16 @@ function makeActivityImplementations(): Omit<
       return {
         approval_id: "apr_test",
         status: "pending",
+      };
+    },
+    async sendOutboundMessage() {
+      return {
+        status: "sent",
+        message_id: "msg_outbound_test",
+        conversation_id: "cnv_test",
+        channel_id: "chn_email",
+        external_message_id: "ext_outbound_test",
+        sent_at: "2026-06-26T00:20:00.000Z",
       };
     },
     async recordInboundMessage() {},

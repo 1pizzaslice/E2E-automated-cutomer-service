@@ -5,6 +5,7 @@ import {
   type DomainEventEnvelope,
   type DomainEventName,
   type MessageReceivedEventPayload,
+  type MessageSentEventPayload,
   type TicketCreatedEventPayload,
   type TicketSlaBreachedEventPayload,
   type TicketStateTransitionEventName,
@@ -41,6 +42,10 @@ export interface TicketSlaBreachedEventInput extends DomainEventEmissionMetadata
   readonly payload: TicketSlaBreachedEventPayload;
 }
 
+export interface MessageSentEventInput extends DomainEventEmissionMetadata {
+  readonly payload: MessageSentEventPayload;
+}
+
 export function buildMessageReceivedEvent(
   input: MessageReceivedEventInput,
 ): DomainEventEnvelope {
@@ -69,6 +74,12 @@ export function buildTicketSlaBreachedEvent(
   return buildDomainEventEnvelope("support.ticket.sla_breached.v1", input);
 }
 
+export function buildMessageSentEvent(
+  input: MessageSentEventInput,
+): DomainEventEnvelope {
+  return buildDomainEventEnvelope("support.message.sent.v1", input);
+}
+
 export async function emitMessageReceivedEvent(
   publisher: DomainEventPublisher,
   input: MessageReceivedEventInput,
@@ -95,6 +106,13 @@ export async function emitTicketSlaBreachedEvent(
   input: TicketSlaBreachedEventInput,
 ): Promise<DomainEventPublishReceipt> {
   return publisher.publish(buildTicketSlaBreachedEvent(input));
+}
+
+export async function emitMessageSentEvent(
+  publisher: DomainEventPublisher,
+  input: MessageSentEventInput,
+): Promise<DomainEventPublishReceipt> {
+  return publisher.publish(buildMessageSentEvent(input));
 }
 
 function buildDomainEventEnvelope(

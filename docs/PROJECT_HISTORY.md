@@ -9,13 +9,13 @@ This file records what has happened so far so a new human or AI agent can unders
 - GitHub repo cloned at `/home/anish/CODE01/STARTUPS/E2E-automated-cutomer-service`.
 - Backend scaffold has a local `main` commit.
 - No frontend has been implemented.
-- No full business workflows have been implemented yet. The first Temporal ticket lifecycle workflow shell exists with first-response SLA timer breach behavior plus an AI graph activity placeholder and structured AI failure-to-human routing, but DB mutation, real LangGraph calls, next-response/resolution SLA timers, outbound sends, and API start/signal wiring remain pending.
+- No full business workflows have been implemented yet. The first Temporal ticket lifecycle workflow shell exists with first-response SLA timer breach behavior, an AI graph activity placeholder with structured AI failure-to-human routing, and deterministic approval-outcome routing (approved/edited send through an outbound activity placeholder, rejected does not send, escalated routes to manual handling), but DB mutation, real LangGraph calls, the real channel send behind `sendOutboundMessage`, next-response/resolution SLA timers, and API start/signal wiring remain pending.
 - Milestone 0 documentation harness is complete.
 - Milestone 1 backend scaffold is complete and locally verified.
 - Milestone 2 database foundation is implemented and locally verified, including live PostgreSQL repository execution tests and row-level security enforcement tests.
 - Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
 - Milestone 4 event bus foundation is complete with shared v1 domain event envelope and payload schemas, a tenant-aware NATS subject convention, worker-side NATS JetStream publisher/consumer base and connection wiring, explicit domain/error stream config, idempotent consumer handling, structured consumer error records, workflow-ready event emit helpers, and live NATS publish/consume integration coverage. CRUD skeleton endpoints still do not publish events.
-- Milestone 5 Temporal workflow foundation has started with Temporal TypeScript SDK dependencies, worker config/runtime scaffolding, a deterministic ticket lifecycle workflow shell, activity contracts/placeholders, first-response SLA timer behavior, a structured AI graph activity placeholder with success/failure-to-human routing, a domain-event activity adapter that reuses the Milestone 4 emit helpers, offline unit coverage, and an opt-in live Temporal workflow test with replay coverage.
+- Milestone 5 Temporal workflow foundation is complete with Temporal TypeScript SDK dependencies, worker config/runtime scaffolding, a deterministic ticket lifecycle workflow shell, activity contracts/placeholders, first-response SLA timer behavior, a structured AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing, a domain-event activity adapter that reuses the Milestone 4 emit helpers (now including message-sent), explicit activity retry policies, offline unit coverage, and an opt-in live Temporal workflow test with replay coverage. Real DB/AI/channel side effects and API workflow start/signal wiring remain bound behind activity boundaries for later milestones.
 - The engineering harness now includes explicit branch and handoff guardrails in the active reading path plus `pnpm harness:preflight` and `pnpm harness:handoff` checks.
 
 ## Product Direction
@@ -181,10 +181,11 @@ Latest Milestone 5 Temporal workflow foundation:
 - Added `packages/workers/src/workflows/ticket-lifecycle-types.ts` and `packages/workers/src/workflows/ticket-lifecycle-workflow.ts`.
 - The workflow shell defines message/customer-reply, approval-completed, manual-escalation, and close-request signals, a state query, ticket create/load and triage activity calls, a structured `runAiGraph` activity placeholder, workflow-owned domain event emission activity calls, first-response SLA timer wait/breach behavior, approval waiting/resume behavior, audit activity calls, and inbound message signal dedupe.
 - The `runAiGraph` placeholder returns either structured AI success output for approval metadata or structured AI failure output; the workflow records `ai_graph.failed` audit and routes failures to human approval instead of failing the workflow.
-- Added `packages/workers/src/activities/ticket-lifecycle-activities.ts`, whose `emitDomainEvent` activity adapter reuses `emitTicketCreatedEvent`, `emitTicketStateTransitionEvent`, and `emitTicketSlaBreachedEvent` through an injected `DomainEventPublisher`.
-- Added explicit ticket lifecycle activity retry-policy constants, side-effect activity call-site retry options, first-response SLA breach event/audit workflow handling, and live workflow history replay coverage.
-- Added offline unit coverage for the activity adapter and Temporal worker config.
-- Added `pnpm --filter @support/workers test:workflow`, an opt-in live Temporal workflow test that runs against local Compose Temporal and covers approval wait/resume, duplicate inbound message signal handling, first-response SLA timer breach, AI success-to-approval routing, AI failure-to-human routing, and workflow replay safety.
+- Added the `sendOutboundMessage` activity placeholder and deterministic approval-outcome routing: approved/edited send an outbound message once (with a deterministic `outbound:{tenant}:{ticket}:{approval_id}` idempotency key), emit `support.message.sent.v1`, and record `message.sent` audit before reaching the `responded` phase; rejected ends in `completed` without sending; escalated records `ticket.manual_escalated` audit and reaches the `manual_escalated` phase.
+- Added `packages/workers/src/activities/ticket-lifecycle-activities.ts`, whose `emitDomainEvent` activity adapter reuses `emitTicketCreatedEvent`, `emitTicketStateTransitionEvent`, `emitTicketSlaBreachedEvent`, and `emitMessageSentEvent` through an injected `DomainEventPublisher`.
+- Added explicit ticket lifecycle activity retry-policy constants, side-effect activity call-site retry options (including `sendOutboundMessage`), first-response SLA breach event/audit workflow handling, and live workflow history replay coverage.
+- Added offline unit coverage for the activity adapter (including message-sent emission) and Temporal worker config.
+- Added `pnpm --filter @support/workers test:workflow`, an opt-in live Temporal workflow test that runs against local Compose Temporal and covers approval wait/resume, duplicate inbound message signal handling, first-response SLA timer breach, AI success-to-approval routing, AI failure-to-human routing, approval-outcome routing (approved/edited/rejected/escalated), and workflow replay safety.
 - CRUD skeleton endpoints still do not start or signal workflows.
 
 Latest harness hardening:
@@ -316,8 +317,8 @@ Fix:
 
 ## Next Recommended Task
 
-Continue Milestone 5 by adding the next workflow behavior slice:
+Milestone 5 Temporal workflow foundation is complete (workflow shell, signals, SLA timer, AI placeholder, outbound send placeholder, audit activity, deterministic/retry/replay tests). Begin Milestone 6 Channel Intake:
 
-1. Add the AI graph activity placeholder contract for ticket triage/drafting inputs and structured outputs.
-2. Add deterministic workflow tests for AI activity success and failure-to-human routing without calling real LLMs.
-3. Keep API workflow start/signal wiring, outbound sends, and real DB/audit/approval persistence behind activity boundaries until their contracts are ready.
+1. Define the normalized inbound message schema in `packages/shared-schemas` and add email/WhatsApp adapter fixture parsers.
+2. Add inbound webhook/polling placeholders with signature verification, raw payload storage by reference, dedup/idempotency, and conversation threading.
+3. Wire normalized inbound intake to the `ticketLifecycleWorkflow` start/`message_received` signal boundary (the workflow side is ready), and keep real provider calls behind adapter boundaries until their contracts are ready.

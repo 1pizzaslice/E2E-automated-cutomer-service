@@ -30,7 +30,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
     await testEnv?.teardown();
   }, 30_000);
 
-  it("creates and triages a ticket, runs AI graph, then waits for approval completion", async () => {
+  it("creates and triages a ticket, runs AI graph, then sends the approved response", async () => {
     const calls: ActivityCall[] = [];
     let workflowHistory: unknown = null;
     const taskQueue = `ticket-lifecycle-${randomUUID()}`;
@@ -79,7 +79,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
     expect(result).toEqual({
       tenant_id: "ten_test",
       ticket_id: "ticket_test",
-      phase: "completed",
+      phase: "responded",
       processed_message_ids: ["msg_initial"],
       approval_id: "apr_test",
       approval_status: "approved",
@@ -92,6 +92,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       ai_status: "succeeded",
       ai_automation_mode: "human_approve",
       ai_failure_code: null,
+      outbound_message_id: "msg_outbound_test",
     });
     expect(calls.map((call) => call.name)).toEqual([
       "createOrUpdateTicket",
@@ -101,6 +102,9 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "runAiGraph",
       "createApproval",
       "recordAuditEvent:approval.completed",
+      "sendOutboundMessage",
+      "emitDomainEvent:message_sent",
+      "recordAuditEvent:message.sent",
     ]);
     expect(calls.find((call) => call.name === "createApproval")).toEqual(
       expect.objectContaining({
@@ -112,6 +116,12 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
             ai_run_id: "air_test",
           }),
         }),
+      }),
+    );
+    expect(calls.find((call) => call.name === "sendOutboundMessage")).toEqual(
+      expect.objectContaining({
+        approval_status: "approved",
+        idempotency_key: "outbound:ten_test:ticket_test:apr_test",
       }),
     );
     expect(workflowHistory).not.toBeNull();
@@ -126,7 +136,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
         workflowHistory,
       ),
     ).resolves.toBeUndefined();
-  });
+  }, 30_000);
 
   it("deduplicates repeated inbound message signals", async () => {
     const calls: ActivityCall[] = [];
@@ -239,6 +249,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       ai_status: "succeeded",
       ai_automation_mode: "human_approve",
       ai_failure_code: null,
+      outbound_message_id: null,
     });
     expect(calls.map((call) => call.name)).toEqual([
       "createOrUpdateTicket",
@@ -298,7 +309,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
     expect(result).toEqual({
       tenant_id: "ten_test",
       ticket_id: "ticket_test",
-      phase: "completed",
+      phase: "responded",
       processed_message_ids: ["msg_initial"],
       approval_id: "apr_test",
       approval_status: "approved",
@@ -311,6 +322,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       ai_status: "failed",
       ai_automation_mode: null,
       ai_failure_code: "AI_RUNTIME_ERROR",
+      outbound_message_id: "msg_outbound_test",
     });
     expect(calls.map((call) => call.name)).toEqual([
       "createOrUpdateTicket",
@@ -321,6 +333,9 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "recordAuditEvent:ai_graph.failed",
       "createApproval",
       "recordAuditEvent:approval.completed",
+      "sendOutboundMessage",
+      "emitDomainEvent:message_sent",
+      "recordAuditEvent:message.sent",
     ]);
     expect(calls.find((call) => call.name === "createApproval")).toEqual(
       expect.objectContaining({
@@ -335,6 +350,172 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       }),
     );
   });
+
+  it("sends an edited approval response once", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      await waitForWorkflowState(
+        handle,
+        (state) => state.phase === "waiting_for_approval",
+      );
+
+      await handle.signal("approval_completed", {
+        approval_id: "apr_test",
+        status: "edited",
+        actor_id: "usr_approver",
+        decided_at: "2026-06-26T00:10:00.000Z",
+        notes: "Adjusted the greeting before sending.",
+      });
+
+      return await handle.result();
+    });
+
+    expect(result.phase).toBe("responded");
+    expect(result.approval_status).toBe("edited");
+    expect(result.outbound_message_id).toBe("msg_outbound_test");
+    expect(calls.map((call) => call.name)).toEqual([
+      "createOrUpdateTicket",
+      "emitDomainEvent:ticket_created",
+      "runInitialTriage",
+      "emitDomainEvent:ticket_state_transition",
+      "runAiGraph",
+      "createApproval",
+      "recordAuditEvent:approval.completed",
+      "sendOutboundMessage",
+      "emitDomainEvent:message_sent",
+      "recordAuditEvent:message.sent",
+    ]);
+    expect(calls.find((call) => call.name === "sendOutboundMessage")).toEqual(
+      expect.objectContaining({
+        approval_status: "edited",
+        idempotency_key: "outbound:ten_test:ticket_test:apr_test",
+      }),
+    );
+  });
+
+  it("does not send a rejected approval response", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      await waitForWorkflowState(
+        handle,
+        (state) => state.phase === "waiting_for_approval",
+      );
+
+      await handle.signal("approval_completed", {
+        approval_id: "apr_test",
+        status: "rejected",
+        actor_id: "usr_approver",
+        decided_at: "2026-06-26T00:10:00.000Z",
+        notes: "Draft was off-policy.",
+      });
+
+      return await handle.result();
+    });
+
+    expect(result.phase).toBe("completed");
+    expect(result.approval_status).toBe("rejected");
+    expect(result.outbound_message_id).toBeNull();
+    expect(calls.map((call) => call.name)).toEqual([
+      "createOrUpdateTicket",
+      "emitDomainEvent:ticket_created",
+      "runInitialTriage",
+      "emitDomainEvent:ticket_state_transition",
+      "runAiGraph",
+      "createApproval",
+      "recordAuditEvent:approval.completed",
+    ]);
+    expect(calls.some((call) => call.name === "sendOutboundMessage")).toBe(
+      false,
+    );
+  });
+
+  it("routes an escalated approval to manual handling without sending", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      await waitForWorkflowState(
+        handle,
+        (state) => state.phase === "waiting_for_approval",
+      );
+
+      await handle.signal("approval_completed", {
+        approval_id: "apr_test",
+        status: "escalated",
+        actor_id: "usr_approver",
+        decided_at: "2026-06-26T00:10:00.000Z",
+        notes: "Needs a senior agent.",
+      });
+
+      return await handle.result();
+    });
+
+    expect(result.phase).toBe("manual_escalated");
+    expect(result.approval_status).toBe("escalated");
+    expect(result.outbound_message_id).toBeNull();
+    expect(calls.map((call) => call.name)).toEqual([
+      "createOrUpdateTicket",
+      "emitDomainEvent:ticket_created",
+      "runInitialTriage",
+      "emitDomainEvent:ticket_state_transition",
+      "runAiGraph",
+      "createApproval",
+      "recordAuditEvent:approval.completed",
+      "recordAuditEvent:ticket.manual_escalated",
+    ]);
+    expect(calls.some((call) => call.name === "sendOutboundMessage")).toBe(
+      false,
+    );
+  });
 });
 
 interface ActivityCall {
@@ -342,6 +523,8 @@ interface ActivityCall {
   readonly message_id?: string;
   readonly reason_code?: string | null;
   readonly metadata?: Record<string, unknown>;
+  readonly approval_status?: string;
+  readonly idempotency_key?: string;
 }
 
 interface WorkflowHandleForTest {
@@ -418,6 +601,21 @@ function makeActivities(
       return {
         approval_id: "apr_test",
         status: "pending",
+      };
+    },
+    async sendOutboundMessage(input) {
+      calls.push({
+        name: "sendOutboundMessage",
+        approval_status: input.approval_status,
+        idempotency_key: input.idempotency_key,
+      });
+      return {
+        status: "sent",
+        message_id: "msg_outbound_test",
+        conversation_id: input.conversation_id,
+        channel_id: "chn_email",
+        external_message_id: "ext_outbound_test",
+        sent_at: "2026-06-26T00:20:00.000Z",
       };
     },
     async recordInboundMessage(input) {
