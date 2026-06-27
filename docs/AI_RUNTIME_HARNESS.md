@@ -130,6 +130,13 @@ Rules:
 - Any validation failure becomes `AI_RUNTIME_ERROR` and routes ticket to human.
 - Output must include reason codes for escalations or human review.
 
+Current backend placeholder:
+
+- `packages/workers/src/workflows/ticket-lifecycle-types.ts` defines `RunAiGraphActivityInput` and `RunAiGraphActivityResult` for the Temporal workflow boundary.
+- Successful results include `classification`, `routing_decision`, `tool_calls`, optional `draft`, `guardrails`, `final_recommendation`, eval signals, and trace identifiers.
+- Structured failures return `status: "failed"`, an error code/message, retryability, reason codes, eval signals, and optional run/trace IDs; `ticketLifecycleWorkflow` audits the failure and routes the ticket to human approval.
+- The placeholder does not call LangGraph yet. Real Python runtime calls, Pydantic validation, prompt/tool execution, and trace export remain future AI runtime work behind the activity boundary.
+
 ## 5. LangGraph State
 
 State fields:

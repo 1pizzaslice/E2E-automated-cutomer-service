@@ -12,6 +12,8 @@ import type {
   EmitTicketLifecycleDomainEventActivityInput,
   RecordAuditEventActivityInput,
   RecordInboundMessageActivityInput,
+  RunAiGraphActivityInput,
+  RunAiGraphActivityResult,
   RunInitialTriageActivityInput,
   RunInitialTriageActivityResult,
 } from "../workflows/ticket-lifecycle-types.js";
@@ -23,6 +25,7 @@ export interface TicketLifecycleActivities {
   runInitialTriage(
     input: RunInitialTriageActivityInput,
   ): Promise<RunInitialTriageActivityResult>;
+  runAiGraph(input: RunAiGraphActivityInput): Promise<RunAiGraphActivityResult>;
   createApproval(
     input: CreateApprovalActivityInput,
   ): Promise<CreateApprovalActivityResult>;

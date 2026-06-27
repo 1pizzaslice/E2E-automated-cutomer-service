@@ -72,6 +72,7 @@ export type TicketLifecycleWorkflowPhase =
   | "starting"
   | "creating_ticket"
   | "triaging"
+  | "running_ai"
   | "waiting_for_approval"
   | "sla_breached"
   | "manual_escalated"
@@ -127,6 +128,86 @@ export interface RunInitialTriageActivityResult {
   readonly route: "human_approval" | "manual_escalation";
   readonly reason_code: string | null;
   readonly metadata: Record<string, unknown>;
+}
+
+export interface RunAiGraphActivityInput {
+  readonly tenant_id: string;
+  readonly ticket_id: string;
+  readonly initial_message_id: string;
+  readonly correlation_id: string;
+  readonly ticket: TicketLifecycleTicketSnapshot;
+  readonly triage: RunInitialTriageActivityResult;
+}
+
+export type TicketLifecycleAiRiskLevel = "low" | "medium" | "high";
+
+export interface TicketLifecycleAiRoutingDecision {
+  readonly topic: string | null;
+  readonly subtopic: string | null;
+  readonly language: string | null;
+  readonly sentiment: string | null;
+  readonly urgency: string | null;
+  readonly priority: TicketPriority;
+  readonly risk_level: TicketLifecycleAiRiskLevel;
+  readonly confidence: number;
+  readonly automation_mode: AutomationMode;
+  readonly assigned_queue: string | null;
+  readonly reason_codes: readonly string[];
+  readonly required_tools: readonly string[];
+  readonly required_evidence: readonly string[];
+}
+
+export interface TicketLifecycleAiDraftEvidence {
+  readonly type: string;
+  readonly ref_id: string;
+  readonly summary: string;
+}
+
+export interface TicketLifecycleAiDraft {
+  readonly draft_text: string;
+  readonly customer_language: string;
+  readonly tone: string;
+  readonly evidence: readonly TicketLifecycleAiDraftEvidence[];
+  readonly actions: readonly Record<string, unknown>[];
+  readonly risk_level: TicketLifecycleAiRiskLevel;
+  readonly confidence: number;
+  readonly needs_human: boolean;
+  readonly human_review_reasons: readonly string[];
+}
+
+export interface TicketLifecycleAiFinalRecommendation {
+  readonly automation_mode: AutomationMode;
+  readonly risk_level: TicketLifecycleAiRiskLevel;
+  readonly confidence: number;
+  readonly reason_codes: readonly string[];
+}
+
+export type RunAiGraphActivityResult =
+  | RunAiGraphSucceededActivityResult
+  | RunAiGraphFailedActivityResult;
+
+export interface RunAiGraphSucceededActivityResult {
+  readonly status: "succeeded";
+  readonly ai_run_id: string;
+  readonly trace_id: string | null;
+  readonly classification: Record<string, unknown>;
+  readonly routing_decision: TicketLifecycleAiRoutingDecision;
+  readonly tool_calls: readonly Record<string, unknown>[];
+  readonly draft: TicketLifecycleAiDraft | null;
+  readonly guardrails: Record<string, unknown>;
+  readonly final_recommendation: TicketLifecycleAiFinalRecommendation;
+  readonly eval_signals: Record<string, unknown>;
+}
+
+export interface RunAiGraphFailedActivityResult {
+  readonly status: "failed";
+  readonly ai_run_id: string | null;
+  readonly trace_id: string | null;
+  readonly error_code: string;
+  readonly error_message: string;
+  readonly retryable: boolean;
+  readonly reason_codes: readonly string[];
+  readonly eval_signals: Record<string, unknown>;
 }
 
 export interface CreateApprovalActivityInput {
@@ -212,6 +293,10 @@ export interface TicketLifecycleWorkflowResult {
   readonly first_response_due_at: string | null;
   readonly sla_breached_deadline: TicketLifecycleSlaDeadline | null;
   readonly sla_breached_due_at: string | null;
+  readonly ai_run_id: string | null;
+  readonly ai_status: RunAiGraphActivityResult["status"] | null;
+  readonly ai_automation_mode: AutomationMode | null;
+  readonly ai_failure_code: string | null;
 }
 
 export interface TicketLifecycleWorkflowState extends TicketLifecycleWorkflowResult {
