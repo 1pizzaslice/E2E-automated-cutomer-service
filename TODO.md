@@ -212,6 +212,7 @@ The next implementation task is:
 - `pnpm test` passes after the AI graph placeholder workflow slice, including Python scaffold tests; the live Temporal workflow test remains opt-in and was run separately above.
 - `pnpm build` passes after the AI graph placeholder workflow slice.
 - `pnpm test:integration` was not rerun because this slice does not change live PostgreSQL or NATS integration behavior; the live Temporal behavior is covered by `pnpm --filter @support/workers test:workflow`.
+- `pnpm harness:handoff` passes on branch `feat-milestone5-ai-routing`.
 - `pnpm harness:preflight` initially failed inside the managed sandbox with a pnpm store SQLite access error, then passed with approved pnpm store access on branch `feat-milestone5-sla-timers`.
 - `pnpm --filter @support/workers test` passes with 37 tests and 5 skipped opt-in/live tests after first-response SLA timer, SLA breach event helper, activity adapter, and retry-policy coverage.
 - `pnpm --filter @support/workers typecheck` passes after the first-response SLA timer workflow contract updates.
