@@ -844,6 +844,9 @@ export type TicketStateTransitionEventPayload = z.infer<
 export type TicketSlaBreachedEventPayload = z.infer<
   typeof TicketSlaBreachedEventPayloadSchema
 >;
+export type MessageSentEventPayload = z.infer<
+  typeof MessageSentEventPayloadSchema
+>;
 
 function getDomainEventPayloadSchema(
   eventName: DomainEventName,

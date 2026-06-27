@@ -1,4 +1,5 @@
 import {
+  emitMessageSentEvent,
   emitTicketCreatedEvent,
   emitTicketSlaBreachedEvent,
   emitTicketStateTransitionEvent,
@@ -16,6 +17,8 @@ import type {
   RunAiGraphActivityResult,
   RunInitialTriageActivityInput,
   RunInitialTriageActivityResult,
+  SendOutboundMessageActivityInput,
+  SendOutboundMessageActivityResult,
 } from "../workflows/ticket-lifecycle-types.js";
 
 export interface TicketLifecycleActivities {
@@ -29,6 +32,9 @@ export interface TicketLifecycleActivities {
   createApproval(
     input: CreateApprovalActivityInput,
   ): Promise<CreateApprovalActivityResult>;
+  sendOutboundMessage(
+    input: SendOutboundMessageActivityInput,
+  ): Promise<SendOutboundMessageActivityResult>;
   recordInboundMessage(input: RecordInboundMessageActivityInput): Promise<void>;
   recordAuditEvent(input: RecordAuditEventActivityInput): Promise<void>;
   emitDomainEvent(
@@ -88,6 +94,25 @@ export function createTicketLifecycleActivities(
             breached_deadline: input.breached_deadline,
             due_at: input.due_at,
             metadata: input.metadata,
+          },
+        });
+        return;
+      }
+
+      if (input.event_type === "message_sent") {
+        await emitMessageSentEvent(dependencies.domainEventPublisher, {
+          event_id: input.event_id,
+          tenant_id: input.tenant_id,
+          correlation_id: input.correlation_id,
+          causation_id: input.causation_id,
+          occurred_at: occurredAt,
+          actor: input.actor,
+          payload: {
+            message_id: input.message_id,
+            conversation_id: input.conversation_id,
+            ticket_id: input.ticket_id,
+            channel_id: input.channel_id,
+            sent_at: input.sent_at,
           },
         });
         return;

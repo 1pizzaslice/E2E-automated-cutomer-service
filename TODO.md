@@ -6,8 +6,8 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation is in progress with the deterministic ticket workflow shell, activity boundaries, first-response SLA timer breach behavior, an AI graph activity placeholder with success/failure-to-human routing coverage, explicit activity retry policies, and replay coverage.
-- Current milestone: Milestone 5 - Temporal workflow foundation is in progress.
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation is complete with the deterministic ticket workflow shell, activity boundaries, first-response SLA timer breach behavior, an AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), explicit activity retry policies, and replay coverage.
+- Current milestone: Milestone 5 - Temporal workflow foundation is complete. Milestone 6 - Channel Intake is the next milestone.
 - Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope/payload schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/domain/error stream setup wiring, worker-side NATS JetStream event emit helpers including ticket SLA breach emission, worker-side NATS JetStream consumer base with storage-agnostic idempotency/error handling, local NATS JetStream config, live NATS publish/consume integration coverage, Temporal worker config/runtime scaffold, deterministic ticket lifecycle workflow shell, workflow activity contracts/placeholders including a structured AI graph placeholder, first-response SLA timer breach handling, structured AI failure-to-human routing, workflow-owned domain event emission activity adapter, explicit Temporal activity retry policies, opt-in live Temporal workflow/replay coverage, and session harness preflight/handoff checks. Full business workflow implementation is still pending.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
@@ -23,12 +23,18 @@ This file is the cross-session source of truth for what has been done, what is n
 
 The next implementation task is:
 
-> Continue Milestone 5 by implementing the next workflow slice: add the outbound send activity placeholder contract and deterministic approval outcome routing tests around `ticketLifecycleWorkflow`, while keeping real channel sends, DB persistence, and API start/signal wiring behind activity boundaries until their contracts are ready.
+> Begin Milestone 6 Channel Intake: define the normalized inbound message schema in `packages/shared-schemas`, add email and WhatsApp adapter fixture parsers, and add inbound webhook/polling placeholders with signature verification, raw payload storage by reference, dedup/idempotency, and conversation threading. The `ticketLifecycleWorkflow` start/`message_received` signal boundary is ready to receive normalized inbound messages; keep real provider calls behind adapter boundaries until their contracts are ready.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat-milestone5-outbound-send` from `main` and ran `pnpm harness:preflight`.
+- Completed the final Milestone 5 checklist item by adding the `sendOutboundMessage` activity placeholder contract (`SendOutboundMessageActivityInput`/`SendOutboundMessageActivityResult`) plus the `responded` and `sending_response` workflow phases and an `outbound_message_id` result field.
+- Made `ticketLifecycleWorkflow` approval routing outcome-aware: it records `approval.completed` audit for every outcome, then approved/edited send an outbound response through `sendOutboundMessage` (with a deterministic `outbound:{tenant}:{ticket}:{approval_id}` idempotency key), emit `support.message.sent.v1`, and record `message.sent` audit before the `responded` phase; rejected ends in `completed` without sending; escalated records `ticket.manual_escalated` audit and ends in `manual_escalated`.
+- Added the `support.message.sent.v1` emit helper (`buildMessageSentEvent`/`emitMessageSentEvent`) and `MessageSentEventPayload` type, and wired the `emitDomainEvent` activity adapter to emit message-sent events; `sendOutboundMessage` runs with the explicit side-effect retry policy.
+- Updated existing workflow tests for the approved/AI-failure paths (now send) and added deterministic edited/rejected/escalated approval-outcome routing tests plus a message-sent activity-adapter assertion; verified all 7 live Temporal workflow tests pass against local Compose Temporal.
+- Kept real LangGraph calls, DB mutation/persistence, approval persistence, the real channel send behind `sendOutboundMessage`, API workflow start/signal wiring, and next-response/resolution SLA timers behind activity boundaries.
 - Created feature branch `feat-milestone5-ai-routing` from `main` and ran `pnpm harness:preflight`.
 - Added the `runAiGraph` activity placeholder contract to the ticket lifecycle workflow surface with structured success and failure result shapes that mirror the planned AI runtime output.
 - Updated `ticketLifecycleWorkflow` to run the AI graph activity after triage for the human-approval path, include AI routing state in workflow query/results, create approval metadata from successful AI output, and convert structured AI runtime failures into an audited human approval path.
@@ -200,6 +206,19 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm harness:preflight` passed on branch `feat-milestone5-outbound-send`.
+- `pnpm --filter @support/shared-schemas typecheck` and `pnpm --filter @support/shared-schemas test` (17 tests) pass after adding the `MessageSentEventPayload` type export.
+- `pnpm --filter @support/workers typecheck` passes after the outbound send activity placeholder and approval-outcome routing updates.
+- `pnpm --filter @support/workers test` passes with 37 tests and 9 skipped opt-in/live tests after the outbound send slice (the 3 new approval-outcome routing tests are opt-in live Temporal tests).
+- `docker compose -f infra/docker-compose.yml up -d postgres temporal` reports the local Compose Temporal stack running and PostgreSQL healthy; the `default` namespace was confirmed ready before live workflow verification.
+- `RUN_TEMPORAL_WORKFLOW_TESTS=true pnpm --filter @support/workers test:workflow` passes all 7 live Temporal workflow tests against local Compose Temporal, covering approval wait/resume, duplicate inbound message signal handling, first-response SLA timer breach, AI success-to-approval routing, AI failure-to-human routing, approved-response send, edited-response send, rejected no-send, escalated manual handling, and workflow history replay. The heaviest happy-path+replay test received an explicit 30s timeout because the added outbound activity round-trips pushed it past the 5s default.
+- Changed files pass `./node_modules/.bin/prettier --check`. `pnpm format:check` still reports one pre-existing warning for the gitignored `.claude/settings.local.json`, which is unrelated to this slice and untracked.
+- `pnpm lint` passes after the outbound send workflow slice.
+- `pnpm typecheck` passes after the outbound send workflow slice.
+- `pnpm test` passes after the outbound send workflow slice, including Python scaffold tests; the live Temporal workflow test remains opt-in and was run separately above.
+- `pnpm build` passes after the outbound send workflow slice.
+- `pnpm test:integration` was not rerun because this slice does not change live PostgreSQL or NATS integration behavior; the live Temporal behavior is covered by `pnpm --filter @support/workers test:workflow`.
+- `pnpm harness:handoff` passes on branch `feat-milestone5-outbound-send`.
 - `pnpm harness:preflight` passed on branch `feat-milestone5-ai-routing`.
 - `pnpm --filter @support/workers typecheck` passes after the AI graph activity placeholder and workflow routing updates.
 - `pnpm --filter @support/workers test` passes with 37 tests and 6 skipped opt-in/live tests after the AI graph placeholder contract update.
@@ -617,16 +636,16 @@ Checklist:
 - [x] Define approval signal. Current: `approval_completed` resumes the workflow from the approval wait state.
 - [x] Define SLA timer activity. Current: `createOrUpdateTicket` returns recorded SLA timer data and the workflow handles first-response SLA breach through a Temporal timer; next-response/resolution timers remain future work.
 - [x] Define AI activity placeholder. Current: `runAiGraph` activity contract returns structured success/failure results and the workflow routes successful AI output to approval metadata while auditing structured AI failures before human approval.
-- [ ] Define outbound send activity placeholder.
+- [x] Define outbound send activity placeholder. Current: `sendOutboundMessage` activity contract exists; the workflow routes approved/edited approvals to it (with a deterministic idempotency key), emits `support.message.sent.v1`, and records `message.sent` audit. The real channel send remains future work.
 - [x] Define audit activity. Current: `recordAuditEvent` activity contract exists; persistence implementation remains future work.
-- [x] Add deterministic workflow tests. Current: default-off live Temporal test covers approval wait/resume, inbound signal dedupe, first-response SLA timer breach, AI success-to-approval routing, AI failure-to-human routing, and replay; outbound coverage remains pending.
+- [x] Add deterministic workflow tests. Current: default-off live Temporal test covers approval wait/resume, inbound signal dedupe, first-response SLA timer breach, AI success-to-approval routing, AI failure-to-human routing, approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), and replay.
 - [x] Add retry policy tests. Current: worker unit coverage locks the explicit ticket lifecycle default and side-effect activity retry policies.
 - [x] Add workflow replay safety check. Current: opt-in live Temporal workflow coverage fetches completed history and replays it with `Worker.runReplayHistory`.
 
 Acceptance criteria:
 
-- [ ] Inbound message starts or signals a workflow.
-- [ ] Workflow updates ticket state through allowed transitions.
+- [x] Inbound message starts or signals a workflow. Current: `ticketLifecycleWorkflow` starts from an initial inbound message and processes `message_received`/`customer_replied` signals with `message_id` dedupe, proven by the live workflow test. Real API/channel intake start/signal wiring lands in Milestones 6 and 10.
+- [x] Workflow updates ticket state through allowed transitions. Current: the workflow drives lifecycle phases (creating_ticket → triaging → running_ai → waiting_for_approval → responded/manual_escalated/sla_breached/completed) and emits `support.ticket.triaged.v1` transition events with from/to status; real ticket-record persistence remains behind the `createOrUpdateTicket` activity boundary.
 - [x] Workflow can wait for human approval.
 - [x] Workflow tests pass without real LLM calls.
 
@@ -823,6 +842,14 @@ Use reverse chronological order.
 
 ### 2026-06-27
 
+- Completed Milestone 5 Temporal workflow foundation:
+  - Added the `sendOutboundMessage` activity placeholder contract, `sending_response`/`responded` workflow phases, and an `outbound_message_id` result field.
+  - Made `ticketLifecycleWorkflow` approval routing outcome-aware: approved/edited send an outbound response (with a deterministic idempotency key), emit `support.message.sent.v1`, and record `message.sent` audit; rejected ends without sending; escalated routes to manual handling with `ticket.manual_escalated` audit.
+  - Added the `support.message.sent.v1` emit helper plus `MessageSentEventPayload` type and wired the `emitDomainEvent` activity adapter to emit message-sent events; `sendOutboundMessage` uses the explicit side-effect retry policy.
+  - Updated the approved/AI-failure workflow tests (now send) and added deterministic edited/rejected/escalated approval-outcome routing tests; verified all 7 live Temporal workflow tests pass.
+  - Marked the Milestone 5 checklist and acceptance criteria complete; recorded Milestone 6 Channel Intake as the next milestone.
+  - Kept real LangGraph calls, DB persistence, the real channel send behind `sendOutboundMessage`, API workflow start/signal wiring, and next-response/resolution SLA timers behind activity boundaries.
+- Verification for this session is recorded in the Verification Status section above.
 - Continued Milestone 5 Temporal workflow foundation:
   - Added the structured `runAiGraph` activity placeholder contract for AI success and structured AI runtime failure results.
   - Updated `ticketLifecycleWorkflow` to call the AI graph activity after triage, expose AI run state in workflow query/results, create human approval metadata from successful AI output, and audit structured AI failures before routing to human approval.
