@@ -221,9 +221,9 @@ Current Milestone 5 Temporal foundation coverage:
 
 - `packages/workers/src/ticket-lifecycle-activities.test.ts` verifies the ticket lifecycle `emitDomainEvent` activity adapter uses the shared domain-event helper behavior for ticket-created, ticket-triaged, and ticket-SLA-breached events.
 - `packages/workers/src/temporal-worker.test.ts` verifies Temporal worker config defaults, environment overrides, and explicit ticket lifecycle activity retry-policy constants.
-- `packages/workers/src/ticket-lifecycle-workflow.test.ts` is an opt-in live Temporal workflow test. It starts `ticketLifecycleWorkflow` against a running Temporal service, verifies the workflow reaches the approval wait state, resumes on `approval_completed`, deduplicates repeated inbound message/customer-reply signals, fires a first-response SLA breach timer while waiting for approval, and replays a completed workflow history with `Worker.runReplayHistory`.
+- `packages/workers/src/ticket-lifecycle-workflow.test.ts` is an opt-in live Temporal workflow test. It starts `ticketLifecycleWorkflow` against a running Temporal service, verifies the workflow reaches the approval wait state, resumes on `approval_completed`, deduplicates repeated inbound message/customer-reply signals, fires a first-response SLA breach timer while waiting for approval, routes successful AI graph activity output into approval metadata, routes structured AI graph failures to human approval with audit, and replays a completed workflow history with `Worker.runReplayHistory`.
 - The live workflow test is skipped in default `pnpm test` runs. Run it after `pnpm infra:up` with `TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow`.
-- AI failure routing tests, next-response/resolution SLA timer tests, outbound/approval action integration tests, and API workflow start/signal tests remain pending.
+- Next-response/resolution SLA timer tests, outbound/approval action integration tests, and API workflow start/signal tests remain pending.
 
 ### 3.10 AI Runtime
 

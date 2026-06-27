@@ -142,6 +142,18 @@ function makeActivityImplementations(): Omit<
         metadata: {},
       };
     },
+    async runAiGraph() {
+      return {
+        status: "failed",
+        ai_run_id: null,
+        trace_id: null,
+        error_code: "AI_RUNTIME_ERROR",
+        error_message: "placeholder implementation",
+        retryable: false,
+        reason_codes: ["AI_RUNTIME_ERROR"],
+        eval_signals: {},
+      };
+    },
     async createApproval() {
       return {
         approval_id: "apr_test",

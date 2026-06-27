@@ -9,6 +9,7 @@ import {
 import type { TicketLifecycleActivities } from "../activities/ticket-lifecycle-activities.js";
 import type {
   CreateOrUpdateTicketActivityResult,
+  RunAiGraphActivityResult,
   RunInitialTriageActivityResult,
   TicketLifecycleSlaTimer,
   TicketLifecycleApprovalCompletedSignal,
@@ -50,6 +51,7 @@ export async function ticketLifecycleWorkflow(
   let phase: TicketLifecycleWorkflowPhase = "starting";
   let ticketResult: CreateOrUpdateTicketActivityResult | null = null;
   let triage: RunInitialTriageActivityResult | null = null;
+  let aiGraphResult: RunAiGraphActivityResult | null = null;
   let approvalId: string | null = null;
   let firstResponseSlaTimer: TicketLifecycleSlaTimer | null = null;
   let slaBreach: TicketLifecycleSlaTimer | null = null;
@@ -77,6 +79,14 @@ export async function ticketLifecycleWorkflow(
     first_response_due_at: firstResponseSlaTimer?.due_at ?? null,
     sla_breached_deadline: slaBreach?.deadline_type ?? null,
     sla_breached_due_at: slaBreach?.due_at ?? null,
+    ai_run_id: aiGraphResult?.ai_run_id ?? null,
+    ai_status: aiGraphResult?.status ?? null,
+    ai_automation_mode:
+      aiGraphResult?.status === "succeeded"
+        ? aiGraphResult.final_recommendation.automation_mode
+        : null,
+    ai_failure_code:
+      aiGraphResult?.status === "failed" ? aiGraphResult.error_code : null,
     triage_route: triage?.route ?? null,
   });
 
@@ -158,13 +168,38 @@ export async function ticketLifecycleWorkflow(
     return resultFromState(currentState());
   }
 
+  phase = "running_ai";
+  aiGraphResult = await activities.runAiGraph({
+    ...input,
+    ticket: ticketResult.ticket,
+    triage,
+  });
+
+  if (aiGraphResult.status === "failed") {
+    await recordAuditEvent({
+      tenant_id: input.tenant_id,
+      ticket_id: input.ticket_id,
+      correlation_id: input.correlation_id,
+      action: "ai_graph.failed",
+      actor: workflowActor(),
+      metadata: {
+        ai_run_id: aiGraphResult.ai_run_id,
+        trace_id: aiGraphResult.trace_id,
+        error_code: aiGraphResult.error_code,
+        error_message: aiGraphResult.error_message,
+        retryable: aiGraphResult.retryable,
+        reason_codes: aiGraphResult.reason_codes,
+      },
+    });
+  }
+
   phase = "waiting_for_approval";
   const approval = await activities.createApproval({
     tenant_id: input.tenant_id,
     ticket_id: input.ticket_id,
     correlation_id: input.correlation_id,
-    reason_code: triage.reason_code,
-    metadata: triage.metadata,
+    reason_code: approvalReasonCode(triage, aiGraphResult),
+    metadata: approvalMetadata(triage, aiGraphResult),
   });
   approvalId = approval.approval_id;
 
@@ -309,6 +344,68 @@ async function waitForApprovalSignalOrFirstResponseSla(
   return signaledBeforeDeadline ? "signal_received" : "sla_breached";
 }
 
+function approvalReasonCode(
+  triage: RunInitialTriageActivityResult,
+  aiGraphResult: RunAiGraphActivityResult,
+): string | null {
+  if (aiGraphResult.status === "failed") {
+    return aiGraphResult.reason_codes[0] ?? aiGraphResult.error_code;
+  }
+
+  return (
+    aiGraphResult.final_recommendation.reason_codes[0] ?? triage.reason_code
+  );
+}
+
+function approvalMetadata(
+  triage: RunInitialTriageActivityResult,
+  aiGraphResult: RunAiGraphActivityResult,
+): Record<string, unknown> {
+  if (aiGraphResult.status === "failed") {
+    return {
+      ...triage.metadata,
+      source: "ai_graph_failure",
+      triage: {
+        route: triage.route,
+        reason_code: triage.reason_code,
+        metadata: triage.metadata,
+      },
+      ai_graph: {
+        status: aiGraphResult.status,
+        ai_run_id: aiGraphResult.ai_run_id,
+        trace_id: aiGraphResult.trace_id,
+        error_code: aiGraphResult.error_code,
+        error_message: aiGraphResult.error_message,
+        retryable: aiGraphResult.retryable,
+        reason_codes: aiGraphResult.reason_codes,
+        eval_signals: aiGraphResult.eval_signals,
+      },
+    };
+  }
+
+  return {
+    ...triage.metadata,
+    source: "ai_graph",
+    triage: {
+      route: triage.route,
+      reason_code: triage.reason_code,
+      metadata: triage.metadata,
+    },
+    ai_graph: {
+      status: aiGraphResult.status,
+      ai_run_id: aiGraphResult.ai_run_id,
+      trace_id: aiGraphResult.trace_id,
+      classification: aiGraphResult.classification,
+      routing_decision: aiGraphResult.routing_decision,
+      tool_calls: aiGraphResult.tool_calls,
+      draft: aiGraphResult.draft,
+      guardrails: aiGraphResult.guardrails,
+      final_recommendation: aiGraphResult.final_recommendation,
+      eval_signals: aiGraphResult.eval_signals,
+    },
+  };
+}
+
 function findSlaTimer(
   timers: readonly TicketLifecycleSlaTimer[],
   deadlineType: TicketLifecycleSlaTimer["deadline_type"],
@@ -375,5 +472,9 @@ function resultFromState(
     first_response_due_at: state.first_response_due_at,
     sla_breached_deadline: state.sla_breached_deadline,
     sla_breached_due_at: state.sla_breached_due_at,
+    ai_run_id: state.ai_run_id,
+    ai_status: state.ai_status,
+    ai_automation_mode: state.ai_automation_mode,
+    ai_failure_code: state.ai_failure_code,
   };
 }

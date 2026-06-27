@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { TicketLifecycleActivities } from "./activities/ticket-lifecycle-activities.js";
 import { ticketLifecycleWorkflow } from "./workflows/ticket-lifecycle-workflow.js";
 import type {
+  RunAiGraphActivityResult,
   TicketLifecycleMessageReceivedSignal,
   TicketLifecycleWorkflowInput,
   TicketLifecycleWorkflowState,
@@ -29,7 +30,7 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
     await testEnv?.teardown();
   }, 30_000);
 
-  it("creates and triages a ticket, then waits for approval completion", async () => {
+  it("creates and triages a ticket, runs AI graph, then waits for approval completion", async () => {
     const calls: ActivityCall[] = [];
     let workflowHistory: unknown = null;
     const taskQueue = `ticket-lifecycle-${randomUUID()}`;
@@ -55,9 +56,12 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
         handle,
         (state) =>
           state.phase === "waiting_for_approval" &&
-          state.approval_id === "apr_test",
+          state.approval_id === "apr_test" &&
+          state.ai_status === "succeeded",
       );
       expect(waitingState.triage_route).toBe("human_approval");
+      expect(waitingState.ai_run_id).toBe("air_test");
+      expect(waitingState.ai_automation_mode).toBe("human_approve");
 
       await handle.signal("approval_completed", {
         approval_id: "apr_test",
@@ -84,15 +88,32 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       first_response_due_at: null,
       sla_breached_deadline: null,
       sla_breached_due_at: null,
+      ai_run_id: "air_test",
+      ai_status: "succeeded",
+      ai_automation_mode: "human_approve",
+      ai_failure_code: null,
     });
     expect(calls.map((call) => call.name)).toEqual([
       "createOrUpdateTicket",
       "emitDomainEvent:ticket_created",
       "runInitialTriage",
       "emitDomainEvent:ticket_state_transition",
+      "runAiGraph",
       "createApproval",
       "recordAuditEvent:approval.completed",
     ]);
+    expect(calls.find((call) => call.name === "createApproval")).toEqual(
+      expect.objectContaining({
+        reason_code: "v1_default_human_approval",
+        metadata: expect.objectContaining({
+          source: "ai_graph",
+          ai_graph: expect.objectContaining({
+            status: "succeeded",
+            ai_run_id: "air_test",
+          }),
+        }),
+      }),
+    );
     expect(workflowHistory).not.toBeNull();
     if (workflowHistory === null) {
       throw new Error("Expected workflow history to be fetched");
@@ -214,22 +235,113 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       first_response_due_at: "2026-06-26T00:15:00.000Z",
       sla_breached_deadline: "first_response",
       sla_breached_due_at: "2026-06-26T00:15:00.000Z",
+      ai_run_id: "air_test",
+      ai_status: "succeeded",
+      ai_automation_mode: "human_approve",
+      ai_failure_code: null,
     });
     expect(calls.map((call) => call.name)).toEqual([
       "createOrUpdateTicket",
       "emitDomainEvent:ticket_created",
       "runInitialTriage",
       "emitDomainEvent:ticket_state_transition",
+      "runAiGraph",
       "createApproval",
       "emitDomainEvent:ticket_sla_breached",
       "recordAuditEvent:ticket.sla_breached",
     ]);
+  });
+
+  it("routes structured AI graph failures to human approval", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls, {
+        aiGraphResult: makeAiGraphFailure(),
+      }),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      const waitingState = await waitForWorkflowState(
+        handle,
+        (state) =>
+          state.phase === "waiting_for_approval" &&
+          state.ai_status === "failed" &&
+          state.approval_id === "apr_test",
+      );
+      expect(waitingState.ai_failure_code).toBe("AI_RUNTIME_ERROR");
+      expect(waitingState.ai_automation_mode).toBeNull();
+
+      await handle.signal("approval_completed", {
+        approval_id: "apr_test",
+        status: "approved",
+        actor_id: "usr_approver",
+        decided_at: "2026-06-26T00:10:00.000Z",
+        notes: "Handled after AI runtime failure.",
+      });
+
+      return await handle.result();
+    });
+
+    expect(result).toEqual({
+      tenant_id: "ten_test",
+      ticket_id: "ticket_test",
+      phase: "completed",
+      processed_message_ids: ["msg_initial"],
+      approval_id: "apr_test",
+      approval_status: "approved",
+      manual_escalation_reason_code: null,
+      close_reason_code: null,
+      first_response_due_at: null,
+      sla_breached_deadline: null,
+      sla_breached_due_at: null,
+      ai_run_id: "air_failed",
+      ai_status: "failed",
+      ai_automation_mode: null,
+      ai_failure_code: "AI_RUNTIME_ERROR",
+    });
+    expect(calls.map((call) => call.name)).toEqual([
+      "createOrUpdateTicket",
+      "emitDomainEvent:ticket_created",
+      "runInitialTriage",
+      "emitDomainEvent:ticket_state_transition",
+      "runAiGraph",
+      "recordAuditEvent:ai_graph.failed",
+      "createApproval",
+      "recordAuditEvent:approval.completed",
+    ]);
+    expect(calls.find((call) => call.name === "createApproval")).toEqual(
+      expect.objectContaining({
+        reason_code: "AI_RUNTIME_ERROR",
+        metadata: expect.objectContaining({
+          source: "ai_graph_failure",
+          ai_graph: expect.objectContaining({
+            status: "failed",
+            error_code: "AI_RUNTIME_ERROR",
+          }),
+        }),
+      }),
+    );
   });
 });
 
 interface ActivityCall {
   readonly name: string;
   readonly message_id?: string;
+  readonly reason_code?: string | null;
+  readonly metadata?: Record<string, unknown>;
 }
 
 interface WorkflowHandleForTest {
@@ -241,6 +353,7 @@ interface ActivityFixtureOptions {
     readonly due_at: string;
     readonly timer_ms: number;
   };
+  readonly aiGraphResult?: RunAiGraphActivityResult;
 }
 
 function makeActivities(
@@ -292,8 +405,16 @@ function makeActivities(
         },
       };
     },
-    async createApproval() {
-      calls.push({ name: "createApproval" });
+    async runAiGraph() {
+      calls.push({ name: "runAiGraph" });
+      return options.aiGraphResult ?? makeAiGraphSuccess();
+    },
+    async createApproval(input) {
+      calls.push({
+        name: "createApproval",
+        reason_code: input.reason_code,
+        metadata: input.metadata,
+      });
       return {
         approval_id: "apr_test",
         status: "pending",
@@ -310,6 +431,77 @@ function makeActivities(
     },
     async emitDomainEvent(input) {
       calls.push({ name: `emitDomainEvent:${input.event_type}` });
+    },
+  };
+}
+
+function makeAiGraphSuccess(): RunAiGraphActivityResult {
+  return {
+    status: "succeeded",
+    ai_run_id: "air_test",
+    trace_id: "trace_test",
+    classification: {
+      topic: "order_status",
+    },
+    routing_decision: {
+      topic: "order_status",
+      subtopic: "shipment_tracking",
+      language: "en",
+      sentiment: "neutral",
+      urgency: "normal",
+      priority: "p2",
+      risk_level: "low",
+      confidence: 0.91,
+      automation_mode: "human_approve",
+      assigned_queue: "ai_draft_queue",
+      reason_codes: ["order_lookup_needed"],
+      required_tools: ["order_lookup"],
+      required_evidence: ["order", "shipping_policy"],
+    },
+    tool_calls: [],
+    draft: {
+      draft_text: "Thanks for reaching out. I checked the order status.",
+      customer_language: "en",
+      tone: "helpful_professional",
+      evidence: [
+        {
+          type: "order",
+          ref_id: "order_test",
+          summary: "Order is in transit.",
+        },
+      ],
+      actions: [],
+      risk_level: "low",
+      confidence: 0.89,
+      needs_human: true,
+      human_review_reasons: ["v1_default_human_approval"],
+    },
+    guardrails: {
+      passed: true,
+    },
+    final_recommendation: {
+      automation_mode: "human_approve",
+      risk_level: "low",
+      confidence: 0.88,
+      reason_codes: ["v1_default_human_approval"],
+    },
+    eval_signals: {
+      fixture: "ai_success",
+    },
+  };
+}
+
+function makeAiGraphFailure(): RunAiGraphActivityResult {
+  return {
+    status: "failed",
+    ai_run_id: "air_failed",
+    trace_id: "trace_failed",
+    error_code: "AI_RUNTIME_ERROR",
+    error_message: "AI runtime output failed schema validation.",
+    retryable: false,
+    reason_codes: ["AI_RUNTIME_ERROR"],
+    eval_signals: {
+      fixture: "ai_failure",
     },
   };
 }
