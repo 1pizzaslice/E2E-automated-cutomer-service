@@ -248,6 +248,12 @@ Rules:
 - Attachments are validated before storage.
 - HTML must be sanitized before display or AI consumption.
 
+Current implementation:
+
+- `packages/shared-schemas` exports `NormalizedInboundMessageSchema` as the canonical inbound contract, with `NormalizedInboundChannelSchema` (`email | whatsapp`), `CustomerIdentityTypeSchema`, `NormalizedInboundCustomerIdentitySchema`, `NormalizedInboundBodySchema`, and `NormalizedInboundAttachmentSchema` sub-schemas plus inferred types.
+- The schema is `.strict()`; `external_message_id`, `raw_payload_ref`, and `idempotency_key` are required (raw payload stored by reference), `attachments` is an explicit array, and the body must include `text` or `html`.
+- Provider adapter parsers, webhook/polling ingress, signature verification, attachment storage, dedup persistence, conversation threading, and HTML sanitization remain later Milestone 6 slices; only the normalized contract is defined so far.
+
 ### 4.3 Outbound Message
 
 Fields:

@@ -6,8 +6,8 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation is complete with the deterministic ticket workflow shell, activity boundaries, first-response SLA timer breach behavior, an AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), explicit activity retry policies, and replay coverage.
-- Current milestone: Milestone 5 - Temporal workflow foundation is complete. Milestone 6 - Channel Intake is the next milestone.
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation is complete with the deterministic ticket workflow shell, activity boundaries, first-response SLA timer breach behavior, an AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), explicit activity retry policies, and replay coverage. Milestone 6 channel intake has started with the normalized inbound message schema (`NormalizedInboundMessageSchema` and sub-schemas) defined in `packages/shared-schemas`.
+- Current milestone: Milestone 6 - Channel Intake is in progress. The normalized inbound message schema is defined in `packages/shared-schemas`; provider adapter parsers, webhook/polling ingress, signature verification, storage, dedup, and conversation threading remain.
 - Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope/payload schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/domain/error stream setup wiring, worker-side NATS JetStream event emit helpers including ticket SLA breach emission, worker-side NATS JetStream consumer base with storage-agnostic idempotency/error handling, local NATS JetStream config, live NATS publish/consume integration coverage, Temporal worker config/runtime scaffold, deterministic ticket lifecycle workflow shell, workflow activity contracts/placeholders including a structured AI graph placeholder, first-response SLA timer breach handling, structured AI failure-to-human routing, workflow-owned domain event emission activity adapter, explicit Temporal activity retry policies, opt-in live Temporal workflow/replay coverage, and session harness preflight/handoff checks. Full business workflow implementation is still pending.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
@@ -23,12 +23,17 @@ This file is the cross-session source of truth for what has been done, what is n
 
 The next implementation task is:
 
-> Begin Milestone 6 Channel Intake: define the normalized inbound message schema in `packages/shared-schemas`, add email and WhatsApp adapter fixture parsers, and add inbound webhook/polling placeholders with signature verification, raw payload storage by reference, dedup/idempotency, and conversation threading. The `ticketLifecycleWorkflow` start/`message_received` signal boundary is ready to receive normalized inbound messages; keep real provider calls behind adapter boundaries until their contracts are ready.
+> Continue Milestone 6 Channel Intake: add an email adapter fixture parser that maps a raw provider email payload fixture into the existing `NormalizedInboundMessageSchema`, with unit coverage over a fixture email and validation of the normalized output. Keep real provider calls behind an adapter boundary. Then add the WhatsApp adapter fixture parser, webhook/polling ingress with signature verification, raw payload storage by reference, attachment metadata handling, dedup/idempotency (via `external_message_id` + tenant/channel), and conversation threading, and finally wire normalized inbound intake to the ready `ticketLifecycleWorkflow` start/`message_received` signal boundary.
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat-milestone6-inbound-message-schema` from `main` and ran `pnpm harness:preflight`.
+- Started Milestone 6 Channel Intake by completing its first checklist item: defined the normalized inbound message contract in `packages/shared-schemas/src/index.ts`.
+- Added `NormalizedInboundMessageSchema` (`.strict()`) plus `ChannelTypeSchema`, `NormalizedInboundChannelSchema` (`email | whatsapp`), `CustomerIdentityTypeSchema`, `NormalizedInboundCustomerIdentitySchema`, `NormalizedInboundBodySchema` (refined to require `text` or `html`), and `NormalizedInboundAttachmentSchema`, with inferred type exports. `external_message_id`, `raw_payload_ref`, and `idempotency_key` are required so raw payloads are stored by reference and inbound dedup has a stable key.
+- Added shared-schema unit tests covering the canonical email fixture, a WhatsApp html-only/no-attachment message, and rejections of unsupported channels, empty bodies, missing `external_message_id`, and unknown top-level keys.
+- Updated `docs/BACKEND_SPEC.md` (section 4.2 implementation note), `docs/TEST_STRATEGY.md` (Milestone 6 coverage), `docs/PROJECT_HISTORY.md`, `README.md`, and `TODO.md` for the new contract; kept provider adapters, webhook/polling ingress, signature verification, storage, dedup persistence, and conversation threading as later Milestone 6 slices behind adapter boundaries.
 - Created feature branch `feat-milestone5-outbound-send` from `main` and ran `pnpm harness:preflight`.
 - Completed the final Milestone 5 checklist item by adding the `sendOutboundMessage` activity placeholder contract (`SendOutboundMessageActivityInput`/`SendOutboundMessageActivityResult`) plus the `responded` and `sending_response` workflow phases and an `outbound_message_id` result field.
 - Made `ticketLifecycleWorkflow` approval routing outcome-aware: it records `approval.completed` audit for every outcome, then approved/edited send an outbound response through `sendOutboundMessage` (with a deterministic `outbound:{tenant}:{ticket}:{approval_id}` idempotency key), emit `support.message.sent.v1`, and record `message.sent` audit before the `responded` phase; rejected ends in `completed` without sending; escalated records `ticket.manual_escalated` audit and ends in `manual_escalated`.
@@ -206,6 +211,15 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm harness:preflight` passed on branch `feat-milestone6-inbound-message-schema`.
+- `pnpm --filter @support/shared-schemas test` passes with 23 tests after adding the normalized inbound message schema coverage.
+- `pnpm format:check` passes (all matched files use Prettier code style).
+- `pnpm typecheck` passes across all packages after the new schema and type exports.
+- `pnpm lint` passes across all packages plus the Python scaffold compile step.
+- `pnpm test` passes (shared-schemas, db, workers, api, and Python scaffold), with the opt-in live Temporal workflow test still skipped by default.
+- `pnpm build` passes across all packages.
+- `pnpm test:integration` and `pnpm --filter @support/workers test:workflow` were not rerun because this slice only adds shared Zod schemas/types with no live PostgreSQL, NATS, or Temporal behavior changes.
+- `pnpm harness:handoff` passes on branch `feat-milestone6-inbound-message-schema`.
 - `pnpm harness:preflight` passed on branch `feat-milestone5-outbound-send`.
 - `pnpm --filter @support/shared-schemas typecheck` and `pnpm --filter @support/shared-schemas test` (17 tests) pass after adding the `MessageSentEventPayload` type export.
 - `pnpm --filter @support/workers typecheck` passes after the outbound send activity placeholder and approval-outcome routing updates.
@@ -655,7 +669,7 @@ Goal: Normalize email and WhatsApp inbound messages.
 
 Checklist:
 
-- [ ] Define normalized inbound message schema.
+- [x] Define normalized inbound message schema.
 - [ ] Add email adapter fixture parser.
 - [ ] Add email webhook/polling placeholder.
 - [ ] Add WhatsApp adapter fixture parser.
@@ -839,6 +853,16 @@ Acceptance criteria:
 ## Completed Log
 
 Use reverse chronological order.
+
+### 2026-07-02
+
+- Started Milestone 6 Channel Intake:
+  - Defined the normalized inbound message contract in `packages/shared-schemas/src/index.ts` as `NormalizedInboundMessageSchema` (`.strict()`) with `ChannelTypeSchema`, `NormalizedInboundChannelSchema` (`email | whatsapp`), `CustomerIdentityTypeSchema`, `NormalizedInboundCustomerIdentitySchema`, `NormalizedInboundBodySchema` (requires `text` or `html`), and `NormalizedInboundAttachmentSchema`, plus inferred type exports.
+  - Required `external_message_id`, `raw_payload_ref`, and `idempotency_key` so raw payloads are stored by reference and inbound dedup has a stable key.
+  - Added shared-schema unit tests for the canonical email fixture, a WhatsApp html-only/no-attachment message, and rejections of unsupported channels, empty bodies, missing `external_message_id`, and unknown top-level keys.
+  - Checked off the Milestone 6 "Define normalized inbound message schema" checklist item; recorded the email adapter fixture parser as the next slice.
+  - Updated `docs/BACKEND_SPEC.md`, `docs/TEST_STRATEGY.md`, `docs/PROJECT_HISTORY.md`, `README.md`, and `TODO.md`; kept provider adapters, ingress, signature verification, storage, dedup persistence, and conversation threading as later slices behind adapter boundaries.
+- Verification for this session is recorded in the Verification Status section above.
 
 ### 2026-06-27
 

@@ -392,6 +392,78 @@ export type MessageResourceResponse = z.infer<
 >;
 export type MessageListResponse = z.infer<typeof MessageListResponseSchema>;
 
+export const ChannelTypeSchema = z.enum(["email", "whatsapp", "chat_future"]);
+
+export const NormalizedInboundChannelSchema = z.enum(["email", "whatsapp"]);
+
+export const CustomerIdentityTypeSchema = z.enum([
+  "email",
+  "phone",
+  "whatsapp_id",
+  "external_user_id",
+]);
+
+export const NormalizedInboundCustomerIdentitySchema = z
+  .object({
+    type: CustomerIdentityTypeSchema,
+    value: z.string().min(1),
+    display_name: OptionalNullableStringSchema,
+  })
+  .strict();
+
+export const NormalizedInboundBodySchema = z
+  .object({
+    text: z.string().nullable(),
+    html: z.string().nullable(),
+  })
+  .strict()
+  .refine((body) => body.text !== null || body.html !== null, {
+    message: "Inbound message body must include text or html.",
+  });
+
+export const NormalizedInboundAttachmentSchema = z
+  .object({
+    filename: z.string().min(1),
+    content_type: z.string().min(1),
+    size_bytes: z.number().int().nonnegative(),
+    object_ref: z.string().min(1),
+  })
+  .strict();
+
+export const NormalizedInboundMessageSchema = z
+  .object({
+    tenant_id: z.string().min(1),
+    channel_id: z.string().min(1),
+    channel: NormalizedInboundChannelSchema,
+    provider: z.string().min(1),
+    external_thread_id: z.string().min(1).nullable(),
+    external_message_id: z.string().min(1),
+    customer_identity: NormalizedInboundCustomerIdentitySchema,
+    direction: z.literal("inbound"),
+    body: NormalizedInboundBodySchema,
+    attachments: z.array(NormalizedInboundAttachmentSchema),
+    raw_payload_ref: z.string().min(1),
+    received_at: z.string().datetime(),
+    idempotency_key: z.string().min(1),
+  })
+  .strict();
+
+export type ChannelType = z.infer<typeof ChannelTypeSchema>;
+export type NormalizedInboundChannel = z.infer<
+  typeof NormalizedInboundChannelSchema
+>;
+export type CustomerIdentityType = z.infer<typeof CustomerIdentityTypeSchema>;
+export type NormalizedInboundCustomerIdentity = z.infer<
+  typeof NormalizedInboundCustomerIdentitySchema
+>;
+export type NormalizedInboundBody = z.infer<typeof NormalizedInboundBodySchema>;
+export type NormalizedInboundAttachment = z.infer<
+  typeof NormalizedInboundAttachmentSchema
+>;
+export type NormalizedInboundMessage = z.infer<
+  typeof NormalizedInboundMessageSchema
+>;
+
 export const TenantPolicyDomainSchema = z.enum([
   "refunds",
   "cancellations",

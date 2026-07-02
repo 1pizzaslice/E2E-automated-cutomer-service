@@ -225,6 +225,11 @@ Current Milestone 5 Temporal foundation coverage:
 - The live workflow test is skipped in default `pnpm test` runs. Run it after `pnpm infra:up` with `TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow`.
 - The real channel send behind `sendOutboundMessage`, next-response/resolution SLA timer tests, outbound delivery/idempotency persistence tests, and API workflow start/signal tests remain pending.
 
+Current Milestone 6 Channel Intake coverage:
+
+- `packages/shared-schemas/src/index.test.ts` validates the normalized inbound message contract: it accepts the canonical email fixture, accepts a WhatsApp message with no attachments and an html-only body, and rejects unsupported channels, bodies with neither text nor html, a missing `external_message_id` (the dedup key), and unknown top-level keys.
+- Provider adapter parser tests, webhook signature-verification negative tests, dedup/idempotency tests, and conversation threading tests remain later Milestone 6 slices.
+
 ### 3.10 AI Runtime
 
 Required tests:

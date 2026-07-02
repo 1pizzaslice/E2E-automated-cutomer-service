@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, and the Milestone 5 Temporal ticket workflow shell with first-response SLA timer behavior plus a structured AI graph activity placeholder. Full business workflow implementation is still pending.
+Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, the Milestone 5 Temporal ticket workflow shell with first-response SLA timer behavior plus a structured AI graph activity placeholder, and the start of Milestone 6 channel intake with the normalized inbound message schema in `packages/shared-schemas`. Full business workflow implementation is still pending.
 
 ## Start Here
 
@@ -123,6 +123,15 @@ Implemented contracts:
 - Default unit coverage stays offline. The opt-in workflow test runs against local Temporal with `RUN_TEMPORAL_WORKFLOW_TESTS=true` via `pnpm --filter @support/workers test:workflow` and covers approval wait/resume, inbound signal dedupe, first-response SLA timer breach, AI success-to-approval routing, AI failure-to-human routing, approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), and workflow history replay.
 
 Current CRUD skeleton endpoints still do not start or signal workflows.
+
+## Current Channel Intake Foundation
+
+Implemented contracts:
+
+- `packages/shared-schemas` exports `NormalizedInboundMessageSchema`, the canonical email/WhatsApp inbound message contract, with `NormalizedInboundChannelSchema` (`email | whatsapp`), `CustomerIdentityTypeSchema`, and customer-identity/body/attachment sub-schemas plus inferred types.
+- The schema is `.strict()`; `external_message_id`, `raw_payload_ref`, and `idempotency_key` are required (raw payload stored by reference), and the body must include `text` or `html`.
+
+Provider adapter parsers, webhook/polling ingress, signature verification, attachment storage, dedup/idempotency persistence, and conversation threading are later Milestone 6 slices. Real provider calls stay behind adapter boundaries.
 
 ## Current API Skeleton
 
