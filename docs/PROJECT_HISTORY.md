@@ -16,6 +16,7 @@ This file records what has happened so far so a new human or AI agent can unders
 - Milestone 3 API skeleton is complete with request/auth/tenant context middleware placeholders, structured errors, a generated OpenAPI document endpoint, role permission checks, typed tenant/customer/ticket list-create-read-update contracts, typed conversation/message/policy/KB document/approval/audit event read-list contracts, ticket audit event list contracts, and PostgreSQL-backed API integration tests for those endpoint families.
 - Milestone 4 event bus foundation is complete with shared v1 domain event envelope and payload schemas, a tenant-aware NATS subject convention, worker-side NATS JetStream publisher/consumer base and connection wiring, explicit domain/error stream config, idempotent consumer handling, structured consumer error records, workflow-ready event emit helpers, and live NATS publish/consume integration coverage. CRUD skeleton endpoints still do not publish events.
 - Milestone 5 Temporal workflow foundation is complete with Temporal TypeScript SDK dependencies, worker config/runtime scaffolding, a deterministic ticket lifecycle workflow shell, activity contracts/placeholders, first-response SLA timer behavior, a structured AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing, a domain-event activity adapter that reuses the Milestone 4 emit helpers (now including message-sent), explicit activity retry policies, offline unit coverage, and an opt-in live Temporal workflow test with replay coverage. Real DB/AI/channel side effects and API workflow start/signal wiring remain bound behind activity boundaries for later milestones.
+- Milestone 6 channel intake has started. The normalized inbound message contract is defined in `packages/shared-schemas` as `NormalizedInboundMessageSchema` (plus `NormalizedInboundChannelSchema`, `CustomerIdentityTypeSchema`, and customer-identity/body/attachment sub-schemas and inferred types). Provider adapter parsers, webhook/polling ingress, signature verification, raw payload/attachment storage, dedup persistence, and conversation threading remain later Milestone 6 slices.
 - The engineering harness now includes explicit branch and handoff guardrails in the active reading path plus `pnpm harness:preflight` and `pnpm harness:handoff` checks.
 
 ## Product Direction
@@ -317,8 +318,9 @@ Fix:
 
 ## Next Recommended Task
 
-Milestone 5 Temporal workflow foundation is complete (workflow shell, signals, SLA timer, AI placeholder, outbound send placeholder, audit activity, deterministic/retry/replay tests). Begin Milestone 6 Channel Intake:
+Milestone 6 Channel Intake is in progress. The normalized inbound message schema is defined in `packages/shared-schemas` (`NormalizedInboundMessageSchema` and sub-schemas). Continue Milestone 6 one slice at a time:
 
-1. Define the normalized inbound message schema in `packages/shared-schemas` and add email/WhatsApp adapter fixture parsers.
-2. Add inbound webhook/polling placeholders with signature verification, raw payload storage by reference, dedup/idempotency, and conversation threading.
-3. Wire normalized inbound intake to the `ticketLifecycleWorkflow` start/`message_received` signal boundary (the workflow side is ready), and keep real provider calls behind adapter boundaries until their contracts are ready.
+1. Add an email adapter fixture parser that maps a raw provider email payload fixture into `NormalizedInboundMessageSchema`, keeping real provider calls behind an adapter boundary.
+2. Add a WhatsApp adapter fixture parser with the same contract, then the webhook/polling ingress placeholders with signature verification and raw payload storage by reference.
+3. Add attachment metadata handling, dedup/idempotency (via `external_message_id` + tenant/channel), and conversation threading.
+4. Wire normalized inbound intake to the `ticketLifecycleWorkflow` start/`message_received` signal boundary (the workflow side is ready), and keep real provider calls behind adapter boundaries until their contracts are ready.

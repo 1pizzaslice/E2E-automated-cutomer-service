@@ -20,6 +20,7 @@ import {
   HealthResponseSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
+  NormalizedInboundMessageSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
   TicketCreateRequestSchema,
@@ -608,5 +609,93 @@ describe("shared API contract schemas", () => {
     };
 
     expect(AuditEventResourceResponseSchema.parse(response)).toEqual(response);
+  });
+});
+
+describe("normalized inbound message schema", () => {
+  const inboundMessage = {
+    tenant_id: "ten_test",
+    channel_id: "chn_test",
+    channel: "email",
+    provider: "gmail",
+    external_thread_id: "provider-thread-id",
+    external_message_id: "provider-message-id",
+    customer_identity: {
+      type: "email",
+      value: "customer@example.com",
+      display_name: "Customer Name",
+    },
+    direction: "inbound",
+    body: {
+      text: "Where is my order?",
+      html: "<p>Where is my order?</p>",
+    },
+    attachments: [
+      {
+        filename: "receipt.pdf",
+        content_type: "application/pdf",
+        size_bytes: 12345,
+        object_ref: "s3://raw-payloads/receipt.pdf",
+      },
+    ],
+    raw_payload_ref: "s3://raw-payloads/provider-message-id.json",
+    received_at: "2026-06-18T00:00:00.000Z",
+    idempotency_key: "provider-message-id",
+  };
+
+  it("validates a canonical normalized inbound message", () => {
+    expect(NormalizedInboundMessageSchema.parse(inboundMessage)).toEqual(
+      inboundMessage,
+    );
+  });
+
+  it("accepts a WhatsApp message with no attachments and html-only body", () => {
+    expect(
+      NormalizedInboundMessageSchema.parse({
+        ...inboundMessage,
+        channel: "whatsapp",
+        provider: "whatsapp_cloud",
+        customer_identity: {
+          type: "whatsapp_id",
+          value: "15551234567",
+          display_name: null,
+        },
+        body: { text: null, html: "<p>Where is my order?</p>" },
+        attachments: [],
+      }),
+    ).toMatchObject({ channel: "whatsapp" });
+  });
+
+  it("rejects unsupported inbound channels", () => {
+    expect(() =>
+      NormalizedInboundMessageSchema.parse({
+        ...inboundMessage,
+        channel: "chat_future",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a body with neither text nor html", () => {
+    expect(() =>
+      NormalizedInboundMessageSchema.parse({
+        ...inboundMessage,
+        body: { text: null, html: null },
+      }),
+    ).toThrow(/text or html/);
+  });
+
+  it("rejects a missing external_message_id used for dedup", () => {
+    const { external_message_id: _omitted, ...withoutId } = inboundMessage;
+
+    expect(() => NormalizedInboundMessageSchema.parse(withoutId)).toThrow();
+  });
+
+  it("rejects unknown top-level keys", () => {
+    expect(() =>
+      NormalizedInboundMessageSchema.parse({
+        ...inboundMessage,
+        unexpected_field: "value",
+      }),
+    ).toThrow();
   });
 });
