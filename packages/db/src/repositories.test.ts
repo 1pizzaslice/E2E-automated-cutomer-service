@@ -8,13 +8,18 @@ import {
   auditEventByIdQuery,
   auditEventsForEntityQuery,
   auditEventsListQuery,
+  channelByIdQuery,
+  conversationByExternalThreadQuery,
   conversationsListQuery,
   conversationByIdQuery,
+  createInboundMessageQuery,
+  customerIdentityByValueQuery,
   customersListQuery,
   customerByIdQuery,
   integrationByIdQuery,
   kbDocumentByIdQuery,
   kbDocumentsListQuery,
+  messageByExternalIdQuery,
   messageByIdQuery,
   messagesListQuery,
   policiesListQuery,
@@ -404,5 +409,90 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain('"tool_definitions"."name" = $2');
     expect(compiled.sql).toContain('"tool_definitions"."status" = $3');
     expect(compiled.params).toEqual(["ten_a", "order_lookup", "active", 1]);
+  });
+
+  it("resolves a channel by id without a tenant scope", () => {
+    const query = channelByIdQuery(makeDb(), "chn_a");
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('from "channels"');
+    expect(compiled.sql).toContain('"channels"."channel_id" = $1');
+    expect(compiled.params).toEqual(["chn_a", 1]);
+  });
+
+  it("resolves a customer identity within a tenant, channel, and type", () => {
+    const query = customerIdentityByValueQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      { channel: "email", identityType: "email", identityValue: "a@b.test" },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"customer_identities"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"customer_identities"."channel" = $2');
+    expect(compiled.sql).toContain(
+      '"customer_identities"."identity_type" = $3',
+    );
+    expect(compiled.sql).toContain(
+      '"customer_identities"."identity_value" = $4',
+    );
+    expect(compiled.params).toEqual(["ten_a", "email", "email", "a@b.test", 1]);
+  });
+
+  it("finds a conversation by tenant, channel, and external thread id", () => {
+    const query = conversationByExternalThreadQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "chn_a",
+      "thread-1",
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"conversations"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"conversations"."channel_id" = $2');
+    expect(compiled.sql).toContain('"conversations"."external_thread_id" = $3');
+    expect(compiled.params).toEqual(["ten_a", "chn_a", "thread-1", 1]);
+  });
+
+  it("dedups inbound message reads by tenant, channel, and external message id", () => {
+    const query = messageByExternalIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "chn_a",
+      "provider-msg-1",
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"messages"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"messages"."channel_id" = $2');
+    expect(compiled.sql).toContain('"messages"."external_message_id" = $3');
+    expect(compiled.params).toEqual(["ten_a", "chn_a", "provider-msg-1", 1]);
+  });
+
+  it("inserts inbound messages with conflict-safe dedup", () => {
+    const query = createInboundMessageQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        messageId: "msg_a",
+        conversationId: "cnv_a",
+        channelId: "chn_a",
+        direction: "inbound",
+        createdByType: "customer",
+        bodyText: "hi",
+        bodyHtmlRef: null,
+        attachments: [],
+        externalMessageId: "provider-msg-1",
+        externalThreadId: "thread-1",
+        rawPayloadRef: "file://raw/1",
+        idempotencyKey: "provider-msg-1",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "messages"');
+    expect(compiled.sql).toContain("on conflict do nothing");
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("ten_a");
   });
 });

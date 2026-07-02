@@ -853,6 +853,94 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/webhooks/email/{provider}": {
+        post: {
+          summary: "Ingest an inbound email provider webhook",
+          description:
+            "Unauthenticated provider webhook. The request is authenticated by verifying the provider signature over the raw request body; the resolved channel determines the tenant.",
+          security: [],
+          parameters: [
+            {
+              name: "provider",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "channel_id",
+              in: "query",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { type: "object", additionalProperties: true },
+              },
+            },
+          },
+          responses: {
+            "202": {
+              description: "Inbound messages accepted",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/InboundWebhookAccepted",
+                  },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/webhooks/whatsapp/{provider}": {
+        post: {
+          summary: "Ingest an inbound WhatsApp provider webhook",
+          description:
+            "Unauthenticated provider webhook. The request is authenticated by verifying the provider signature over the raw request body; the resolved channel determines the tenant.",
+          security: [],
+          parameters: [
+            {
+              name: "provider",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "channel_id",
+              in: "query",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { type: "object", additionalProperties: true },
+              },
+            },
+          },
+          responses: {
+            "202": {
+              description: "Inbound messages accepted",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/InboundWebhookAccepted",
+                  },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -1506,6 +1594,51 @@ export function buildOpenApiDocument() {
               items: { $ref: "#/components/schemas/Ticket" },
             },
             page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        InboundWebhookMessageResult: {
+          type: "object",
+          required: [
+            "external_message_id",
+            "message_id",
+            "conversation_id",
+            "ticket_id",
+            "deduplicated",
+            "workflow_id",
+          ],
+          additionalProperties: false,
+          properties: {
+            external_message_id: { type: "string" },
+            message_id: { type: "string" },
+            conversation_id: { type: "string" },
+            ticket_id: { type: "string" },
+            deduplicated: { type: "boolean" },
+            workflow_id: { type: ["string", "null"] },
+          },
+        },
+        InboundWebhookAccepted: {
+          type: "object",
+          required: [
+            "channel_id",
+            "provider",
+            "received",
+            "accepted",
+            "deduplicated",
+            "results",
+          ],
+          additionalProperties: false,
+          properties: {
+            channel_id: { type: "string" },
+            provider: { type: "string" },
+            received: { type: "integer", minimum: 0 },
+            accepted: { type: "integer", minimum: 0 },
+            deduplicated: { type: "integer", minimum: 0 },
+            results: {
+              type: "array",
+              items: {
+                $ref: "#/components/schemas/InboundWebhookMessageResult",
+              },
+            },
           },
         },
         TicketCreateRequest: {

@@ -255,7 +255,13 @@ Current implementation:
 - `packages/integrations/src/channels` provides pure provider adapters: `parseInboundEmailMessage` maps a provider-neutral inbound email payload (`RawInboundEmailSchema`, Mailgun/SendGrid-style) into one normalized message, and `parseInboundWhatsAppMessages` maps a WhatsApp Cloud webhook (`RawInboundWhatsAppSchema`) into one normalized message per batched inbound message. Raw provider schemas are non-strict (unknown provider fields are ignored); normalized output is validated with the strict contract. Adapters perform no network or storage side effects — a webhook handler resolves tenant/channel, stores the raw payload, and passes an `InboundAdapterContext` (`tenant_id`, `channel_id`, `provider`, `raw_payload_ref`).
 - Email threading prefers an explicit provider thread id, then `In-Reply-To`, then the first `References` entry. WhatsApp threads on the sender `wa_id`; media messages become attachment metadata (`whatsapp-media:{media_id}` reference, null pending size).
 - `packages/integrations/src/channels/signature.ts` provides timing-safe HMAC-SHA256 verification: `verifyWhatsAppCloudSignature` (Meta `X-Hub-Signature-256`) and `verifyMailgunSignature` (`timestamp`+`token` signed with the account key), on a shared `verifyHmacSha256Signature` primitive. Malformed, empty, wrong-length, or mismatched signatures return false so webhook handlers can reject bad payloads.
-- Webhook/polling ingress endpoints, raw payload/attachment storage, inbound dedup persistence, conversation threading persistence, HTML sanitization, and workflow start/signal wiring remain later Milestone 6 slices.
+- `packages/api` exposes the webhook ingress endpoints `POST /v1/webhooks/email/{provider}` and `POST /v1/webhooks/whatsapp/{provider}` (see §17.4). They are unauthenticated (no bearer token) and exempt from the actor/tenant middleware; the request is authenticated by verifying the provider signature over the raw request body. A raw-JSON body parser preserves the exact bytes on `request.rawBody` for signature verification. The handler resolves the channel by `channel_id` (owner-connection read, since tenant context is not yet known), verifies the signature (WhatsApp Cloud `X-Hub-Signature-256`; email Mailgun `timestamp`+`token`; a generic `X-Webhook-Signature-256: sha256=<hex>` HMAC over the raw body for other email providers), stores the raw payload by reference, runs the pure adapter, and hands each normalized message to the intake service.
+- The signing secret is resolved from an opaque `signature_secret_ref` on the channel `config` via a `WebhookSecretResolver` (default: environment lookup), keeping the secret out of the config row.
+- Raw payloads are stored by reference through a `RawPayloadStore` port (default: filesystem, returning a `file://` ref; swap for an object store in production). The ref is persisted on the message `raw_payload_ref`; bytes are never stored inline in PostgreSQL.
+- Inbound intake persistence (`packages/api` `InboundIntakeStore`, PostgreSQL-backed) runs tenant-scoped under RLS: it dedups on `external_message_id` within tenant/channel (backed by the `messages_external_message_idx` unique index plus a conflict-safe insert, and the `messages_idempotency_idx` idempotency key), resolves or creates the customer via `customer_identities`, threads the conversation on `external_thread_id` (`conversations_external_thread_idx`), inserts the inbound message, and updates `conversations.last_message_at`. Duplicate provider events do not create duplicate messages or re-signal the workflow.
+- Normalized inbound intake is wired to the ready ticket lifecycle workflow start/signal boundary via an `InboundWorkflowLauncher` port. The default uses Temporal `signalWithStart` with a per-conversation workflow id (`ticket-lifecycle:{tenant}:{conversation}`): the first message starts `ticketLifecycleWorkflow`; later messages are delivered as `message_received` signals to the running workflow. Milestone 6 models one lifecycle workflow per conversation (deterministic ticket id `tkt_{conversation_id}`), a placeholder to revisit when the full ticketing milestone lands.
+- An email polling placeholder (`pollInboundEmailPlaceholder`) marks where scheduled IMAP/pull-API polling will feed the same normalized intake path; it currently performs no fetch.
+- Attachment binary storage (media download) and oversize-attachment rejection, HTML sanitization to `body_html_ref`, and multi-ticket-per-conversation lifecycle remain later slices.
 
 ### 4.3 Outbound Message
 
@@ -864,6 +870,13 @@ Current implementation:
 - `POST /v1/webhooks/whatsapp/{provider}`
 
 Webhook endpoints verify signatures before processing.
+
+Implementation notes (Milestone 6):
+
+- Both endpoints require a `channel_id` query parameter identifying the target channel; the channel row determines the tenant and holds the `signature_secret_ref`.
+- Endpoints are unauthenticated (signature-authenticated) and exempt from the bearer-token/tenant middleware. The signature is verified over the raw request body before any persistence side effect.
+- On success they return `202 Accepted` with an `InboundWebhookAccepted` body: `channel_id`, `provider`, `received`, `accepted`, `deduplicated`, and a `results[]` array (`external_message_id`, `message_id`, `conversation_id`, `ticket_id`, `deduplicated`, `workflow_id`). A single WhatsApp webhook may batch multiple messages, so `results` can contain more than one entry.
+- Failures use the standard structured error contract: unknown/inactive channel → `404 RESOURCE_NOT_FOUND`; bad/missing signature → `403 FORBIDDEN`; unparseable body or payload that fails normalization → `400 VALIDATION_ERROR`.
 
 ### 17.5 Customers
 

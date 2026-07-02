@@ -7,7 +7,7 @@ This file is the cross-session source of truth for what has been done, what is n
 ## Current Status
 
 - Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation is complete with the deterministic ticket workflow shell, activity boundaries, first-response SLA timer breach behavior, an AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), explicit activity retry policies, and replay coverage. Milestone 6 channel intake is ~half complete with the normalized inbound message schema (`NormalizedInboundMessageSchema` and sub-schemas) in `packages/shared-schemas`, plus pure email/WhatsApp provider adapters and HMAC signature verification in `packages/integrations/src/channels`.
-- Current milestone: Milestone 6 - Channel Intake is ~half complete. The normalized inbound message schema, email/WhatsApp provider adapters, attachment metadata mapping, provider signature verification, and inbound adapter tests are done; webhook/polling ingress endpoints, raw payload/attachment storage, dedup/idempotency persistence, conversation threading persistence, and workflow start/signal wiring remain.
+- Current milestone: Milestone 6 - Channel Intake is complete. On top of the normalized inbound schema, provider adapters, and signature verifiers, this session added the `POST /v1/webhooks/email/{provider}` and `POST /v1/webhooks/whatsapp/{provider}` ingress endpoints (raw-body signature verification, unauthenticated + tenant-resolved by channel), raw payload storage by reference (`RawPayloadStore` port), tenant-scoped inbound persistence with dedup on `external_message_id`/idempotency key and conversation threading on `external_thread_id`, and start/signal wiring to `ticketLifecycleWorkflow` via an `InboundWorkflowLauncher` port (Temporal `signalWithStart`, per-conversation workflow id). All Milestone 6 checklist items and acceptance criteria are checked off. Next milestone: Milestone 7 - KB And Retrieval.
 - Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope/payload schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/domain/error stream setup wiring, worker-side NATS JetStream event emit helpers including ticket SLA breach emission, worker-side NATS JetStream consumer base with storage-agnostic idempotency/error handling, local NATS JetStream config, live NATS publish/consume integration coverage, Temporal worker config/runtime scaffold, deterministic ticket lifecycle workflow shell, workflow activity contracts/placeholders including a structured AI graph placeholder, first-response SLA timer breach handling, structured AI failure-to-human routing, workflow-owned domain event emission activity adapter, explicit Temporal activity retry policies, opt-in live Temporal workflow/replay coverage, and session harness preflight/handoff checks. Full business workflow implementation is still pending.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
@@ -23,12 +23,25 @@ This file is the cross-session source of truth for what has been done, what is n
 
 The next implementation task is:
 
-> Continue Milestone 6 Channel Intake with the ingress + persistence slices (the adapters and signature verifiers are done in `packages/integrations/src/channels`). Add `POST /v1/webhooks/email/{provider}` and `POST /v1/webhooks/whatsapp/{provider}` handlers (plus an email polling placeholder) in `packages/api`: each verifies the provider signature over the raw request body using the `packages/integrations` verifiers, stores the raw payload by reference, resolves tenant/channel, and calls the adapter. Then add raw payload/attachment storage by reference, inbound dedup/idempotency persistence keyed by `external_message_id` + tenant/channel, conversation threading persistence keyed by `external_thread_id`, and finally wire normalized inbound intake to the ready `ticketLifecycleWorkflow` start/`message_received` signal boundary.
+> Start Milestone 7 - KB And Retrieval. Define the KB document and KB chunk schemas in `packages/shared-schemas` (the `kb_documents`/`kb_chunks` tables and `pgvector` embedding column already exist in `packages/db`), then add the document upload/ingestion API, chunking pipeline, embedding pipeline, pgvector index, and tenant-scoped retrieval with citation metadata. Keep tenant isolation (retrieval must never cross a tenant boundary) and stale/inactive document exclusion first-class, with retrieval evaluation fixtures, prompt-injection test content, and tenant-isolation retrieval tests.
+
+Milestone 6 follow-ups to fold into later slices (not blockers): attachment binary storage + oversize-attachment rejection, HTML sanitization to `body_html_ref`, and supporting multiple tickets per conversation (Milestone 6 wires one lifecycle workflow per conversation with a deterministic `tkt_{conversation_id}` ticket id).
 
 ## Session Handoff
 
 ### Last Session Summary
 
+- Created feature branch `feat-milestone6-inbound-ingress` from `main` and ran `pnpm harness:preflight`.
+- Completed the remaining Milestone 6 Channel Intake slices in one coherent ingress+persistence+wiring change, finishing the milestone.
+- Added the webhook ingress endpoints `POST /v1/webhooks/email/{provider}` and `POST /v1/webhooks/whatsapp/{provider}` in `packages/api` (`webhooks.ts`): a raw-JSON body parser preserves `request.rawBody`; the handler resolves the channel by required `channel_id`, verifies the provider signature over the raw body (WhatsApp `X-Hub-Signature-256`, Mailgun `timestamp`+`token`, generic `X-Webhook-Signature-256` HMAC), stores the raw payload, runs the pure adapter, and ingests each normalized message. Endpoints are exempt from bearer/tenant middleware (`WEBHOOK_PATH_PREFIX` skip in `request-context.ts`).
+- Added a `RawPayloadStore` port (`raw-payload-store.ts`) with a filesystem default (`file://` refs) and an in-memory test double; raw bytes are stored by reference, never inline in PostgreSQL.
+- Added the `InboundIntakeStore` persistence boundary (`inbound-intake-store.ts`) with a lazily-connected PostgreSQL implementation (channel resolution on the owner connection; all writes under `withTenantTransaction`/RLS) and an in-memory implementation mirroring dedup + threading semantics. Added DB query helpers (`channelByIdQuery`, `customerIdentityByValueQuery`, `createCustomerIdentityQuery`, `conversationByExternalThreadQuery`, `createConversationQuery`, `updateConversationLastMessageAtQuery`, `messageByExternalIdQuery`, conflict-safe `createInboundMessageQuery`) plus `Channel`/`CustomerIdentity` schema type exports.
+- Added the intake orchestration service (`inbound-intake.ts`): resolve channel + signing secret (`WebhookSecretResolver`, env default), dedup on `external_message_id`, resolve/create customer via `customer_identities`, thread the conversation on `external_thread_id`, insert the message, touch `last_message_at`, then start/signal the workflow. Duplicate events never create duplicate messages or re-signal.
+- Wired intake to the ready `ticketLifecycleWorkflow` start/`message_received` boundary via an `InboundWorkflowLauncher` port (`inbound-workflow-launcher.ts`): the Temporal default uses `signalWithStart` with a per-conversation workflow id `ticket-lifecycle:{tenant}:{conversation}` and a deterministic `tkt_{conversation_id}` ticket id; tests use a recording launcher. Added `@support/integrations` and `@temporalio/client` to `@support/api`.
+- Added an email polling placeholder (`pollInboundEmailPlaceholder`) for the future scheduled IMAP/pull-API path.
+- Added the `InboundWebhookAccepted`/`InboundWebhookMessageResult` response contract to `@support/shared-schemas`, the two webhook paths + schemas to the served OpenAPI document, and injectable `webhooks` deps to `buildApp` (default = lazy DB store + Temporal launcher + filesystem raw store).
+- Updated `docs/BACKEND_SPEC.md` (§4.2 and §17.4), `docs/TEST_STRATEGY.md` (Milestone 6 coverage), `docs/PROJECT_HISTORY.md`, `README.md`, and `TODO.md` (checklist + acceptance criteria all checked; Milestone 7 recorded as next).
+- Prior Milestone 6 slices (unchanged this session): the normalized inbound message schema (`feat-milestone6-inbound-message-schema`) and the pure email/WhatsApp adapters + signature verifiers (`feat-milestone6-inbound-adapters`).
 - Created feature branch `feat-milestone6-inbound-adapters` from `main` and ran `pnpm harness:preflight`.
 - Clubbed five related Milestone 6 checklist items into one coherent `packages/integrations/src/channels` slice: email adapter fixture parser, WhatsApp adapter fixture parser, attachment metadata handling, signature verification for a supported provider, and inbound adapter tests.
 - Added `@support/shared-schemas` as a workspace dependency of `@support/integrations` and gave the package an `exports` map plus a `src/index.ts` barrel.
@@ -220,6 +233,14 @@ The next implementation task is:
 
 ### Verification Status
 
+- `pnpm harness:preflight` passed on branch `feat-milestone6-inbound-ingress`.
+- `pnpm install` linked the new `@support/integrations` and `@temporalio/client` dependencies into `@support/api`.
+- `pnpm -r typecheck` passes across all packages after the ingress/persistence/wiring additions.
+- `pnpm lint` passes across all packages (per-package `tsc --noEmit`).
+- `pnpm format` + `pnpm format:check` pass (all matched files use Prettier code style).
+- `pnpm -r test` passes: shared-schemas (24), integrations (24), workers (37, 9 skipped), db (41, 17 skipped), api (56, 25 skipped). New always-run tests: `packages/api/src/webhooks.test.ts`, `packages/api/src/inbound-intake.test.ts`, and the new intake query-builder cases in `packages/db/src/repositories.test.ts`.
+- Live verification with local Compose infra (`pnpm infra:up`, PostgreSQL healthy) and `DATABASE_URL=postgres://support:support@localhost:5432/support`: `pnpm --filter @support/api test:integration` passes 25 tests including the new `inbound-intake-store.integration.test.ts` (dedup, threading, and persistence under RLS); `pnpm --filter @support/db test:integration` passes 17 tests (no regressions).
+- The opt-in live Temporal workflow test (`pnpm --filter @support/workers test:workflow`) was not rerun: this slice adds the API-side start/signal launcher (unit-tested with a recording launcher) and does not change workflow/activity code.
 - `pnpm harness:preflight` passed on branch `feat-milestone6-inbound-adapters`.
 - `pnpm install` linked the new `@support/shared-schemas` workspace dependency into `@support/integrations`.
 - `pnpm --filter @support/integrations test` passes with 24 tests (email adapter, WhatsApp adapter, signature verification, existing tool contract).
@@ -691,22 +712,27 @@ Checklist:
 
 - [x] Define normalized inbound message schema.
 - [x] Add email adapter fixture parser.
-- [ ] Add email webhook/polling placeholder.
+- [x] Add email webhook/polling placeholder.
 - [x] Add WhatsApp adapter fixture parser.
-- [ ] Add WhatsApp webhook handler.
+- [x] Add WhatsApp webhook handler.
 - [x] Add signature verification for supported provider.
-- [ ] Add raw payload storage.
+- [x] Add raw payload storage.
 - [x] Add attachment metadata handling.
-- [ ] Add dedup/idempotency.
-- [ ] Add conversation threading.
+- [x] Add dedup/idempotency.
+- [x] Add conversation threading.
 - [x] Add inbound adapter tests.
 
 Acceptance criteria:
 
-- [ ] Duplicate inbound events do not create duplicate messages.
-- [ ] Raw payloads are stored by reference.
-- [ ] Conversation threading works for fixtures.
+- [x] Duplicate inbound events do not create duplicate messages.
+- [x] Raw payloads are stored by reference.
+- [x] Conversation threading works for fixtures.
 - [x] Bad signatures are rejected.
+
+Deferred to later slices (not blocking Milestone 6 completion): attachment
+binary storage + oversize-attachment rejection, HTML sanitization to
+`body_html_ref`, and multi-ticket-per-conversation lifecycle (Milestone 6
+models one lifecycle workflow per conversation).
 
 ## Milestone 7: KB And Retrieval
 

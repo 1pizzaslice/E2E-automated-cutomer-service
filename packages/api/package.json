@@ -8,12 +8,14 @@
     "dev": "tsx watch src/server.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:integration": "RUN_API_INTEGRATION_TESTS=true vitest run src/app.integration.test.ts",
+    "test:integration": "RUN_API_INTEGRATION_TESTS=true vitest run src/app.integration.test.ts src/inbound-intake-store.integration.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@support/db": "workspace:*",
+    "@support/integrations": "workspace:*",
     "@support/shared-schemas": "workspace:*",
+    "@temporalio/client": "^1.18.1",
     "fastify": "^5.0.0",
     "zod": "^4.0.0"
   }

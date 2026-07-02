@@ -32,10 +32,16 @@ export interface TenantRequestContext extends RequestContext {
 declare module "fastify" {
   interface FastifyRequest {
     requestContext?: RequestContext;
+    rawBody?: Buffer;
   }
 }
 
 const HEALTH_PATHS = new Set(["/health", "/ready"]);
+
+// Provider webhooks authenticate by signature over the raw request body, not by
+// bearer token, so they are exempt from the actor/tenant auth requirement. The
+// webhook handler resolves tenant/channel and verifies the signature itself.
+const WEBHOOK_PATH_PREFIX = "/v1/webhooks/";
 
 export function registerRequestContext(app: FastifyInstance): void {
   app.addHook("onRequest", async (request, reply) => {
@@ -47,7 +53,7 @@ export function registerRequestContext(app: FastifyInstance): void {
     reply.header("x-request-id", requestId);
     reply.header("x-correlation-id", correlationId);
 
-    if (HEALTH_PATHS.has(path)) {
+    if (HEALTH_PATHS.has(path) || path.startsWith(WEBHOOK_PATH_PREFIX)) {
       return;
     }
 
