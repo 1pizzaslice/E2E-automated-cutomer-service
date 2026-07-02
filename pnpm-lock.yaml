@@ -29,9 +29,15 @@ importers:
       '@support/db':
         specifier: workspace:*
         version: link:../db
+      '@support/integrations':
+        specifier: workspace:*
+        version: link:../integrations
       '@support/shared-schemas':
         specifier: workspace:*
         version: link:../shared-schemas
+      '@temporalio/client':
+        specifier: ^1.18.1
+        version: 1.18.1
       fastify:
         specifier: ^5.0.0
         version: 5.8.5

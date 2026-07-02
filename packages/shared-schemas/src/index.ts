@@ -473,6 +473,35 @@ export type NormalizedInboundMessage = z.infer<
   typeof NormalizedInboundMessageSchema
 >;
 
+export const InboundWebhookMessageResultSchema = z
+  .object({
+    external_message_id: z.string(),
+    message_id: z.string(),
+    conversation_id: z.string(),
+    ticket_id: z.string(),
+    deduplicated: z.boolean(),
+    workflow_id: z.string().nullable(),
+  })
+  .strict();
+
+export const InboundWebhookAcceptedResponseSchema = z
+  .object({
+    channel_id: z.string().min(1),
+    provider: z.string().min(1),
+    received: z.number().int().nonnegative(),
+    accepted: z.number().int().nonnegative(),
+    deduplicated: z.number().int().nonnegative(),
+    results: z.array(InboundWebhookMessageResultSchema),
+  })
+  .strict();
+
+export type InboundWebhookMessageResult = z.infer<
+  typeof InboundWebhookMessageResultSchema
+>;
+export type InboundWebhookAcceptedResponse = z.infer<
+  typeof InboundWebhookAcceptedResponseSchema
+>;
+
 export const TenantPolicyDomainSchema = z.enum([
   "refunds",
   "cancellations",

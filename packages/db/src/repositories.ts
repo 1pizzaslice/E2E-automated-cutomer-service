@@ -3,7 +3,9 @@ import type { SupportDatabase } from "./client.js";
 import {
   approvals,
   auditEvents,
+  channels,
   conversations,
+  customerIdentities,
   customers,
   integrations,
   kbChunks,
@@ -11,10 +13,15 @@ import {
   messages,
   type Approval,
   type AuditEvent,
+  type Channel,
   type Conversation,
+  type CustomerIdentity,
   type KbDocument,
   type Message,
+  type NewConversation,
   type NewCustomer,
+  type NewCustomerIdentity,
+  type NewMessage,
   type NewTenant,
   type NewTicket,
   type TenantPolicy,
@@ -24,6 +31,9 @@ import {
   tickets,
   toolDefinitions,
 } from "./schema.js";
+
+type ChannelType = Channel["type"];
+type CustomerIdentityType = CustomerIdentity["identityType"];
 
 export interface TenantScope {
   readonly tenantId: string;
@@ -600,4 +610,146 @@ export function visibleToolDefinitionByNameQuery(
       ),
     )
     .limit(1);
+}
+
+// --- Milestone 6 channel intake ---------------------------------------------
+
+/**
+ * Resolve a channel by id without a tenant scope. Channel resolution happens
+ * before a webhook has established tenant context, so this read runs on the
+ * owner/service connection (RLS is not forced) to learn the owning tenant,
+ * provider, type, status, and config. Tenant-scoped ingestion writes run under
+ * `withTenantTransaction` once the tenant is known.
+ */
+export function channelByIdQuery(db: SupportDatabase, channelId: string) {
+  return db
+    .select()
+    .from(channels)
+    .where(eq(channels.channelId, channelId))
+    .limit(1);
+}
+
+export function customerIdentityByValueQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  params: {
+    readonly channel: ChannelType;
+    readonly identityType: CustomerIdentityType;
+    readonly identityValue: string;
+  },
+) {
+  return db
+    .select()
+    .from(customerIdentities)
+    .where(
+      and(
+        eq(customerIdentities.tenantId, scope.tenantId),
+        eq(customerIdentities.channel, params.channel),
+        eq(customerIdentities.identityType, params.identityType),
+        eq(customerIdentities.identityValue, params.identityValue),
+      ),
+    )
+    .limit(1);
+}
+
+export function createCustomerIdentityQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewCustomerIdentity, "tenantId">,
+) {
+  return db
+    .insert(customerIdentities)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+export function conversationByExternalThreadQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  channelId: string,
+  externalThreadId: string,
+) {
+  return db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.tenantId, scope.tenantId),
+        eq(conversations.channelId, channelId),
+        eq(conversations.externalThreadId, externalThreadId),
+      ),
+    )
+    .limit(1);
+}
+
+export function createConversationQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewConversation, "tenantId">,
+) {
+  return db
+    .insert(conversations)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+export function updateConversationLastMessageAtQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  conversationId: string,
+  lastMessageAt: Date,
+) {
+  return db
+    .update(conversations)
+    .set({ lastMessageAt, updatedAt: new Date() })
+    .where(
+      and(
+        eq(conversations.tenantId, scope.tenantId),
+        eq(conversations.conversationId, conversationId),
+      ),
+    )
+    .returning();
+}
+
+/**
+ * Look up an existing inbound message by its provider `external_message_id`
+ * within a tenant/channel. This is the inbound dedup key; the underlying unique
+ * index (`messages_external_message_idx`) also enforces it on insert.
+ */
+export function messageByExternalIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  channelId: string,
+  externalMessageId: string,
+) {
+  return db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        eq(messages.channelId, channelId),
+        eq(messages.externalMessageId, externalMessageId),
+      ),
+    )
+    .limit(1);
+}
+
+/**
+ * Insert an inbound message, deduplicating on any unique constraint
+ * (external message id or idempotency key). Returns the inserted row, or an
+ * empty result when a concurrent insert already persisted the message.
+ */
+export function createInboundMessageQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewMessage, "tenantId">,
+) {
+  return db
+    .insert(messages)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
 }
