@@ -416,16 +416,15 @@ export const NormalizedInboundBodySchema = z
     text: z.string().nullable(),
     html: z.string().nullable(),
   })
-  .strict()
-  .refine((body) => body.text !== null || body.html !== null, {
-    message: "Inbound message body must include text or html.",
-  });
+  .strict();
 
 export const NormalizedInboundAttachmentSchema = z
   .object({
     filename: z.string().min(1),
     content_type: z.string().min(1),
-    size_bytes: z.number().int().nonnegative(),
+    // `size_bytes` is null when the provider does not report a size at intake
+    // (for example WhatsApp media that is resolved on later download).
+    size_bytes: z.number().int().nonnegative().nullable(),
     object_ref: z.string().min(1),
   })
   .strict();
@@ -446,7 +445,17 @@ export const NormalizedInboundMessageSchema = z
     received_at: z.string().datetime(),
     idempotency_key: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .refine(
+    (message) =>
+      message.body.text !== null ||
+      message.body.html !== null ||
+      message.attachments.length > 0,
+    {
+      message:
+        "Inbound message must include body text, body html, or at least one attachment.",
+    },
+  );
 
 export type ChannelType = z.infer<typeof ChannelTypeSchema>;
 export type NormalizedInboundChannel = z.infer<

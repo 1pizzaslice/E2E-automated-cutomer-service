@@ -666,6 +666,30 @@ describe("normalized inbound message schema", () => {
     ).toMatchObject({ channel: "whatsapp" });
   });
 
+  it("accepts a media-only message with an empty body and a null attachment size", () => {
+    expect(
+      NormalizedInboundMessageSchema.parse({
+        ...inboundMessage,
+        channel: "whatsapp",
+        provider: "whatsapp_cloud",
+        customer_identity: {
+          type: "whatsapp_id",
+          value: "15551234567",
+          display_name: null,
+        },
+        body: { text: null, html: null },
+        attachments: [
+          {
+            filename: "receipt.pdf",
+            content_type: "application/pdf",
+            size_bytes: null,
+            object_ref: "whatsapp-media:MEDIA_ID",
+          },
+        ],
+      }),
+    ).toMatchObject({ channel: "whatsapp" });
+  });
+
   it("rejects unsupported inbound channels", () => {
     expect(() =>
       NormalizedInboundMessageSchema.parse({
@@ -675,13 +699,14 @@ describe("normalized inbound message schema", () => {
     ).toThrow();
   });
 
-  it("rejects a body with neither text nor html", () => {
+  it("rejects a message with no text, html, or attachments", () => {
     expect(() =>
       NormalizedInboundMessageSchema.parse({
         ...inboundMessage,
         body: { text: null, html: null },
+        attachments: [],
       }),
-    ).toThrow(/text or html/);
+    ).toThrow(/attachment/);
   });
 
   it("rejects a missing external_message_id used for dedup", () => {
