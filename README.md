@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, the Milestone 5 Temporal ticket workflow shell with first-response SLA timer behavior plus a structured AI graph activity placeholder, and the start of Milestone 6 channel intake with the normalized inbound message schema in `packages/shared-schemas`. Full business workflow implementation is still pending.
+Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, the Milestone 5 Temporal ticket workflow shell with first-response SLA timer behavior plus a structured AI graph activity placeholder, and Milestone 6 channel intake in progress with the normalized inbound message schema plus email/WhatsApp provider adapters and HMAC signature verification in `packages/integrations`. Full business workflow implementation is still pending.
 
 ## Start Here
 
@@ -128,10 +128,11 @@ Current CRUD skeleton endpoints still do not start or signal workflows.
 
 Implemented contracts:
 
-- `packages/shared-schemas` exports `NormalizedInboundMessageSchema`, the canonical email/WhatsApp inbound message contract, with `NormalizedInboundChannelSchema` (`email | whatsapp`), `CustomerIdentityTypeSchema`, and customer-identity/body/attachment sub-schemas plus inferred types.
-- The schema is `.strict()`; `external_message_id`, `raw_payload_ref`, and `idempotency_key` are required (raw payload stored by reference), and the body must include `text` or `html`.
+- `packages/shared-schemas` exports `NormalizedInboundMessageSchema`, the canonical email/WhatsApp inbound message contract, with `NormalizedInboundChannelSchema` (`email | whatsapp`), `CustomerIdentityTypeSchema`, and customer-identity/body/attachment sub-schemas plus inferred types. `external_message_id`, `raw_payload_ref`, and `idempotency_key` are required (raw payload stored by reference); a message must carry body text, body html, or an attachment; attachment `size_bytes` is nullable for providers that report size only on download.
+- `packages/integrations/src/channels` provides pure provider adapters: `parseInboundEmailMessage` maps a provider-neutral inbound email payload into one normalized message, and `parseInboundWhatsAppMessages` maps a WhatsApp Cloud webhook into one normalized message per batched message (with attachment metadata and threading). Raw provider schemas ignore unknown fields; normalized output is validated with the strict contract. Adapters do no network/storage I/O — a webhook handler passes an `InboundAdapterContext` (`tenant_id`, `channel_id`, `provider`, `raw_payload_ref`).
+- `packages/integrations/src/channels/signature.ts` provides timing-safe HMAC-SHA256 signature verification for WhatsApp (`X-Hub-Signature-256`) and Mailgun; malformed or mismatched signatures are rejected.
 
-Provider adapter parsers, webhook/polling ingress, signature verification, attachment storage, dedup/idempotency persistence, and conversation threading are later Milestone 6 slices. Real provider calls stay behind adapter boundaries.
+Webhook/polling ingress endpoints, raw payload/attachment storage, dedup/idempotency persistence, conversation threading persistence, and workflow start/signal wiring are later Milestone 6 slices. Real provider calls stay behind adapter boundaries.
 
 ## Current API Skeleton
 

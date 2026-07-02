@@ -227,8 +227,11 @@ Current Milestone 5 Temporal foundation coverage:
 
 Current Milestone 6 Channel Intake coverage:
 
-- `packages/shared-schemas/src/index.test.ts` validates the normalized inbound message contract: it accepts the canonical email fixture, accepts a WhatsApp message with no attachments and an html-only body, and rejects unsupported channels, bodies with neither text nor html, a missing `external_message_id` (the dedup key), and unknown top-level keys.
-- Provider adapter parser tests, webhook signature-verification negative tests, dedup/idempotency tests, and conversation threading tests remain later Milestone 6 slices.
+- `packages/shared-schemas/src/index.test.ts` validates the normalized inbound message contract: it accepts the canonical email fixture, accepts a WhatsApp html-only message, accepts a media-only message with an empty body and a null attachment size, and rejects unsupported channels, messages with no text/html/attachments, a missing `external_message_id` (the dedup key), and unknown top-level keys.
+- `packages/integrations/src/channels/email-adapter.test.ts` verifies `parseInboundEmailMessage` maps a raw provider email into the normalized contract, carries attachment metadata by reference, threads on `In-Reply-To`/explicit thread id, supports html-only emails, and rejects emails with no message id or no content.
+- `packages/integrations/src/channels/whatsapp-adapter.test.ts` verifies `parseInboundWhatsAppMessages` normalizes every batched message, maps text and document/media messages (pending null size, `whatsapp-media:` reference), threads on the sender, ignores non-message changes, and rejects a webhook missing the `entry` array.
+- `packages/integrations/src/channels/signature.test.ts` verifies HMAC-SHA256 verification accepts valid WhatsApp `X-Hub-Signature-256` and Mailgun signatures and rejects wrong-secret, tampered-body, replayed-token, missing-prefix, empty, and malformed signatures (the "bad signatures are rejected" acceptance criterion).
+- Webhook ingress endpoint tests, raw payload/attachment storage tests, dedup/idempotency persistence tests, and conversation threading persistence tests remain later Milestone 6 slices.
 
 ### 3.10 AI Runtime
 
