@@ -27,6 +27,7 @@ import {
   messagesListQuery,
   policiesListQuery,
   policyByIdQuery,
+  searchKbChunksQuery,
   tenantsListQuery,
   tenantByIdQuery,
   ticketsListQuery,
@@ -265,6 +266,43 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain('"kb_chunks"."kb_document_id" = $2');
     expect(compiled.sql).toContain('"kb_chunks"."status" = $3');
     expect(compiled.params).toEqual(["ten_a", "kbd_a", "active"]);
+  });
+
+  it("scopes KB chunk vector search by tenant, active status, and document filters", () => {
+    const embedding = [0.1, 0.2, 0.3];
+    const query = searchKbChunksQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      { embedding, limit: 5, documentType: "policy", sourceType: "manual" },
+    );
+    const compiled = query.toSQL();
+
+    // Cosine nearest-neighbour ordering over the HNSW-indexed embedding.
+    expect(compiled.sql).toContain('"kb_chunks"."embedding" <=>');
+    expect(compiled.sql).toContain("order by");
+    expect(compiled.sql).toContain("limit");
+    // Joined to documents so retrieval can carry citation metadata.
+    expect(compiled.sql).toContain('"kb_documents"');
+    // Tenant + active-chunk + active-document (stale exclusion) + type filters.
+    expect(compiled.sql).toContain('"kb_chunks"."tenant_id" = $2');
+    expect(compiled.sql).toContain('"kb_chunks"."status" = $3');
+    expect(compiled.sql).toContain('"kb_documents"."tenant_id" = $4');
+    expect(compiled.sql).toContain('"kb_documents"."status" = $5');
+    expect(compiled.sql).toContain('"kb_documents"."document_type" = $6');
+    expect(compiled.sql).toContain('"kb_documents"."source_type" = $7');
+    // The cosine expression appears in both the SELECT list and ORDER BY, so
+    // the embedding is bound twice; the bounded limit is last.
+    expect(compiled.params).toEqual([
+      JSON.stringify(embedding),
+      "ten_a",
+      "active",
+      "ten_a",
+      "active",
+      "policy",
+      "manual",
+      JSON.stringify(embedding),
+      5,
+    ]);
   });
 
   it("scopes KB document reads by tenant", () => {

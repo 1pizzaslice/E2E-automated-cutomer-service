@@ -56,6 +56,8 @@ import type {
   KbDocumentResponse,
   KbDocumentUpdateRequest,
   KbIngestionResult,
+  KbSearchRequest,
+  KbSearchResponse,
   MessageListResponse,
   MessageResponse,
   PolicyListResponse,
@@ -73,6 +75,11 @@ import {
   createDatabaseKbIngestionService,
   type KbIngestionService,
 } from "./kb-ingestion.js";
+import {
+  createDatabaseKbRetrievalService,
+  DEFAULT_KB_SEARCH_LIMIT,
+  type KbRetrievalService,
+} from "./kb-retrieval.js";
 import type {
   AuthenticatedRequestContext,
   TenantRequestContext,
@@ -222,6 +229,10 @@ export interface ApiServices {
       context: TenantRequestContext,
       kbDocumentId: string,
     ): Promise<KbIngestionResult | null>;
+    search(
+      context: TenantRequestContext,
+      input: KbSearchRequest,
+    ): Promise<KbSearchResponse>;
   };
   readonly approvals: {
     list(
@@ -272,6 +283,7 @@ export interface ApiServices {
 
 export interface DatabaseApiServicesDeps {
   readonly kbIngestion?: KbIngestionService;
+  readonly kbRetrieval?: KbRetrievalService;
 }
 
 export function createDatabaseApiServices(
@@ -279,6 +291,7 @@ export function createDatabaseApiServices(
 ): ApiServices {
   let database: ReturnType<typeof createDatabaseFromEnv> | undefined;
   const kbIngestion = deps.kbIngestion ?? createDatabaseKbIngestionService();
+  const kbRetrieval = deps.kbRetrieval ?? createDatabaseKbRetrievalService();
 
   function getDatabase(): ReturnType<typeof createDatabaseFromEnv> {
     if (!database) {
@@ -646,6 +659,23 @@ export function createDatabaseApiServices(
           kbDocumentId,
         });
       },
+      async search(context, input) {
+        const results = await kbRetrieval.search({
+          tenantId: context.tenant.tenantId,
+          query: input.query,
+          limit: input.limit,
+          documentType: input.document_type,
+          sourceType: input.source_type,
+        });
+
+        return {
+          results,
+          page: {
+            count: results.length,
+            limit: input.limit ?? DEFAULT_KB_SEARCH_LIMIT,
+          },
+        };
+      },
     },
     approvals: {
       async list(context, options) {
@@ -907,6 +937,7 @@ export function createDatabaseApiServices(
     },
     async close() {
       await kbIngestion.close?.();
+      await kbRetrieval.close?.();
       await database?.client.end();
     },
   };

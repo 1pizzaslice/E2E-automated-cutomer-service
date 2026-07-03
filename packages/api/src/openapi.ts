@@ -752,6 +752,35 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/kb/search": {
+        post: {
+          summary: "Tenant-scoped KB retrieval over active chunks",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/KbSearchRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Ranked KB chunk citations",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/KbSearchResponse" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/approvals": {
         get: {
           summary: "List tenant-scoped approvals",
@@ -1525,6 +1554,61 @@ export function buildOpenApiDocument() {
             content_hash: { type: "string" },
             chunk_count: { type: "integer", minimum: 0 },
             embedded_count: { type: "integer", minimum: 0 },
+          },
+        },
+        KbSearchRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["query"],
+          properties: {
+            query: { type: "string", minLength: 1 },
+            limit: { type: "integer", minimum: 1, maximum: 50 },
+            document_type: { $ref: "#/components/schemas/KbDocumentType" },
+            source_type: { $ref: "#/components/schemas/KbDocumentSourceType" },
+          },
+        },
+        KbSearchResult: {
+          type: "object",
+          required: [
+            "kb_chunk_id",
+            "tenant_id",
+            "kb_document_id",
+            "chunk_index",
+            "content",
+            "status",
+            "metadata",
+            "created_at",
+            "score",
+            "document_title",
+            "document_type",
+            "source_type",
+            "source_ref",
+          ],
+          properties: {
+            kb_chunk_id: { type: "string" },
+            tenant_id: { type: "string" },
+            kb_document_id: { type: "string" },
+            chunk_index: { type: "integer", minimum: 0 },
+            content: { type: "string" },
+            status: { $ref: "#/components/schemas/KbStatus" },
+            metadata: { type: "object", additionalProperties: true },
+            created_at: { type: "string", format: "date-time" },
+            score: { type: "number" },
+            document_title: { type: "string" },
+            document_type: { $ref: "#/components/schemas/KbDocumentType" },
+            source_type: { $ref: "#/components/schemas/KbDocumentSourceType" },
+            source_ref: { type: ["string", "null"] },
+          },
+        },
+        KbSearchResponse: {
+          type: "object",
+          required: ["results", "page"],
+          properties: {
+            results: {
+              type: "array",
+              items: { $ref: "#/components/schemas/KbSearchResult" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
           },
         },
         ApprovalResource: {

@@ -666,6 +666,46 @@ export type KbDocumentUpdateRequest = z.infer<
 export type KbChunkResponse = z.infer<typeof KbChunkResponseSchema>;
 export type KbIngestionResult = z.infer<typeof KbIngestionResultSchema>;
 
+/**
+ * Tenant-scoped KB retrieval request. The `query` is embedded with the same
+ * `Embedder` used at ingestion and matched against `active` chunks of `active`
+ * documents only (stale/inactive/draft are excluded). Optional `document_type`
+ * and `source_type` narrow retrieval (for example, to policy documents).
+ */
+export const KbSearchRequestSchema = z
+  .object({
+    query: z.string().min(1),
+    limit: z.number().int().min(1).max(50).optional(),
+    document_type: KbDocumentTypeSchema.optional(),
+    source_type: KbDocumentSourceTypeSchema.optional(),
+  })
+  .strict();
+
+/**
+ * A single retrieval hit. It extends the retrievable chunk contract with a
+ * relevance `score` (cosine similarity in [-1, 1]; higher is more relevant) and
+ * the document-level citation fields (`document_title`, `document_type`,
+ * `source_type`, `source_ref`) the AI runtime needs to attribute an answer to a
+ * source. `kb_chunk_id` and `kb_document_id` are the citation IDs; `metadata`
+ * carries the ingest-time source snapshot. Embeddings are never returned.
+ */
+export const KbSearchResultSchema = KbChunkResponseSchema.extend({
+  score: z.number(),
+  document_title: z.string().min(1),
+  document_type: KbDocumentTypeSchema,
+  source_type: KbDocumentSourceTypeSchema,
+  source_ref: z.string().nullable(),
+});
+
+export const KbSearchResponseSchema = z.object({
+  results: z.array(KbSearchResultSchema),
+  page: ListResponsePageSchema,
+});
+
+export type KbSearchRequest = z.infer<typeof KbSearchRequestSchema>;
+export type KbSearchResult = z.infer<typeof KbSearchResultSchema>;
+export type KbSearchResponse = z.infer<typeof KbSearchResponseSchema>;
+
 export const ApprovalTypeSchema = z.enum([
   "reply",
   "tool_action",

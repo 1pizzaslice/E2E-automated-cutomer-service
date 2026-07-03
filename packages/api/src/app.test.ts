@@ -14,6 +14,7 @@ import {
   KbDocumentListResponseSchema,
   KbDocumentResourceResponseSchema,
   KbIngestionResultSchema,
+  KbSearchResponseSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
   PolicyListResponseSchema,
@@ -146,6 +147,7 @@ describe("api request context and contract errors", () => {
     expect(body.paths).toHaveProperty(
       "/v1/kb/documents/{kb_document_id}/ingest",
     );
+    expect(body.paths).toHaveProperty("/v1/kb/search");
     expect(body.paths).toHaveProperty("/v1/approvals");
     expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}");
     expect(body.paths).toHaveProperty("/v1/audit-events");
@@ -625,6 +627,55 @@ describe("api tenant-scoped resource contracts", () => {
 
     expect(response.statusCode).toBe(404);
     expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("retrieves KB chunk citations through the shared search response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/kb/search",
+      headers: authHeaders,
+      payload: { query: "how long do I have to return an item?", limit: 5 },
+    });
+    const body = KbSearchResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.results).toHaveLength(1);
+    expect(body.results[0]!).toMatchObject({
+      kb_chunk_id: "kbc_test",
+      kb_document_id: "kbd_test",
+      document_title: "Returns policy",
+    });
+    expect(body.results[0]!.score).toBeGreaterThan(0);
+    expect(body.page).toMatchObject({ count: 1, limit: 5 });
+  });
+
+  it("rejects KB search with an empty query", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/kb/search",
+      headers: authHeaders,
+      payload: { query: "" },
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("rejects KB search for roles without the kb:search permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/kb/search",
+      headers: integrationAdminHeaders,
+      payload: { query: "refund policy" },
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
   });
 
   it("lists approval resources through the shared response schema", async () => {
@@ -1267,6 +1318,30 @@ function makeServices(
           content_hash: "hash_test",
           chunk_count: 3,
           embedded_count: 3,
+        };
+      },
+      async search(context, input) {
+        expectTenantContext(context);
+
+        return {
+          results: [
+            {
+              kb_chunk_id: "kbc_test",
+              tenant_id: context.tenant.tenantId,
+              kb_document_id: "kbd_test",
+              chunk_index: 0,
+              content: "Returns are accepted within 30 days of delivery.",
+              status: "active",
+              metadata: { document_type: "policy", source_type: "manual" },
+              created_at: now,
+              score: 0.92,
+              document_title: "Returns policy",
+              document_type: input.document_type ?? "policy",
+              source_type: input.source_type ?? "manual",
+              source_ref: null,
+            },
+          ],
+          page: { count: 1, limit: input.limit ?? 8 },
         };
       },
     },
