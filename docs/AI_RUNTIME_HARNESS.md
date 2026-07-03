@@ -753,3 +753,68 @@ AI run records must store all relevant versions.
 - Produces approval packages.
 - Records trace and eval metadata.
 - Passes initial golden dataset with no unsafe auto-send.
+
+## 19. V1 Implementation (Milestone 9)
+
+The v1 support agent graph is implemented in Python under `ai/`. Per ADR-0016 it
+is a self-contained, dependency-free package that mirrors LangGraph's node model
+behind pluggable ports; the real LangGraph library and a real model/provider SDK
+are deferred until Python dependency management is provisioned. The ports are the
+seams where those adapters plug in later.
+
+### 19.1 Module Map
+
+- `ai/runtime/schemas.py` — validated structured I/O (Pydantic-equivalent using
+  stdlib). Mirrors the Temporal `RunAiGraphActivityResult` boundary and the
+  Milestone 8 `ToolCallRequest`/`ToolCallResult` envelope.
+- `ai/runtime/state.py` — `AgentState` (section 5).
+- `ai/runtime/graph.py` — a tiny graph engine reproducing the LangGraph API
+  surface (`add_node`, `set_entry_point`, `add_edge`, `add_conditional_edges`,
+  `compile().invoke()`), with cycle bounding.
+- `ai/runtime/nodes.py` + `ai/runtime/support_graph.py` — the nodes and wiring.
+- `ai/runtime/providers.py` — `ModelProvider` port + `DeterministicSupportModel`
+  (offline, reproducible, safe-by-construction) + `UnconfiguredLlmModel` (the
+  real-provider seam).
+- `ai/runtime/retrieval.py` — `RetrievalPort` + `InMemoryRetrieval`
+  (tenant-scoped, stale-excluding). Production calls `POST /v1/kb/search`.
+- `ai/runtime/tools.py` — `ToolExecutor` port + `InMemoryToolExecutor` over
+  `CommerceDataset`, reproducing the Milestone 8 registry governance. Production
+  calls the TypeScript tool registry.
+- `ai/runtime/tracing.py` — deterministic, redacted trace capture (section 15).
+- `ai/runtime/runner.py` — `run_support_graph(request, *, model, retrieval,
+tool_executor)` → `(RuntimeResult, RunTrace)`.
+- `ai/evals/` — fixtures, the golden dataset, and the offline eval runner.
+
+### 19.2 Graph Shape
+
+`normalize → classifier → retrieval_planner → retrieval → policy → tool_planner
+→ tool_execution → (conditional) composer | guardrail → guardrail → escalation →
+finalize`. The single conditional edge after `tool_execution` skips drafting for
+hard human-only cases (legal/chargeback/fraud/safety/prompt-injection): a human
+writes those replies, so no AI draft is produced.
+
+### 19.3 Governance Realized
+
+- Classification and drafting go through the `ModelProvider` port; **policy and
+  guardrail logic is deterministic Python** (safety-critical governance is not
+  probabilistic).
+- Policy defaults to `human_approve`, forces `human_only` for hard-sensitive
+  flags and VIP-blocks auto-send, and permits `auto_send` only for tenant- and
+  topic-allowlisted, low-risk, sensitive-flag-free cases.
+- Escalation combines policy, critic recommendation, a confidence floor, and a
+  grounding gate — **auto-send always requires evidence or a successful tool
+  call** (no customer-facing response without evidence).
+- The AI runtime's granted permission set is derived from the policy's allowed
+  tools (the Milestone 8 follow-up: `grantedPermissions` wired to policy).
+- Order numbers are extracted from customer text and never guessed.
+- Any input/output validation failure becomes a structured `failed` result that
+  routes the ticket to a human (section 16).
+
+### 19.4 Running
+
+- Tests: `pnpm test:py` (or `python3 -m unittest discover -s ai -p '*_test.py'`).
+- Offline evals: `PYTHONPATH=ai python3 -m evals.runner` (prints metrics + gates).
+
+Prompt IDs are realized as `support_classifier.v1` and
+`support_response_composer.v1` (section 8); versioned prompt files land when a
+real model provider is wired.

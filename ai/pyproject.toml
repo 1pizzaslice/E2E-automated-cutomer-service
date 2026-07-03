@@ -3,8 +3,15 @@ name = "support-ai-runtime"
 version = "0.1.0"
 description = "Python AI runtime for the customer support platform."
 requires-python = ">=3.12"
+# Intentionally empty: the v1 support agent graph is a self-contained,
+# dependency-free package that mirrors LangGraph's node model behind pluggable
+# ports (see ADR-0016). The local harness runs Python via the system interpreter
+# (`pnpm test:py` -> unittest, `pnpm lint` -> compileall) with no `uv`, so the
+# runtime must import under stdlib-only Python. Real LangGraph + a model/provider
+# SDK (e.g. langgraph, langchain-core, pydantic) plug in behind the ModelProvider,
+# RetrievalPort, and ToolExecutor ports once Python dependency management is
+# provisioned.
 dependencies = []
 
 [tool.pytest.ini_options]
 python_files = ["*_test.py"]
-

@@ -270,6 +270,15 @@ Required tests:
 - Output validation failure routes to failure.
 - Graph integration test with mocked model outputs.
 
+Current Milestone 9 AI runtime coverage (offline, deterministic — no network):
+
+- `ai/runtime/schemas_test.py` validates the structured I/O contracts: request validation (rejects missing tenant, empty messages, and a request with no customer-visible message), classification validation (unknown topic, out-of-range confidence, hard-sensitive-flag detection), tool-result validation (succeeded needs output, failed/blocked needs an error), and the severity helpers.
+- `ai/runtime/graph_test.py` covers the graph engine: linear flow order, conditional routing by key, unknown-conditional-key error, bounded cycles, missing entry point, and a node with no outgoing edge.
+- `ai/runtime/nodes_test.py` unit-tests each node: the classifier returns expected topics and flags prompt-injection/VIP; the retrieval planner asks for policy docs on refund; the policy node enforces `human_only` for legal/injection and `human_approve`/medium for refund; the tool planner does not guess a missing order id and respects `max_tool_calls`; the guardrail critic catches missing policy evidence and unsafe refund promises; the deterministic composer makes no refund promise; and a deliberately unsafe stub model is downgraded to `human_only` by the critic.
+- `ai/runtime/runner_test.py` is the integration test with mocked model/tool calls: a full run returns structured routing + draft and audited tool calls; legal escalates to `human_only` with no draft and a human-only queue; prompt injection does not bypass policy and leaks no system prompt; input-validation failure routes to human (`INPUT_VALIDATION_FAILED`); output-validation failure (a stub model emitting an invalid topic) routes to `AI_RUNTIME_ERROR`; auto-send is blocked without grounding and allowed when grounded; and traces/ids are reproducible across identical runs.
+- `ai/evals/runner_test.py` runs the offline eval runner over the golden dataset (`ai/evals/golden_dataset.py`, 24 cases across every category in section 4) and asserts it reports pass/fail + metrics, passes all hard-fail gates (zero unsafe auto-send, zero legal/fraud auto-send, zero cross-tenant leakage, zero unsafe output), and fully neutralizes prompt injection. Fixtures include a stale KB document and a second tenant to prove stale-exclusion and tenant isolation.
+- Run with `pnpm test:py`; run the eval report with `PYTHONPATH=ai python3 -m evals.runner`.
+
 ### 3.11 Outbound Messaging
 
 Required tests:
