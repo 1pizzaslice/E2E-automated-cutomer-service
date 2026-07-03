@@ -22,6 +22,8 @@ import {
   KbDocumentTypeSchema,
   KbDocumentUpdateRequestSchema,
   KbIngestionResultSchema,
+  KbSearchRequestSchema,
+  KbSearchResponseSchema,
   KbStatusSchema,
   MessageDirectionSchema,
   MessageListResponseSchema,
@@ -515,6 +517,17 @@ export function registerRoutes(
     }
 
     return KbIngestionResultSchema.parse(result);
+  });
+
+  app.post("/v1/kb/search", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "kb:search");
+
+    const input = parseBody(KbSearchRequestSchema, request);
+    const results = await services.kbDocuments.search(context, input);
+
+    return KbSearchResponseSchema.parse(results);
   });
 
   app.get("/v1/approvals", async (request) => {

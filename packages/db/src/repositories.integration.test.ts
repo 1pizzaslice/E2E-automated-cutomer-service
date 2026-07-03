@@ -19,6 +19,7 @@ import {
   messagesListQuery,
   policiesListQuery,
   policyByIdQuery,
+  searchKbChunksQuery,
   ticketByIdQuery,
   visibleToolDefinitionByNameQuery,
 } from "./repositories.js";
@@ -61,9 +62,11 @@ const ids = {
   approvalB: `${fixturePrefix}_apr_b`,
   kbDocumentA: `${fixturePrefix}_kbd_a`,
   kbDocumentB: `${fixturePrefix}_kbd_b`,
+  kbDocumentStale: `${fixturePrefix}_kbd_stale`,
   kbChunkA: `${fixturePrefix}_kbc_a`,
   kbChunkAStale: `${fixturePrefix}_kbc_a_stale`,
   kbChunkB: `${fixturePrefix}_kbc_b`,
+  kbChunkInStaleDoc: `${fixturePrefix}_kbc_stale_doc`,
   integrationA: `${fixturePrefix}_int_a`,
   integrationB: `${fixturePrefix}_int_b`,
   toolGlobal: `${fixturePrefix}_tool_global`,
@@ -73,6 +76,20 @@ const ids = {
   auditB: `${fixturePrefix}_aud_b`,
   sharedAuditEntity: `${fixturePrefix}_shared_entity`,
 };
+
+const EMBEDDING_DIMENSIONS = 1536;
+
+/**
+ * A unit vector with a single non-zero component. Cosine distance between two
+ * one-hot vectors sharing the same index is 0 (identical direction), which makes
+ * the retrieval fixtures' ranking and filtering deterministic without depending
+ * on the production embedder.
+ */
+function oneHot(index: number): number[] {
+  const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+  vector[index] = 1;
+  return vector;
+}
 
 describeLive("live tenant-scoped repository queries", () => {
   let client: PostgresClient | undefined;
@@ -230,6 +247,40 @@ describeLive("live tenant-scoped repository queries", () => {
 
     expect(ownRows.map((row) => row.kbChunkId)).toEqual([ids.kbChunkA]);
     expect(otherTenantRows).toEqual([]);
+  });
+
+  it("runs tenant-scoped vector retrieval that excludes stale chunks, stale documents, and other tenants", async () => {
+    const hits = await searchKbChunksQuery(
+      db,
+      { tenantId: ids.tenantA },
+      { embedding: oneHot(5), limit: 10 },
+    );
+
+    // Only the active chunk of the active tenant-A document is returned:
+    // the stale chunk (kbChunkAStale), the active chunk of the retired/stale
+    // document (kbChunkInStaleDoc), and tenant B's chunk (kbChunkB) are all
+    // excluded even though every fixture embedding is identical.
+    expect(hits.map((hit) => hit.kbChunkId)).toEqual([ids.kbChunkA]);
+
+    const [hit] = hits;
+    // Citation metadata travels with the hit via the document join.
+    expect(hit?.kbDocumentId).toBe(ids.kbDocumentA);
+    expect(hit?.documentTitle).toBe("Tenant A Shipping Policy");
+    expect(hit?.documentType).toBe("policy");
+    expect(hit?.sourceType).toBe("manual");
+    // Identical direction ⇒ cosine distance 0.
+    expect(Number(hit?.distance)).toBeCloseTo(0, 5);
+  });
+
+  it("excludes documents whose type does not match the retrieval filter", async () => {
+    const hits = await searchKbChunksQuery(
+      db,
+      { tenantId: ids.tenantA },
+      { embedding: oneHot(5), limit: 10, documentType: "faq" },
+    );
+
+    // The only matching tenant-A chunk belongs to a `policy` document.
+    expect(hits).toEqual([]);
   });
 
   it("executes KB document reads and lists without returning another tenant document", async () => {
@@ -554,6 +605,17 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
       status: "active",
       contentHash: `${fixturePrefix}_hash_b`,
     },
+    {
+      // An active-chunk document that has been retired to `stale`: its chunks
+      // must be excluded from retrieval even though they are still `active`.
+      kbDocumentId: ids.kbDocumentStale,
+      tenantId: ids.tenantA,
+      title: "Tenant A Retired Policy",
+      sourceType: "manual",
+      documentType: "policy",
+      status: "stale",
+      contentHash: `${fixturePrefix}_hash_stale`,
+    },
   ]);
 
   await db.insert(kbChunks).values([
@@ -563,6 +625,7 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
       kbDocumentId: ids.kbDocumentA,
       chunkIndex: 0,
       content: "Tenant A ships refunds after carrier scan.",
+      embedding: oneHot(5),
       status: "active",
     },
     {
@@ -571,6 +634,7 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
       kbDocumentId: ids.kbDocumentA,
       chunkIndex: 1,
       content: "Tenant A stale policy chunk.",
+      embedding: oneHot(5),
       status: "stale",
     },
     {
@@ -579,6 +643,16 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
       kbDocumentId: ids.kbDocumentB,
       chunkIndex: 0,
       content: "Tenant B ships replacements only.",
+      embedding: oneHot(5),
+      status: "active",
+    },
+    {
+      kbChunkId: ids.kbChunkInStaleDoc,
+      tenantId: ids.tenantA,
+      kbDocumentId: ids.kbDocumentStale,
+      chunkIndex: 0,
+      content: "Tenant A retired policy chunk.",
+      embedding: oneHot(5),
       status: "active",
     },
   ]);

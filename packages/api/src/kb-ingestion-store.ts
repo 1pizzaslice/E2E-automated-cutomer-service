@@ -165,6 +165,7 @@ export function createDatabaseKbIngestionStore(
 
 interface InMemoryChunkRecord extends KbChunkInsert {
   readonly tenantId: string;
+  readonly createdAt: Date;
 }
 
 /**
@@ -242,8 +243,9 @@ export function createInMemoryKbIngestionStore(): KbIngestionStore & {
         }
       }
 
+      const createdAt = new Date();
       for (const chunk of next) {
-        chunks.push({ ...chunk, tenantId });
+        chunks.push({ ...chunk, tenantId, createdAt });
       }
 
       return next.length;

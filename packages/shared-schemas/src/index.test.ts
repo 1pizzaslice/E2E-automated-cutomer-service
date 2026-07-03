@@ -18,6 +18,8 @@ import {
   KbDocumentResourceResponseSchema,
   KbDocumentUpdateRequestSchema,
   KbIngestionResultSchema,
+  KbSearchRequestSchema,
+  KbSearchResponseSchema,
   SupportEventErrorRecordSchema,
   TenantCreateRequestSchema,
   TenantListResponseSchema,
@@ -555,6 +557,55 @@ describe("shared API contract schemas", () => {
 
     expect(KbChunkResponseSchema.parse(chunk)).toEqual(chunk);
     expect(KbIngestionResultSchema.parse(result)).toEqual(result);
+  });
+
+  it("validates a KB search request and rejects empty or unknown fields", () => {
+    expect(
+      KbSearchRequestSchema.parse({
+        query: "how long do I have to return an item?",
+        limit: 5,
+        document_type: "policy",
+      }),
+    ).toMatchObject({
+      query: "how long do I have to return an item?",
+      limit: 5,
+    });
+    // limit is optional; the service applies a default.
+    expect(KbSearchRequestSchema.parse({ query: "refunds" })).toEqual({
+      query: "refunds",
+    });
+    expect(() => KbSearchRequestSchema.parse({ query: "" })).toThrow();
+    expect(() =>
+      KbSearchRequestSchema.parse({ query: "refunds", limit: 0 }),
+    ).toThrow();
+    expect(() =>
+      KbSearchRequestSchema.parse({ query: "refunds", extra: true }),
+    ).toThrow();
+  });
+
+  it("validates a KB search response with citation fields and a score", () => {
+    const response = {
+      results: [
+        {
+          kb_chunk_id: "kbc_test",
+          tenant_id: "ten_test",
+          kb_document_id: "kbd_test",
+          chunk_index: 0,
+          content: "Returns are accepted within 30 days.",
+          status: "active",
+          metadata: { document_type: "policy", source_type: "manual" },
+          created_at: "2026-06-19T00:00:00.000Z",
+          score: 0.87,
+          document_title: "Returns policy",
+          document_type: "policy",
+          source_type: "manual",
+          source_ref: null,
+        },
+      ],
+      page: { count: 1, limit: 8 },
+    };
+
+    expect(KbSearchResponseSchema.parse(response)).toEqual(response);
   });
 
   it("validates conversation and message resource responses", () => {

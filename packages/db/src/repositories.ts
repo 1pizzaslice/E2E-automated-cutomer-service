@@ -1,4 +1,14 @@
-import { and, desc, eq, isNull, or, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  cosineDistance,
+  desc,
+  eq,
+  isNull,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import type { SupportDatabase } from "./client.js";
 import {
   approvals,
@@ -618,6 +628,68 @@ export function activeKbChunksForDocumentQuery(
         eq(kbChunks.status, "active"),
       ),
     );
+}
+
+export interface KbChunkSearchQueryOptions {
+  /** Query embedding; must match the `kb_chunks.embedding` dimensionality. */
+  readonly embedding: number[];
+  readonly limit: number;
+  readonly documentType?: KbDocument["documentType"];
+  readonly sourceType?: KbDocument["sourceType"];
+}
+
+/**
+ * Tenant-scoped approximate-nearest-neighbour retrieval over KB chunk
+ * embeddings. Results are the closest `active` chunks (by cosine distance,
+ * matched by the `kb_chunks_embedding_hnsw_idx` HNSW index) belonging to
+ * `active` documents only — so documents PATCHed to `stale`/`archived`/`draft`
+ * are excluded at query time even though their chunk rows remain. The join to
+ * `kb_documents` also supplies the citation metadata (title, type, source). RLS
+ * enforces the tenant boundary; the explicit `tenant_id` predicates make the
+ * scope defense-in-depth and keep the helper correct off the owner connection.
+ */
+export function searchKbChunksQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: KbChunkSearchQueryOptions,
+) {
+  const distance = cosineDistance(kbChunks.embedding, options.embedding);
+  const filters: SQL[] = [
+    eq(kbChunks.tenantId, scope.tenantId),
+    eq(kbChunks.status, "active"),
+    eq(kbDocuments.tenantId, scope.tenantId),
+    eq(kbDocuments.status, "active"),
+  ];
+
+  if (options.documentType) {
+    filters.push(eq(kbDocuments.documentType, options.documentType));
+  }
+
+  if (options.sourceType) {
+    filters.push(eq(kbDocuments.sourceType, options.sourceType));
+  }
+
+  return db
+    .select({
+      kbChunkId: kbChunks.kbChunkId,
+      tenantId: kbChunks.tenantId,
+      kbDocumentId: kbChunks.kbDocumentId,
+      chunkIndex: kbChunks.chunkIndex,
+      content: kbChunks.content,
+      status: kbChunks.status,
+      metadata: kbChunks.metadata,
+      createdAt: kbChunks.createdAt,
+      distance: sql<number>`${distance}`,
+      documentTitle: kbDocuments.title,
+      documentType: kbDocuments.documentType,
+      sourceType: kbDocuments.sourceType,
+      sourceRef: kbDocuments.sourceRef,
+    })
+    .from(kbChunks)
+    .innerJoin(kbDocuments, eq(kbChunks.kbDocumentId, kbDocuments.kbDocumentId))
+    .where(and(...filters))
+    .orderBy(asc(distance))
+    .limit(options.limit);
 }
 
 export function auditEventsForEntityQuery(

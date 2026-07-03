@@ -23,6 +23,7 @@ venv/
 # Local data
 .DS_Store
 *.log
+.data/
 infra/data/
 tmp/
 
