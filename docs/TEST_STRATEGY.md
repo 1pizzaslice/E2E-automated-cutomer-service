@@ -483,7 +483,7 @@ TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow
 
 CI runs `pnpm test:integration` against a `pgvector/pgvector:pg17` PostgreSQL service and a local NATS container with JetStream enabled. The root command currently runs DB repository/RLS integration tests first, API PostgreSQL-backed tenant/customer/conversation/message/policy/KB document/approval/audit event/ticket integration tests second, and worker NATS publish/consume integration tests last. The opt-in Temporal workflow test is not yet part of root CI integration because CI does not currently start a Temporal service.
 
-Current Python tests use standard library `unittest` because `uv` is not installed locally. When the LangGraph AI runtime is implemented, add the chosen Python dependency manager and update this file with the real eval/test commands.
+Python dependency management is **uv**. `ai/.python-version` pins CPython 3.12 (uv-provisioned; the system `python3` is 3.14), and `pnpm test:py` runs the Milestone 9 suite via `uv run --frozen --project ai python -m unittest discover -s ai -p '*_test.py'` with `ai/uv.lock` committed for reproducibility. The runtime + eval tests use the standard library behind pluggable ports (ADR-0016); the real AI stack (pydantic/langgraph/langchain-core) is available and reproducible via `uv sync --project ai --extra llm` when a port is swapped for a real model/graph. Run the offline eval report with `PYTHONPATH=ai uv run --project ai python -m evals.runner`.
 
 ## 10. Release Gates
 

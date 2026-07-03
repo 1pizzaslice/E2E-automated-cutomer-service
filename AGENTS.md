@@ -80,10 +80,10 @@ Use these commands from the repository root:
 - Run tests: `pnpm test`
 - Run live PostgreSQL integration tests: `DATABASE_URL=postgres://support:support@localhost:5432/support pnpm test:integration`
 - Run TypeScript package tests: `pnpm -r test`
-- Run Python scaffold tests: `pnpm test:py`
+- Run Python (AI runtime) tests: `pnpm test:py`
 - Build TypeScript packages: `pnpm build`
 
-Python currently uses standard library `unittest` for scaffold validation because `uv` is not installed in the local environment yet. Revisit Python dependency management when implementing the LangGraph runtime.
+The Python AI runtime under `ai/` is managed by **uv** (installed at `~/.local/bin`; `ai/.python-version` pins CPython 3.12, which uv provisions — the system `python3` is 3.14). `pnpm test:py` and the Python step of `pnpm lint` run through `uv run --frozen --project ai`, so they are reproducible regardless of the system interpreter; `ai/uv.lock` is committed. Do **not** fall back to a stdlib-only approach because deps "won't install": the real AI stack (pydantic, langgraph, langchain-core) is proven to install and is available via `uv sync --project ai --extra llm`. The v1 graph still runs on the standard library behind pluggable ports (ADR-0016); adopting a real model/graph is a swap behind those ports, not a dependency problem. If `uv` is somehow missing, reinstall with `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 
 ## Completion Rules
 
