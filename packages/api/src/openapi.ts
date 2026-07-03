@@ -633,6 +633,35 @@ export function buildOpenApiDocument() {
             default: { $ref: "#/components/responses/Error" },
           },
         },
+        post: {
+          summary: "Create a tenant-scoped KB document",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/KbDocumentCreateRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "KB document resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/KbDocumentResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
       },
       "/v1/kb/documents/{kb_document_id}": {
         get: {
@@ -654,6 +683,68 @@ export function buildOpenApiDocument() {
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/KbDocumentResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+        patch: {
+          summary: "Update tenant-scoped KB document metadata or status",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "kb_document_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/KbDocumentUpdateRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "KB document resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/KbDocumentResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/kb/documents/{kb_document_id}/ingest": {
+        post: {
+          summary: "Chunk, embed, and activate a tenant-scoped KB document",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "kb_document_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "KB ingestion result",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/KbIngestionResult" },
                 },
               },
             },
@@ -1391,6 +1482,49 @@ export function buildOpenApiDocument() {
               items: { $ref: "#/components/schemas/KbDocument" },
             },
             page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        KbDocumentCreateRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["title", "source_type", "document_type", "content"],
+          properties: {
+            kb_document_id: { type: "string", minLength: 1 },
+            title: { type: "string", minLength: 1 },
+            source_type: { $ref: "#/components/schemas/KbDocumentSourceType" },
+            source_ref: { type: ["string", "null"], minLength: 1 },
+            document_type: { $ref: "#/components/schemas/KbDocumentType" },
+            content: { type: "string", minLength: 1 },
+          },
+        },
+        KbDocumentUpdateRequest: {
+          type: "object",
+          minProperties: 1,
+          additionalProperties: false,
+          properties: {
+            title: { type: "string", minLength: 1 },
+            source_ref: { type: ["string", "null"], minLength: 1 },
+            document_type: { $ref: "#/components/schemas/KbDocumentType" },
+            status: { $ref: "#/components/schemas/KbStatus" },
+          },
+        },
+        KbIngestionResult: {
+          type: "object",
+          required: [
+            "kb_document_id",
+            "status",
+            "version",
+            "content_hash",
+            "chunk_count",
+            "embedded_count",
+          ],
+          properties: {
+            kb_document_id: { type: "string" },
+            status: { $ref: "#/components/schemas/KbStatus" },
+            version: { type: "integer", minimum: 1 },
+            content_hash: { type: "string" },
+            chunk_count: { type: "integer", minimum: 0 },
+            embedded_count: { type: "integer", minimum: 0 },
           },
         },
         ApprovalResource: {

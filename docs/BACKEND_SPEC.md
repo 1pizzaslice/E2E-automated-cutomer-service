@@ -520,6 +520,8 @@ Rules:
 - Retrieval returns chunk IDs and document metadata.
 - Stale chunks are excluded unless explicitly requested for audit.
 
+Implementation note (Milestone 7, ingestion): raw document content is stored by reference in the `KbContentStore` (filesystem default), never inline in PostgreSQL; the `kb_documents` row keeps only metadata plus `content_hash`. Ingestion chunks content with `chunkDocument` and embeds each chunk through the `Embedder` port (`vector(1536)`), writing an active chunk set atomically (re-ingest replaces the prior set). Chunk `metadata` carries the source/document type for downstream citation. Tenant-scoped retrieval/search over these chunks — and the stale/active exclusion above applied at query time — is the retrieval half of the milestone and is not yet implemented.
+
 ## 10. Tool Model
 
 ### 10.1 Tool Definition
@@ -959,7 +961,11 @@ Current implementation:
 
 - `GET /v1/kb/documents` lists tenant-scoped KB document metadata with `limit`, `source_type`, `document_type`, and `status` query filters. It returns document metadata only, not chunk content or embeddings.
 - `GET /v1/kb/documents/{kb_document_id}` reads tenant-scoped KB document metadata.
-- KB document creation, update, ingestion, chunking, embedding, active/stale retrieval behavior, search, audit events, and workflow side effects remain future endpoints.
+- `POST /v1/kb/documents` creates a tenant-scoped KB document from `{title, source_type, document_type, source_ref?, content}`. The raw `content` is stored by reference in the `KbContentStore` (never inline in PostgreSQL), `content_hash` is derived server-side, and the document starts in `draft` status. Requires the `kb_documents:write` permission.
+- `PATCH /v1/kb/documents/{kb_document_id}` updates document metadata (`title`, `source_ref`, `document_type`) and lifecycle `status` (for example `draft`/`active`/`stale`/`archived`). Content is immutable through PATCH in v1. Requires `kb_documents:write`.
+- `POST /v1/kb/documents/{kb_document_id}/ingest` runs the ingestion pipeline: it reads the stored content, chunks it (`chunkDocument`), embeds each chunk (deterministic `Embedder` port, `vector(1536)`), atomically replaces the document's chunk set with the freshly embedded active chunks, and marks the document `active`. It returns `{kb_document_id, status, version, content_hash, chunk_count, embedded_count}`. Ingestion is idempotent by replacement (re-ingest deletes prior chunks first). Requires `kb_documents:write`.
+- Chunking and embedding are pure/deterministic (`@support/integrations/kb`) so ingestion is reproducible and replay-safe when a Temporal `KbIngestionWorkflow` later drives these steps as activities. `0003_kb_vector_index.sql` adds a pgvector HNSW `vector_cosine_ops` index over `kb_chunks.embedding` for retrieval.
+- `POST /v1/kb/search` (tenant-scoped retrieval with citation metadata and stale/inactive exclusion), KB audit events, and workflow side effects remain future endpoints.
 
 ### 17.10 Tools
 
@@ -1223,7 +1229,7 @@ Initial schema choices:
 
 - Domain IDs are application-generated text IDs, matching the contract style such as `ten_...`, `ticket_...`, and `kb_chunk_...`.
 - PostgreSQL remains the source of truth.
-- The first KB embedding column is `vector(1536)` using `pgvector`; choose and document a production embedding model before relying on this dimension for real client data.
+- The first KB embedding column is `vector(1536)` using `pgvector`, indexed with an HNSW `vector_cosine_ops` index (`0003_kb_vector_index.sql`). The Milestone 7 default embedder (`createDeterministicEmbedder`) is a deterministic token-hash unit-vector embedder used behind the `Embedder` port for reproducible, network-free ingestion and tests; it produces lexical (not semantic) similarity. Choose and document a production embedding model behind the same port before relying on this for real client data, and keep its dimension and metric aligned with the column (1536) and index (cosine) or re-embed.
 - Tenant-scoped entities have `tenant_id` columns and tenant indexes. Repository query helpers currently enforce tenant filters for customer and ticket reads/lists/updates/writes, conversation, message, policy, KB document, approval, and audit event reads/lists, plus KB chunks, integrations, and tool definitions.
 - Tool definitions may be global when `tenant_id is null`; tenant query helpers allow global active tools while excluding other tenants.
 - Idempotency support starts with the `idempotency_keys` table and operation/key uniqueness per tenant.

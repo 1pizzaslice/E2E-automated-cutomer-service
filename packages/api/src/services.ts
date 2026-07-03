@@ -51,8 +51,11 @@ import type {
   CustomerListResponse,
   CustomerResponse,
   CustomerUpdateRequest,
+  KbDocumentCreateRequest,
   KbDocumentListResponse,
   KbDocumentResponse,
+  KbDocumentUpdateRequest,
+  KbIngestionResult,
   MessageListResponse,
   MessageResponse,
   PolicyListResponse,
@@ -66,6 +69,10 @@ import type {
   TicketResponse,
   TicketUpdateRequest,
 } from "@support/shared-schemas";
+import {
+  createDatabaseKbIngestionService,
+  type KbIngestionService,
+} from "./kb-ingestion.js";
 import type {
   AuthenticatedRequestContext,
   TenantRequestContext,
@@ -202,6 +209,19 @@ export interface ApiServices {
       context: TenantRequestContext,
       kbDocumentId: string,
     ): Promise<KbDocumentResponse | null>;
+    create(
+      context: TenantRequestContext,
+      input: KbDocumentCreateRequest,
+    ): Promise<KbDocumentResponse>;
+    update(
+      context: TenantRequestContext,
+      kbDocumentId: string,
+      input: KbDocumentUpdateRequest,
+    ): Promise<KbDocumentResponse | null>;
+    ingest(
+      context: TenantRequestContext,
+      kbDocumentId: string,
+    ): Promise<KbIngestionResult | null>;
   };
   readonly approvals: {
     list(
@@ -250,8 +270,15 @@ export interface ApiServices {
   readonly close?: () => Promise<void>;
 }
 
-export function createDatabaseApiServices(): ApiServices {
+export interface DatabaseApiServicesDeps {
+  readonly kbIngestion?: KbIngestionService;
+}
+
+export function createDatabaseApiServices(
+  deps: DatabaseApiServicesDeps = {},
+): ApiServices {
   let database: ReturnType<typeof createDatabaseFromEnv> | undefined;
+  const kbIngestion = deps.kbIngestion ?? createDatabaseKbIngestionService();
 
   function getDatabase(): ReturnType<typeof createDatabaseFromEnv> {
     if (!database) {
@@ -595,6 +622,30 @@ export function createDatabaseApiServices(): ApiServices {
           },
         );
       },
+      async create(context, input) {
+        const document = await kbIngestion.createDocument({
+          tenantId: context.tenant.tenantId,
+          createdByUserId: context.actor.userId ?? null,
+          input,
+        });
+
+        return mapKbDocument(document);
+      },
+      async update(context, kbDocumentId, input) {
+        const document = await kbIngestion.updateDocument({
+          tenantId: context.tenant.tenantId,
+          kbDocumentId,
+          input,
+        });
+
+        return document ? mapKbDocument(document) : null;
+      },
+      async ingest(context, kbDocumentId) {
+        return kbIngestion.ingestDocument({
+          tenantId: context.tenant.tenantId,
+          kbDocumentId,
+        });
+      },
     },
     approvals: {
       async list(context, options) {
@@ -855,6 +906,7 @@ export function createDatabaseApiServices(): ApiServices {
       },
     },
     async close() {
+      await kbIngestion.close?.();
       await database?.client.end();
     },
   };

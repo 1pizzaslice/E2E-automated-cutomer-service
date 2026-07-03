@@ -13,6 +13,7 @@ import {
   HealthResponseSchema,
   KbDocumentListResponseSchema,
   KbDocumentResourceResponseSchema,
+  KbIngestionResultSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
   PolicyListResponseSchema,
@@ -142,6 +143,9 @@ describe("api request context and contract errors", () => {
     expect(body.paths).toHaveProperty("/v1/policies/{policy_id}");
     expect(body.paths).toHaveProperty("/v1/kb/documents");
     expect(body.paths).toHaveProperty("/v1/kb/documents/{kb_document_id}");
+    expect(body.paths).toHaveProperty(
+      "/v1/kb/documents/{kb_document_id}/ingest",
+    );
     expect(body.paths).toHaveProperty("/v1/approvals");
     expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}");
     expect(body.paths).toHaveProperty("/v1/audit-events");
@@ -501,6 +505,126 @@ describe("api tenant-scoped resource contracts", () => {
 
     expect(response.statusCode).toBe(403);
     expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("creates a KB document as a draft through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/kb/documents",
+      headers: authHeaders,
+      payload: {
+        title: "Returns policy",
+        source_type: "manual",
+        document_type: "policy",
+        content: "Returns are accepted within 30 days of delivery.",
+      },
+    });
+    const body = KbDocumentResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(201);
+    expect(body.kb_document).toMatchObject({
+      title: "Returns policy",
+      source_type: "manual",
+      document_type: "policy",
+      status: "draft",
+    });
+  });
+
+  it("rejects KB document creation without a body content field", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/kb/documents",
+      headers: authHeaders,
+      payload: {
+        title: "Returns policy",
+        source_type: "manual",
+        document_type: "policy",
+      },
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("rejects KB document creation for roles without write permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/kb/documents",
+      headers: clientViewerHeaders,
+      payload: {
+        title: "Returns policy",
+        source_type: "manual",
+        document_type: "policy",
+        content: "Returns are accepted within 30 days of delivery.",
+      },
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("updates KB document status through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/v1/kb/documents/kbd_test",
+      headers: authHeaders,
+      payload: { status: "stale" },
+    });
+    const body = KbDocumentResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.kb_document.status).toBe("stale");
+  });
+
+  it("returns 404 when updating a missing KB document", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/v1/kb/documents/kbd_missing",
+      headers: authHeaders,
+      payload: { status: "stale" },
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(404);
+    expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("ingests a KB document and reports chunk/embedding counts", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/kb/documents/kbd_test/ingest",
+      headers: authHeaders,
+    });
+    const body = KbIngestionResultSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body).toMatchObject({
+      kb_document_id: "kbd_test",
+      status: "active",
+      chunk_count: 3,
+      embedded_count: 3,
+    });
+  });
+
+  it("returns 404 when ingesting a missing KB document", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/kb/documents/kbd_missing/ingest",
+      headers: authHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(404);
+    expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
   });
 
   it("lists approval resources through the shared response schema", async () => {
@@ -1087,6 +1211,62 @@ function makeServices(
           created_by_user_id: null,
           created_at: now,
           updated_at: now,
+        };
+      },
+      async create(context, input) {
+        expectTenantContext(context);
+
+        return {
+          kb_document_id: input.kb_document_id ?? "kbd_created",
+          tenant_id: context.tenant.tenantId,
+          title: input.title,
+          source_type: input.source_type,
+          source_ref: input.source_ref ?? null,
+          document_type: input.document_type,
+          status: "draft",
+          version: 1,
+          content_hash: "hash_created",
+          created_by_user_id: context.actor.userId,
+          created_at: now,
+          updated_at: now,
+        };
+      },
+      async update(context, kbDocumentId, input) {
+        expectTenantContext(context);
+
+        if (kbDocumentId !== "kbd_test") {
+          return null;
+        }
+
+        return {
+          kb_document_id: "kbd_test",
+          tenant_id: context.tenant.tenantId,
+          title: input.title ?? "Shipping FAQ",
+          source_type: "manual",
+          source_ref: input.source_ref ?? null,
+          document_type: input.document_type ?? "faq",
+          status: input.status ?? "active",
+          version: 1,
+          content_hash: "hash_test",
+          created_by_user_id: null,
+          created_at: now,
+          updated_at: now,
+        };
+      },
+      async ingest(context, kbDocumentId) {
+        expectTenantContext(context);
+
+        if (kbDocumentId !== "kbd_test") {
+          return null;
+        }
+
+        return {
+          kb_document_id: "kbd_test",
+          status: "active",
+          version: 1,
+          content_hash: "hash_test",
+          chunk_count: 3,
+          embedded_count: 3,
         };
       },
     },

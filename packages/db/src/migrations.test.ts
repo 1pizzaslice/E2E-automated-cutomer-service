@@ -28,9 +28,22 @@ describe("sql migrations", () => {
     expect(migrations.map((migration) => migration.id)).toEqual([
       "0001_initial_core",
       "0002_tenant_rls",
+      "0003_kb_vector_index",
     ]);
     expect(migrations[0]?.sql).toContain(
       "create extension if not exists vector",
+    );
+  });
+
+  it("adds an hnsw retrieval index over kb chunk embeddings", async () => {
+    const migrations = await loadSqlMigrations();
+    const migration = migrations.find(
+      (candidate) => candidate.id === "0003_kb_vector_index",
+    );
+
+    expect(migration).toBeDefined();
+    expect(migration?.sql).toContain(
+      "on kb_chunks using hnsw (embedding vector_cosine_ops)",
     );
   });
 

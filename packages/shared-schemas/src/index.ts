@@ -594,6 +594,78 @@ export type KbDocumentListResponse = z.infer<
   typeof KbDocumentListResponseSchema
 >;
 
+/**
+ * Request to create a KB document. The raw `content` is stored by reference in
+ * the KB content store (never inline in PostgreSQL) and chunked/embedded by the
+ * ingestion pipeline; `content_hash` is derived server-side from it. A created
+ * document starts in `draft` status and only becomes `active` after ingestion.
+ */
+export const KbDocumentCreateRequestSchema = z
+  .object({
+    kb_document_id: z.string().min(1).optional(),
+    title: z.string().min(1),
+    source_type: KbDocumentSourceTypeSchema,
+    source_ref: OptionalNullableStringSchema,
+    document_type: KbDocumentTypeSchema,
+    content: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * Partial update of KB document metadata and lifecycle status. Content is
+ * immutable through PATCH in v1 (re-upload by creating a new document); status
+ * transitions here drive stale/active handling for retrieval.
+ */
+export const KbDocumentUpdateRequestSchema = z
+  .object({
+    title: z.string().min(1).optional(),
+    source_ref: OptionalNullableStringSchema,
+    document_type: KbDocumentTypeSchema.optional(),
+    status: KbStatusSchema.optional(),
+  })
+  .strict()
+  .refine(hasDefinedValue, {
+    message: "At least one KB document field must be provided.",
+  });
+
+/**
+ * A single retrievable KB chunk. Embeddings are intentionally omitted from the
+ * contract: they are an internal retrieval index detail, never returned to API
+ * clients or exposed to the AI runtime as raw vectors.
+ */
+export const KbChunkResponseSchema = z.object({
+  kb_chunk_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  kb_document_id: z.string().min(1),
+  chunk_index: z.number().int().nonnegative(),
+  content: z.string().min(1),
+  status: KbStatusSchema,
+  metadata: JsonObjectSchema,
+  created_at: z.string().datetime(),
+});
+
+/**
+ * Result of running the ingestion pipeline for a KB document: how many chunks
+ * were produced and embedded, plus the document's resulting active status.
+ */
+export const KbIngestionResultSchema = z.object({
+  kb_document_id: z.string().min(1),
+  status: KbStatusSchema,
+  version: z.number().int().positive(),
+  content_hash: z.string().min(1),
+  chunk_count: z.number().int().nonnegative(),
+  embedded_count: z.number().int().nonnegative(),
+});
+
+export type KbDocumentCreateRequest = z.infer<
+  typeof KbDocumentCreateRequestSchema
+>;
+export type KbDocumentUpdateRequest = z.infer<
+  typeof KbDocumentUpdateRequestSchema
+>;
+export type KbChunkResponse = z.infer<typeof KbChunkResponseSchema>;
+export type KbIngestionResult = z.infer<typeof KbIngestionResultSchema>;
+
 export const ApprovalTypeSchema = z.enum([
   "reply",
   "tool_action",
