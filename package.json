@@ -15,10 +15,10 @@
     "harness:preflight": "node scripts/session-harness-check.mjs --preflight",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
-    "lint": "pnpm -r lint && python3 -m compileall ai",
+    "lint": "pnpm -r lint && uv run --frozen --project ai python -m compileall -q ai/runtime ai/evals",
     "test": "pnpm -r test && pnpm test:py",
     "test:integration": "pnpm --filter @support/db test:integration && pnpm --filter @support/api test:integration && pnpm --filter @support/workers test:integration",
-    "test:py": "python3 -m unittest discover -s ai -p '*_test.py'",
+    "test:py": "uv run --frozen --project ai python -m unittest discover -s ai -p '*_test.py'",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {

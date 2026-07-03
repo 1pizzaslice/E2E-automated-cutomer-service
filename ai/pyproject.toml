@@ -3,15 +3,21 @@ name = "support-ai-runtime"
 version = "0.1.0"
 description = "Python AI runtime for the customer support platform."
 requires-python = ">=3.12"
-# Intentionally empty: the v1 support agent graph is a self-contained,
-# dependency-free package that mirrors LangGraph's node model behind pluggable
-# ports (see ADR-0016). The local harness runs Python via the system interpreter
-# (`pnpm test:py` -> unittest, `pnpm lint` -> compileall) with no `uv`, so the
-# runtime must import under stdlib-only Python. Real LangGraph + a model/provider
-# SDK (e.g. langgraph, langchain-core, pydantic) plug in behind the ModelProvider,
-# RetrievalPort, and ToolExecutor ports once Python dependency management is
-# provisioned.
+# The v1 support agent graph runs on the standard library behind pluggable ports
+# (ADR-0016). Python tooling is managed by uv (`.python-version` pins CPython
+# 3.12, which uv provisions); the harness runs the suite via `uv run` so it is
+# reproducible regardless of the system `python3` (which is 3.14).
 dependencies = []
+
+# The real AI stack, proven to install on managed CPython 3.12 via uv. A session
+# migrating a port to a real model/graph pulls these with `uv sync --extra llm`
+# and swaps the adapter behind ModelProvider / RetrievalPort / ToolExecutor.
+[project.optional-dependencies]
+llm = [
+  "pydantic>=2",
+  "langgraph>=0.2",
+  "langchain-core>=0.3",
+]
 
 [tool.pytest.ini_options]
 python_files = ["*_test.py"]
