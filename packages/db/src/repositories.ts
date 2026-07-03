@@ -21,6 +21,8 @@ import {
   type NewConversation,
   type NewCustomer,
   type NewCustomerIdentity,
+  type NewKbChunk,
+  type NewKbDocument,
   type NewMessage,
   type NewTenant,
   type NewTicket,
@@ -441,6 +443,68 @@ export function kbDocumentByIdQuery(
       ),
     )
     .limit(1);
+}
+
+export function createKbDocumentQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewKbDocument, "tenantId">,
+) {
+  return db
+    .insert(kbDocuments)
+    .values({ ...values, tenantId: scope.tenantId })
+    .returning();
+}
+
+export function updateKbDocumentByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  kbDocumentId: string,
+  values: Partial<NewKbDocument>,
+) {
+  return db
+    .update(kbDocuments)
+    .set(values)
+    .where(
+      and(
+        eq(kbDocuments.tenantId, scope.tenantId),
+        eq(kbDocuments.kbDocumentId, kbDocumentId),
+      ),
+    )
+    .returning();
+}
+
+/**
+ * Remove all chunks for a KB document within the tenant scope. Ingestion is
+ * idempotent by replacement: a re-ingest deletes the prior chunk set before
+ * writing the freshly chunked/embedded rows, so stale chunk indexes never
+ * linger.
+ */
+export function deleteKbChunksForDocumentQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  kbDocumentId: string,
+) {
+  return db
+    .delete(kbChunks)
+    .where(
+      and(
+        eq(kbChunks.tenantId, scope.tenantId),
+        eq(kbChunks.kbDocumentId, kbDocumentId),
+      ),
+    )
+    .returning();
+}
+
+export function insertKbChunksQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: readonly Omit<NewKbChunk, "tenantId">[],
+) {
+  return db
+    .insert(kbChunks)
+    .values(values.map((value) => ({ ...value, tenantId: scope.tenantId })))
+    .returning();
 }
 
 export function approvalsListQuery(

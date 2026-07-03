@@ -13,7 +13,10 @@ import {
   conversationsListQuery,
   conversationByIdQuery,
   createInboundMessageQuery,
+  createKbDocumentQuery,
   customerIdentityByValueQuery,
+  deleteKbChunksForDocumentQuery,
+  insertKbChunksQuery,
   customersListQuery,
   customerByIdQuery,
   integrationByIdQuery,
@@ -29,6 +32,7 @@ import {
   ticketsListQuery,
   ticketByIdQuery,
   updateCustomerByIdQuery,
+  updateKbDocumentByIdQuery,
   updateTicketByIdQuery,
   visibleToolDefinitionByNameQuery,
 } from "./repositories.js";
@@ -296,6 +300,78 @@ describe("tenant-scoped repository queries", () => {
       "active",
       10,
     ]);
+  });
+
+  it("stamps the tenant on KB document inserts", () => {
+    const query = createKbDocumentQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        kbDocumentId: "kbd_a",
+        title: "Policy",
+        sourceType: "manual",
+        sourceRef: null,
+        documentType: "policy",
+        status: "draft",
+        version: 1,
+        contentHash: "hash_a",
+        createdByUserId: null,
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "kb_documents"');
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("kbd_a");
+  });
+
+  it("scopes KB document updates by tenant and id", () => {
+    const query = updateKbDocumentByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "kbd_a",
+      { status: "active" },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "kb_documents"');
+    expect(compiled.sql).toContain('"kb_documents"."tenant_id" = $');
+    expect(compiled.sql).toContain('"kb_documents"."kb_document_id" = $');
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("kbd_a");
+  });
+
+  it("scopes KB chunk deletion by tenant and document", () => {
+    const query = deleteKbChunksForDocumentQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "kbd_a",
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('delete from "kb_chunks"');
+    expect(compiled.sql).toContain('"kb_chunks"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"kb_chunks"."kb_document_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "kbd_a"]);
+  });
+
+  it("stamps the tenant on KB chunk inserts", () => {
+    const query = insertKbChunksQuery(makeDb(), { tenantId: "ten_a" }, [
+      {
+        kbChunkId: "kbc_a",
+        kbDocumentId: "kbd_a",
+        chunkIndex: 0,
+        content: "chunk text",
+        embedding: [0.1, 0.2, 0.3],
+        metadata: { document_type: "policy" },
+        status: "active",
+      },
+    ]);
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "kb_chunks"');
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("kbc_a");
   });
 
   it("scopes approval reads by tenant", () => {

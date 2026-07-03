@@ -2,7 +2,7 @@
 
 Backend-first platform for an AI-first customer support BPO. The system will ingest support messages from channels like email and WhatsApp, normalize them into tickets, run durable workflows, use AI for triage and drafting, keep humans in approval loops, and capture audit/eval signals for continuous improvement.
 
-Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, the Milestone 5 Temporal ticket workflow shell with first-response SLA timer behavior plus a structured AI graph activity placeholder, and Milestone 6 channel intake complete with the normalized inbound message schema, email/WhatsApp provider adapters and HMAC signature verification in `packages/integrations`, and the `packages/api` webhook ingress endpoints with raw payload storage by reference, tenant-scoped dedup/idempotency and conversation threading, and start/signal wiring into the ticket lifecycle workflow. Full business workflow implementation is still pending.
+Current status: documentation harness, backend scaffold, database/RLS foundation, Milestone 3 API skeleton with role checks plus PostgreSQL-backed tenant/customer/ticket list-create-read-update contracts, conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, Milestone 4 event bus foundation with typed v1 domain event payload schemas and live publish/consume integration coverage, the Milestone 5 Temporal ticket workflow shell with first-response SLA timer behavior plus a structured AI graph activity placeholder, and Milestone 6 channel intake complete with the normalized inbound message schema, email/WhatsApp provider adapters and HMAC signature verification in `packages/integrations`, and the `packages/api` webhook ingress endpoints with raw payload storage by reference, tenant-scoped dedup/idempotency and conversation threading, and start/signal wiring into the ticket lifecycle workflow, and the Milestone 7 KB ingestion half with document create/update/ingest endpoints backed by deterministic chunking and embedding, content stored by reference, and a pgvector HNSW retrieval index. Full business workflow implementation is still pending.
 
 ## Start Here
 
@@ -136,6 +136,8 @@ Implemented contracts:
 
 Attachment binary storage/oversize rejection, HTML sanitization to `body_html_ref`, and multiple tickets per conversation are later slices; real provider send/download calls stay behind adapter boundaries.
 
+`packages/api` also implements the Milestone 7 KB ingestion vertical: `POST /v1/kb/documents` creates a draft document (raw content stored by reference in the `KbContentStore`, `content_hash` derived server-side), `PATCH /v1/kb/documents/{id}` updates metadata/status, and `POST /v1/kb/documents/{id}/ingest` chunks the content (`chunkDocument`), embeds each chunk through the deterministic `Embedder` port (`vector(1536)`), atomically replaces the document's active chunk set, and marks it active. Chunking and embedding are pure/deterministic (`@support/integrations/kb`); `kb_chunks.embedding` has a pgvector HNSW cosine index (`0003_kb_vector_index.sql`). These write endpoints require the `kb_documents:write` permission. Tenant-scoped retrieval/search, citation metadata at query time, and stale/active exclusion are the retrieval half and remain pending.
+
 ## Current API Skeleton
 
 Implemented endpoints:
@@ -158,7 +160,10 @@ Implemented endpoints:
 - `GET /v1/policies`
 - `GET /v1/policies/{policy_id}`
 - `GET /v1/kb/documents`
+- `POST /v1/kb/documents`
 - `GET /v1/kb/documents/{kb_document_id}`
+- `PATCH /v1/kb/documents/{kb_document_id}`
+- `POST /v1/kb/documents/{kb_document_id}/ingest`
 - `GET /v1/approvals`
 - `GET /v1/approvals/{approval_id}`
 - `GET /v1/audit-events`

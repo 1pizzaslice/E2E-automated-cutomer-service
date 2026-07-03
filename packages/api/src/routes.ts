@@ -15,10 +15,13 @@ import {
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
   CustomerUpdateRequestSchema,
+  KbDocumentCreateRequestSchema,
   KbDocumentListResponseSchema,
   KbDocumentResourceResponseSchema,
   KbDocumentSourceTypeSchema,
   KbDocumentTypeSchema,
+  KbDocumentUpdateRequestSchema,
+  KbIngestionResultSchema,
   KbStatusSchema,
   MessageDirectionSchema,
   MessageListResponseSchema,
@@ -424,6 +427,18 @@ export function registerRoutes(
     return KbDocumentListResponseSchema.parse(kbDocuments);
   });
 
+  app.post("/v1/kb/documents", async (request, reply) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "kb_documents:write");
+
+    const input = parseBody(KbDocumentCreateRequestSchema, request);
+    const kbDocument = await services.kbDocuments.create(context, input);
+
+    reply.status(201);
+    return KbDocumentResourceResponseSchema.parse({ kb_document: kbDocument });
+  });
+
   app.get("/v1/kb/documents/:kb_document_id", async (request) => {
     const context = requireTenantRequestContext(request);
 
@@ -449,6 +464,57 @@ export function registerRoutes(
     return KbDocumentResourceResponseSchema.parse({
       kb_document: kbDocument,
     });
+  });
+
+  app.patch("/v1/kb/documents/:kb_document_id", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "kb_documents:write");
+
+    const { kb_document_id: kbDocumentId } = parseParams(
+      KbDocumentParamsSchema,
+      request,
+    );
+    const input = parseBody(KbDocumentUpdateRequestSchema, request);
+    const kbDocument = await services.kbDocuments.update(
+      context,
+      kbDocumentId,
+      input,
+    );
+
+    if (!kbDocument) {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "KB document was not found.",
+      );
+    }
+
+    return KbDocumentResourceResponseSchema.parse({
+      kb_document: kbDocument,
+    });
+  });
+
+  app.post("/v1/kb/documents/:kb_document_id/ingest", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "kb_documents:write");
+
+    const { kb_document_id: kbDocumentId } = parseParams(
+      KbDocumentParamsSchema,
+      request,
+    );
+    const result = await services.kbDocuments.ingest(context, kbDocumentId);
+
+    if (!result) {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "KB document was not found.",
+      );
+    }
+
+    return KbIngestionResultSchema.parse(result);
   });
 
   app.get("/v1/approvals", async (request) => {

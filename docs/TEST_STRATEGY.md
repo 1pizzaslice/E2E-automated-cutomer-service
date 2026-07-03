@@ -237,6 +237,16 @@ Current Milestone 6 Channel Intake coverage:
 - `packages/db/src/repositories.test.ts` covers the new intake query builders (`channelByIdQuery`, `customerIdentityByValueQuery`, `conversationByExternalThreadQuery`, `messageByExternalIdQuery`, and the conflict-safe `createInboundMessageQuery`).
 - Attachment binary storage/oversize-rejection tests and HTML-sanitization tests remain later Milestone 6 slices.
 
+Current Milestone 7 KB ingestion coverage (ingestion half):
+
+- `packages/shared-schemas/src/index.test.ts` validates the ingestion contracts: a KB document create request (rejecting empty content and unknown keys), a KB document update request (requiring at least one field), and the KB chunk response and ingestion result shapes.
+- `packages/integrations/src/kb/chunker.test.ts` covers `chunkDocument`: no chunks for blank input, a single chunk for short content, packing paragraphs under the limit, splitting oversized content into ordered/bounded chunks, hard-wrapping a break-less paragraph, determinism across runs, and rejection of invalid options.
+- `packages/integrations/src/kb/embedder.test.ts` covers `createDeterministicEmbedder`: correct dimensionality, determinism, unit-vector output (dot product = cosine), higher similarity for shared-token texts than unrelated texts, batch-order preservation, a zero vector for token-less input, and rejection of invalid dimensions.
+- `packages/api/src/kb-ingestion.test.ts` unit-tests the ingestion service against in-memory stores and the deterministic embedder: create stores content by reference as a draft, ingest produces active embedded chunks with citation metadata, re-ingest replaces the prior chunk set without duplicate indexes, and cross-tenant ingest/update return null (tenant isolation of the store), plus metadata update and unknown-document handling.
+- `packages/api/src/app.test.ts` drives the endpoints: `POST /v1/kb/documents` creates a draft (and rejects missing content and callers without `kb_documents:write`), `PATCH /v1/kb/documents/{id}` updates status (404 for missing), and `POST /v1/kb/documents/{id}/ingest` returns chunk/embedding counts (404 for missing).
+- `packages/db/src/repositories.test.ts` covers the new KB write helpers (`createKbDocumentQuery`, `updateKbDocumentByIdQuery`, `deleteKbChunksForDocumentQuery`, `insertKbChunksQuery`) for tenant stamping/scoping; `packages/db/src/migrations.test.ts` asserts the `0003_kb_vector_index` HNSW cosine index migration.
+- Verified end to end against a live pgvector database (draft → ingest → active, non-null `vector(1536)` embeddings persisted, cosine `<=>` search returns correctly ranked results). Tenant-isolation retrieval tests, prompt-injection test content, and retrieval eval fixtures belong to the retrieval half and are not yet implemented.
+
 ### 3.10 AI Runtime
 
 Required tests:

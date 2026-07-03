@@ -12,8 +12,12 @@ import {
   CustomerResourceResponseSchema,
   DomainEventEnvelopeSchema,
   MessageReceivedEventPayloadSchema,
+  KbChunkResponseSchema,
+  KbDocumentCreateRequestSchema,
   KbDocumentListResponseSchema,
   KbDocumentResourceResponseSchema,
+  KbDocumentUpdateRequestSchema,
+  KbIngestionResultSchema,
   SupportEventErrorRecordSchema,
   TenantCreateRequestSchema,
   TenantListResponseSchema,
@@ -500,6 +504,57 @@ describe("shared API contract schemas", () => {
     };
 
     expect(KbDocumentResourceResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("validates a KB document create request and rejects empty content", () => {
+    const request = {
+      title: "Returns policy",
+      source_type: "manual",
+      document_type: "policy",
+      content: "Returns are accepted within 30 days of delivery.",
+    };
+
+    expect(KbDocumentCreateRequestSchema.parse(request)).toMatchObject({
+      title: "Returns policy",
+      content: "Returns are accepted within 30 days of delivery.",
+    });
+    expect(() =>
+      KbDocumentCreateRequestSchema.parse({ ...request, content: "" }),
+    ).toThrow();
+    expect(() =>
+      KbDocumentCreateRequestSchema.parse({ ...request, extra: true }),
+    ).toThrow();
+  });
+
+  it("requires at least one field on a KB document update request", () => {
+    expect(
+      KbDocumentUpdateRequestSchema.parse({ status: "stale" }),
+    ).toMatchObject({ status: "stale" });
+    expect(() => KbDocumentUpdateRequestSchema.parse({})).toThrow();
+  });
+
+  it("validates a KB chunk response and an ingestion result", () => {
+    const chunk = {
+      kb_chunk_id: "kbc_test",
+      tenant_id: "ten_test",
+      kb_document_id: "kbd_test",
+      chunk_index: 0,
+      content: "Returns are accepted within 30 days.",
+      status: "active",
+      metadata: { document_type: "policy" },
+      created_at: "2026-06-19T00:00:00.000Z",
+    };
+    const result = {
+      kb_document_id: "kbd_test",
+      status: "active",
+      version: 1,
+      content_hash: "hash_test",
+      chunk_count: 3,
+      embedded_count: 3,
+    };
+
+    expect(KbChunkResponseSchema.parse(chunk)).toEqual(chunk);
+    expect(KbIngestionResultSchema.parse(result)).toEqual(result);
   });
 
   it("validates conversation and message resource responses", () => {
