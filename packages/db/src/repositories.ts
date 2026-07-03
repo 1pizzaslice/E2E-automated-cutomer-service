@@ -36,11 +36,14 @@ import {
   type NewMessage,
   type NewTenant,
   type NewTicket,
+  type NewToolCall,
   type TenantPolicy,
   type Ticket,
+  type ToolCall,
   tenantPolicies,
   tenants,
   tickets,
+  toolCalls,
   toolDefinitions,
 } from "./schema.js";
 
@@ -747,6 +750,72 @@ export function visibleToolDefinitionByNameQuery(
     )
     .limit(1);
 }
+
+// --- Milestone 8 tool registry ----------------------------------------------
+
+/**
+ * Persist a tool call audit row. Every attempt to execute a tool — successful,
+ * failed, or blocked — is recorded here; the executor writes the terminal
+ * outcome via {@link updateToolCallByIdQuery}. The row is tenant-scoped so RLS
+ * confines it to the owning tenant.
+ */
+export function insertToolCallQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewToolCall, "tenantId">,
+) {
+  return db
+    .insert(toolCalls)
+    .values({ ...values, tenantId: scope.tenantId })
+    .returning();
+}
+
+export function updateToolCallByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  toolCallId: string,
+  values: Partial<NewToolCall>,
+) {
+  return db
+    .update(toolCalls)
+    .set(values)
+    .where(
+      and(
+        eq(toolCalls.tenantId, scope.tenantId),
+        eq(toolCalls.toolCallId, toolCallId),
+      ),
+    )
+    .returning();
+}
+
+/**
+ * Look up a prior tool call by idempotency key for a given tool definition.
+ * Backs idempotent replay for side-effect-capable tools: a repeated key returns
+ * the earlier call so the side effect is not applied twice. Mirrors the
+ * `tool_calls_idempotency_idx` unique key on (tenant, tool definition, key).
+ */
+export function toolCallByIdempotencyKeyQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  params: {
+    readonly toolDefinitionId: string;
+    readonly idempotencyKey: string;
+  },
+) {
+  return db
+    .select()
+    .from(toolCalls)
+    .where(
+      and(
+        eq(toolCalls.tenantId, scope.tenantId),
+        eq(toolCalls.toolDefinitionId, params.toolDefinitionId),
+        eq(toolCalls.idempotencyKey, params.idempotencyKey),
+      ),
+    )
+    .limit(1);
+}
+
+export type ToolCallRow = ToolCall;
 
 // --- Milestone 6 channel intake ---------------------------------------------
 

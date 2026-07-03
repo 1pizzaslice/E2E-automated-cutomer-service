@@ -706,6 +706,124 @@ export type KbSearchRequest = z.infer<typeof KbSearchRequestSchema>;
 export type KbSearchResult = z.infer<typeof KbSearchResultSchema>;
 export type KbSearchResponse = z.infer<typeof KbSearchResponseSchema>;
 
+// --- Tool registry (Milestone 8) --------------------------------------------
+
+/**
+ * Side-effect class of a tool, mirroring `tool_side_effect_class` in the DB.
+ * `read_only` tools observe state and never mutate; `draft_side_effect` produces
+ * a proposed action a human/approval gate must confirm; `reversible_write` and
+ * `irreversible_write` mutate external state (the latter cannot be undone). Only
+ * side-effect-capable tools (everything except `read_only`) participate in
+ * idempotency de-duplication, because reads are already naturally idempotent.
+ */
+export const ToolSideEffectClassSchema = z.enum([
+  "read_only",
+  "draft_side_effect",
+  "reversible_write",
+  "irreversible_write",
+]);
+
+/**
+ * Coarse capability a caller must hold to execute a tool. A permission class is
+ * assigned per tool definition and checked against the set of classes granted to
+ * the calling principal (a human agent role, or the AI runtime's policy). It
+ * gates *which tools may run*, independently of the row-level tenant isolation
+ * that governs *which data* a tool may read. First-party tools use these
+ * canonical classes; `reply_draft`/`action_execute` are reserved for the
+ * approval/outbound tools added in later milestones.
+ */
+export const ToolPermissionClassSchema = z.enum([
+  "customer_read",
+  "order_read",
+  "kb_read",
+  "eligibility_evaluate",
+  "reply_draft",
+  "action_execute",
+]);
+
+/**
+ * Machine-readable failure code for a rejected or failed tool call. These map to
+ * the milestone acceptance guarantees: `invalid_arguments` (argument-schema
+ * validation), `unauthorized`/`not_visible` (permission class + tenant
+ * visibility), `result_too_large`/`output_invalid` (bounded, AI-safe results),
+ * plus `not_found`, `timeout`, and generic `tool_error` runtime failures.
+ */
+export const ToolCallErrorCodeSchema = z.enum([
+  "invalid_arguments",
+  "unauthorized",
+  "not_visible",
+  "not_found",
+  "timeout",
+  "result_too_large",
+  "output_invalid",
+  "tool_error",
+]);
+
+/**
+ * Envelope for a request to execute a tool. `arguments` is validated against the
+ * named tool's argument schema before the tool runs. `idempotency_key`, when
+ * supplied for a side-effect-capable tool, de-duplicates retries: a replayed key
+ * returns the stored result of the first successful call instead of executing
+ * the side effect again.
+ */
+export const ToolCallRequestSchema = z
+  .object({
+    tool_name: z.string().min(1),
+    arguments: JsonObjectSchema,
+    idempotency_key: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+/** Structured failure attached to a non-succeeded tool call result. */
+export const ToolCallErrorSchema = z
+  .object({
+    code: ToolCallErrorCodeSchema,
+    message: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * Result of a tool execution attempt. `succeeded` carries the bounded, schema-
+ * validated `output`; `failed`/`blocked` carry a structured `error` (`blocked`
+ * means the tool never ran — permission or visibility denied it). Every result,
+ * success or failure, corresponds to a persisted `tool_calls` audit row keyed by
+ * `tool_call_id`. `idempotent_replay` is true when the output was served from a
+ * prior successful call rather than a fresh execution.
+ */
+export const ToolCallResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("succeeded"),
+      tool_call_id: z.string().min(1),
+      tool_name: z.string().min(1),
+      side_effect_class: ToolSideEffectClassSchema,
+      output: JsonObjectSchema,
+      idempotent_replay: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.enum(["failed", "blocked"]),
+      // Empty only when the call was rejected before any audit row could be
+      // anchored — i.e. the tool name is unknown or not visible to the tenant, so
+      // there is no `tool_definition` to reference. Every other outcome (permission
+      // denied, bad arguments, runtime failure) carries a real `tool_call_id`.
+      tool_call_id: z.string(),
+      tool_name: z.string().min(1),
+      side_effect_class: ToolSideEffectClassSchema,
+      error: ToolCallErrorSchema,
+      idempotent_replay: z.boolean(),
+    })
+    .strict(),
+]);
+
+export type ToolSideEffectClass = z.infer<typeof ToolSideEffectClassSchema>;
+export type ToolPermissionClass = z.infer<typeof ToolPermissionClassSchema>;
+export type ToolCallErrorCode = z.infer<typeof ToolCallErrorCodeSchema>;
+export type ToolCallRequest = z.infer<typeof ToolCallRequestSchema>;
+export type ToolCallError = z.infer<typeof ToolCallErrorSchema>;
+export type ToolCallResult = z.infer<typeof ToolCallResultSchema>;
+
 export const ApprovalTypeSchema = z.enum([
   "reply",
   "tool_action",

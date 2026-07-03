@@ -35,6 +35,10 @@ import {
   TicketResourceResponseSchema,
   TicketStateTransitionEventPayloadSchema,
   TicketUpdateRequestSchema,
+  ToolCallRequestSchema,
+  ToolCallResultSchema,
+  ToolPermissionClassSchema,
+  ToolSideEffectClassSchema,
   buildDomainEventSubject,
   createHealthResponse,
 } from "./index.js";
@@ -828,5 +832,71 @@ describe("normalized inbound message schema", () => {
         unexpected_field: "value",
       }),
     ).toThrow();
+  });
+});
+
+describe("tool registry schemas", () => {
+  it("enumerates the canonical side-effect and permission classes", () => {
+    expect(ToolSideEffectClassSchema.options).toEqual([
+      "read_only",
+      "draft_side_effect",
+      "reversible_write",
+      "irreversible_write",
+    ]);
+    expect(ToolPermissionClassSchema.options).toContain("order_read");
+    expect(ToolPermissionClassSchema.options).toContain("kb_read");
+  });
+
+  it("validates a tool call request with an optional idempotency key", () => {
+    const request = {
+      tool_name: "order_lookup",
+      arguments: { order_id: "ord_1001" },
+      idempotency_key: "req-abc",
+    };
+
+    expect(ToolCallRequestSchema.parse(request)).toEqual(request);
+  });
+
+  it("rejects unknown keys on a tool call request", () => {
+    expect(() =>
+      ToolCallRequestSchema.parse({
+        tool_name: "order_lookup",
+        arguments: {},
+        unexpected: true,
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a succeeded result and rejects mixing error with output", () => {
+    const succeeded = {
+      status: "succeeded",
+      tool_call_id: "tcl_1",
+      tool_name: "order_lookup",
+      side_effect_class: "read_only",
+      output: { order_id: "ord_1001" },
+      idempotent_replay: false,
+    };
+
+    expect(ToolCallResultSchema.parse(succeeded)).toEqual(succeeded);
+
+    expect(() =>
+      ToolCallResultSchema.parse({
+        ...succeeded,
+        error: { code: "tool_error", message: "boom" },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a blocked result carrying a structured error", () => {
+    const blocked = {
+      status: "blocked",
+      tool_call_id: "tcl_2",
+      tool_name: "order_lookup",
+      side_effect_class: "read_only",
+      error: { code: "unauthorized", message: "missing order_read" },
+      idempotent_replay: false,
+    };
+
+    expect(ToolCallResultSchema.parse(blocked)).toEqual(blocked);
   });
 });

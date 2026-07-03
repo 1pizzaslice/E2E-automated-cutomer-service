@@ -6,8 +6,8 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Current Status
 
-- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation is complete with the deterministic ticket workflow shell, activity boundaries, first-response SLA timer breach behavior, an AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), explicit activity retry policies, and replay coverage. Milestone 6 channel intake is complete (normalized inbound schema, provider adapters, signature verification, webhook ingress, tenant-scoped persistence, and workflow start/signal wiring). Milestone 7 KB and retrieval is complete: the ingestion vertical (KB document/chunk ingestion contracts, deterministic chunking + embedding pipelines, a pgvector HNSW cosine index, content stored by reference, and tenant-scoped document create/update/ingest endpoints) plus the retrieval vertical (`POST /v1/kb/search` tenant-scoped cosine nearest-neighbour retrieval over active chunks/documents with citation metadata, stale-document exclusion, a `kb:search` permission, retrieval eval + prompt-injection fixtures, and tenant-isolation tests) are both done.
-- Current milestone: Milestone 7 - KB And Retrieval is complete (ingestion vertical in `feat-milestone7-kb-ingestion`; retrieval vertical in `feat-milestone7-kb-retrieval`). Done this session (retrieval half): the retrieval contracts in `packages/shared-schemas` (`KbSearchRequestSchema`, `KbSearchResultSchema` — `KbChunkResponseSchema`-based plus `score` and document citation fields, `KbSearchResponseSchema`); the tenant+active `searchKbChunksQuery` vector helper in `packages/db` (cosine `<=>`, joins `kb_documents` for citation + active-document/stale exclusion, optional type filters); the `packages/api` retrieval vertical (`KbRetrievalStore` port with DB impl under RLS + in-memory impl over the ingestion store, `KbRetrievalService` embedding the query with the same `Embedder`) exposed as `POST /v1/kb/search` behind a new `kb:search` permission (granted to the KB-read roles); retrieval eval fixtures + adversarial prompt-injection content (`kb-eval-fixtures.ts`); and OpenAPI paths/schemas. Verified end to end against a live pgvector database (ranking, tenant isolation, stale-document exclusion).
+- Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation is complete with the deterministic ticket workflow shell, activity boundaries, first-response SLA timer breach behavior, an AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), explicit activity retry policies, and replay coverage. Milestone 6 channel intake is complete (normalized inbound schema, provider adapters, signature verification, webhook ingress, tenant-scoped persistence, and workflow start/signal wiring). Milestone 7 KB and retrieval is complete: the ingestion vertical (KB document/chunk ingestion contracts, deterministic chunking + embedding pipelines, a pgvector HNSW cosine index, content stored by reference, and tenant-scoped document create/update/ingest endpoints) plus the retrieval vertical (`POST /v1/kb/search` tenant-scoped cosine nearest-neighbour retrieval over active chunks/documents with citation metadata, stale-document exclusion, a `kb:search` permission, retrieval eval + prompt-injection fixtures, and tenant-isolation tests) are both done. Milestone 8 tool registry is complete: shared tool contracts (side-effect + permission classes, tool-call request/result envelope), a tenant-scoped tool executor with schema validation, permission-class checks, timeout + size-bounded AI-safe results, `tool_calls` audit logging, and idempotent replay for side-effect tools, plus the six first-party tools (order/shipment/refund/cancellation/customer lookups and calculators + a `kb_search` tool reusing the Milestone 7 retrieval service).
+- Current milestone: Milestone 8 - Tool Registry is complete (`feat-milestone8-tool-registry`). Next: Milestone 9 - AI Runtime With LangGraph. Done this session (retrieval half): the retrieval contracts in `packages/shared-schemas` (`KbSearchRequestSchema`, `KbSearchResultSchema` — `KbChunkResponseSchema`-based plus `score` and document citation fields, `KbSearchResponseSchema`); the tenant+active `searchKbChunksQuery` vector helper in `packages/db` (cosine `<=>`, joins `kb_documents` for citation + active-document/stale exclusion, optional type filters); the `packages/api` retrieval vertical (`KbRetrievalStore` port with DB impl under RLS + in-memory impl over the ingestion store, `KbRetrievalService` embedding the query with the same `Embedder`) exposed as `POST /v1/kb/search` behind a new `kb:search` permission (granted to the KB-read roles); retrieval eval fixtures + adversarial prompt-injection content (`kb-eval-fixtures.ts`); and OpenAPI paths/schemas. Verified end to end against a live pgvector database (ranking, tenant isolation, stale-document exclusion).
 - Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope/payload schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/domain/error stream setup wiring, worker-side NATS JetStream event emit helpers including ticket SLA breach emission, worker-side NATS JetStream consumer base with storage-agnostic idempotency/error handling, local NATS JetStream config, live NATS publish/consume integration coverage, Temporal worker config/runtime scaffold, deterministic ticket lifecycle workflow shell, workflow activity contracts/placeholders including a structured AI graph placeholder, first-response SLA timer breach handling, structured AI failure-to-human routing, workflow-owned domain event emission activity adapter, explicit Temporal activity retry policies, opt-in live Temporal workflow/replay coverage, and session harness preflight/handoff checks. Full business workflow implementation is still pending.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
@@ -23,7 +23,9 @@ This file is the cross-session source of truth for what has been done, what is n
 
 The next implementation task is:
 
-> Begin Milestone 8 - Tool Registry. Define the tool definition schema, tool call input/output schemas, side-effect classes, and permission classes in `packages/shared-schemas`; implement a tool execution interface with schema validation, per-tool permission checks, bounded/AI-safe results, tool audit logging, and idempotency for side-effect-capable tools. Add the first tools: mock order lookup, shipment tracking lookup, refund eligibility calculator, cancellation eligibility calculator, customer profile lookup, and a KB search tool that calls the Milestone 7 `POST /v1/kb/search` retrieval path (reuse `KbRetrievalService`/`kb:search`). Reuse the existing `toolDefinitions` table + `visibleToolDefinitionByNameQuery` (global + tenant-scoped visibility) and the `@support/integrations/tool-contract` surface. Acceptance: invalid tool arguments are rejected, unauthorized tools cannot execute, tool results are bounded and AI-safe, and every tool call is audited.
+> Begin Milestone 9 - AI Runtime With LangGraph. Create the Python AI runtime package under `ai/`; define the agent state model and structured outputs; build the graph nodes (classifier, retrieval, policy decision, tool planning, tool execution, response drafting, critic/guardrail, escalation). The tool-execution node consumes the Milestone 8 tool registry (the six first-party tools + the `ToolCallRequest`/`ToolCallResult` envelope in `@support/shared-schemas`); route low-confidence/risky cases to escalation. Add eval capture, trace export, golden-dataset fixtures, an offline eval runner, unit tests for each node, and an integration test with mocked model/tool calls. Acceptance: the graph returns structured routing + draft outputs, runs are traceable, evals pass on the golden dataset, and low-confidence/risky cases escalate.
+
+Milestone 8 follow-ups to fold into later work (not blockers): a live-PostgreSQL tool registry integration test exercising `createDatabaseToolRegistryStore` audit + idempotency end to end (needs seeded `tool_definitions`, plus `tickets`/`ai_runs` rows for the `tool_calls` FKs); seeding first-party `tool_definitions` rows (global visibility) via a migration/seed so `createDatabaseToolExecutor` resolves them; and, once Milestone 9 exists, wiring the executor's `ToolExecutionContext.grantedPermissions` to the AI runtime policy / RBAC roles instead of a caller-supplied set.
 
 Milestone 6 follow-ups to fold into later slices (not blockers): attachment binary storage + oversize-attachment rejection, HTML sanitization to `body_html_ref`, and supporting multiple tickets per conversation (Milestone 6 wires one lifecycle workflow per conversation with a deterministic `tkt_{conversation_id}` ticket id).
 
@@ -33,6 +35,15 @@ Milestone 7 follow-ups to fold into later work (not blockers): a live-PostgreSQL
 
 ### Last Session Summary
 
+- Created feature branch `feat-milestone8-tool-registry` from `main`.
+- Completed Milestone 8 - Tool Registry in one coherent branch (all 15 checklist items + 4 acceptance criteria).
+- Added the tool contracts to `packages/shared-schemas/src/index.ts`: `ToolSideEffectClassSchema` (now the canonical source) and `ToolPermissionClassSchema` (permission classes), plus the tool-call envelope `ToolCallRequestSchema`, `ToolCallResultSchema` (a `.strict()` discriminated union on `succeeded`/`failed`/`blocked` where the failure branch allows an empty `tool_call_id` for pre-audit gate blocks), `ToolCallErrorCodeSchema`, and `ToolCallErrorSchema`, with inferred type exports and unit tests.
+- Refactored `packages/integrations/src/tool-contract.ts` to import the side-effect + permission enums from `@support/shared-schemas` (single source of truth) and re-export them; typed `ToolDefinitionSchema.permission` to `ToolPermissionClassSchema`; kept `defineReadOnlyTool` and added `defineSideEffectTool` (defaults `requiresHumanApproval` true). Updated `tool-contract.test.ts`.
+- Added to `packages/db`: `ToolCall`/`NewToolCall` type exports and the `tool_calls` repository queries `insertToolCallQuery`, `updateToolCallByIdQuery`, `toolCallByIdempotencyKeyQuery` (reusing the existing `tool_calls` table + its `(tenant, tool_definition, idempotency_key)` unique index).
+- Added the executor `packages/api/src/tool-registry.ts` (`createToolExecutor`): per call it resolves tenant-scoped visibility via `visibleToolDefinitionByNameQuery`, checks the tool's permission class against `ToolExecutionContext.grantedPermissions`, validates arguments against the tool's zod `argsSchema`, runs the handler under its `timeoutMs`, validates + size-bounds the result (default 16 KiB, rejected not truncated), and writes a `tool_calls` audit row for every outcome. Idempotency (side-effect tools only) de-duplicates by key and replays the first outcome. Ships a `ToolRegistryStore` port with a DB impl under `withTenantTransaction`/RLS and an in-memory impl (with `listCalls()`) for unit tests. `ToolExecutionContext` carries `tenantId`/`ticketId`/`aiRunId` because `tool_calls.ticket_id`/`ai_run_id` are notNull FKs.
+- Added the six first-party tools in `packages/api/src/tools/` (`index.ts` + `commerce-fixtures.ts`): order lookup, shipment tracking lookup, refund + cancellation eligibility calculators, and customer profile lookup over injectable tenant-scoped mock commerce fixtures (eligibility uses an injectable clock for deterministic windows), plus `kb_search`, which reuses the Milestone 7 `KbRetrievalService` and returns bounded, citation-focused results. `createDatabaseToolExecutor()` wires the production executor (DB store + first-party tools + DB KB retrieval).
+- Added `packages/api/src/tool-registry.test.ts` (22 tests): success + audit, invalid-arguments rejection, permission-blocked (spy proves the handler never runs), not-visible + disabled definitions, out-of-contract result, oversized-result bound, timeout, idempotent replay (executed once), read-only tools not de-duplicated, tenant isolation, and per-tool behavior for all six tools.
+- Unrun/notes: no live-PostgreSQL integration test for `createDatabaseToolRegistryStore` yet (would need seeded `tool_definitions` + `tickets`/`ai_runs` for the `tool_calls` FKs); first-party `tool_definitions` rows are not seeded, so `createDatabaseToolExecutor` won't resolve them until a seed/migration adds them (in-memory store used for tests); `grantedPermissions` is caller-supplied and should be wired to RBAC/AI-runtime policy in Milestone 9. Captured as Milestone 8 follow-ups above.
 - Created feature branch `feat-milestone7-kb-retrieval` from `main` and ran `pnpm harness:preflight`.
 - Completed the retrieval half of Milestone 7 - KB And Retrieval (the remaining six checklist items: tenant-scoped retrieval, citation metadata, stale document handling, retrieval eval fixtures, prompt-injection test content, tenant-isolation retrieval tests), finishing the milestone in one coherent branch.
 - Added the retrieval contracts to `packages/shared-schemas/src/index.ts`: `KbSearchRequestSchema` (`.strict()`; `query` required, optional `limit`/`document_type`/`source_type`), `KbSearchResultSchema` (extends `KbChunkResponseSchema` with a relevance `score` and the `document_title`/`document_type`/`source_type`/`source_ref` citation fields), and `KbSearchResponseSchema` (`results` + `page`), with inferred type exports and unit tests.
@@ -253,6 +264,10 @@ Milestone 7 follow-ups to fold into later work (not blockers): a live-PostgreSQL
 
 ### Verification Status
 
+- Milestone 8 (`feat-milestone8-tool-registry`): `pnpm -r typecheck` passes across all packages.
+- `pnpm -r test` passes: shared-schemas (34), integrations (40), workers (37, 9 skipped), db (47, 19 skipped), api (102, 25 skipped). New always-run file: `packages/api/src/tool-registry.test.ts` (22 tests), plus new tool-contract and shared-schemas tool cases.
+- `pnpm exec prettier --check` passes for all new/changed files (tool-registry, tools/, shared-schemas, tool-contract, db repositories/schema, TODO.md).
+- Not rerun this slice: `pnpm test:integration` and the opt-in live Temporal/NATS tests — Milestone 8 adds pure library code (executor + tools + schemas + repository query builders) with no live PostgreSQL/NATS/Temporal behavior change. The `createDatabaseToolRegistryStore` DB path is unit-covered via the in-memory store that mirrors its semantics; a live-DB integration test is a captured follow-up.
 - `pnpm harness:preflight` passed on branch `feat-milestone6-inbound-ingress`.
 - `pnpm install` linked the new `@support/integrations` and `@temporalio/client` dependencies into `@support/api`.
 - `pnpm -r typecheck` passes across all packages after the ingress/persistence/wiring additions.
@@ -794,28 +809,54 @@ Goal: Expose safe, typed tools for AI and workflows.
 
 Checklist:
 
-- [ ] Define tool definition schema.
-- [ ] Define tool call input/output schema.
-- [ ] Define side-effect classes.
-- [ ] Define permission classes.
-- [ ] Implement tool execution interface.
-- [ ] Add mock order lookup tool.
-- [ ] Add shipment tracking lookup tool.
-- [ ] Add refund eligibility calculator.
-- [ ] Add cancellation eligibility calculator.
-- [ ] Add customer profile lookup tool.
-- [ ] Add KB search tool.
-- [ ] Add tool audit logging.
-- [ ] Add idempotency handling for side-effect-capable tools.
-- [ ] Add permission tests.
-- [ ] Add schema validation tests.
+- [x] Define tool definition schema.
+- [x] Define tool call input/output schema.
+- [x] Define side-effect classes.
+- [x] Define permission classes.
+- [x] Implement tool execution interface.
+- [x] Add mock order lookup tool.
+- [x] Add shipment tracking lookup tool.
+- [x] Add refund eligibility calculator.
+- [x] Add cancellation eligibility calculator.
+- [x] Add customer profile lookup tool.
+- [x] Add KB search tool.
+- [x] Add tool audit logging.
+- [x] Add idempotency handling for side-effect-capable tools.
+- [x] Add permission tests.
+- [x] Add schema validation tests.
+
+Done in `feat-milestone8-tool-registry`. Contracts live in `packages/shared-schemas`:
+canonical `ToolSideEffectClassSchema` (read_only/draft_side_effect/reversible_write/
+irreversible_write) and `ToolPermissionClassSchema` (customer_read/order_read/kb_read/
+eligibility_evaluate/reply_draft/action_execute), plus the tool-call envelope
+(`ToolCallRequestSchema`, `ToolCallResultSchema` — a discriminated union on
+succeeded/failed/blocked, `ToolCallErrorCodeSchema`). `@support/integrations/tool-contract`
+was refactored to source those enums from shared-schemas and typed
+`ToolDefinitionSchema.permission` to the permission-class enum (`defineReadOnlyTool`
+kept; `defineSideEffectTool` added, defaults to requiring approval). `packages/db`
+exposes `ToolCall`/`NewToolCall` and the `tool_calls` repository queries
+(`insertToolCallQuery`, `updateToolCallByIdQuery`, `toolCallByIdempotencyKeyQuery`).
+The executor is `packages/api/src/tool-registry.ts` (`createToolExecutor`): per call it
+resolves tenant-scoped visibility via `visibleToolDefinitionByNameQuery`, checks the
+tool's permission class against the caller's granted set, validates arguments against the
+tool's zod schema, runs the handler under its `timeoutMs`, validates + size-bounds the
+result (default 16 KiB, rejected not truncated), and writes a `tool_calls` audit row for
+every outcome. Idempotency (side-effect tools only; reads are naturally idempotent)
+de-duplicates by `(tenant, tool_definition, idempotency_key)` — a repeated key replays the
+first outcome. Two stores mirror the same semantics: `createDatabaseToolRegistryStore`
+(under `withTenantTransaction`/RLS) and `createInMemoryToolRegistryStore` (unit tests).
+The six first-party tools are in `packages/api/src/tools/` over injectable mock commerce
+fixtures (order lookup, shipment tracking, refund + cancellation eligibility calculators,
+customer profile) plus `kb_search`, which reuses the Milestone 7 `KbRetrievalService`.
+`createDatabaseToolExecutor()` wires the production executor. 22 unit tests in
+`tool-registry.test.ts` cover the acceptance criteria and the tools; whole suite green.
 
 Acceptance criteria:
 
-- [ ] Invalid tool arguments are rejected.
-- [ ] Unauthorized tools cannot execute.
-- [ ] Tool results are bounded and AI-safe.
-- [ ] Every tool call is audited.
+- [x] Invalid tool arguments are rejected. (`argsSchema.safeParse` fails → `invalid_arguments`, status `failed`, audited; handler never runs. Tested for `order_lookup`, `shipment_tracking_lookup`, `kb_search`.)
+- [x] Unauthorized tools cannot execute. (Missing permission class → `blocked`/`unauthorized`, handler not invoked; a tool not visible to the tenant → `blocked`/`not_visible` with no audit row; disabled definitions blocked. Tested with a spy proving no execution.)
+- [x] Tool results are bounded and AI-safe. (Result validated against the tool's schema — out-of-contract → `output_invalid`; serialized size capped, oversized → `result_too_large`, rejected not truncated; KB content returned as cited data, documented as never-instructions.)
+- [x] Every tool call is audited. (Visibility→permission→args→execute→bound each writes/updates a `tool_calls` row via the store; asserted through the in-memory store's `listCalls()`.)
 
 ## Milestone 9: AI Runtime With LangGraph
 
