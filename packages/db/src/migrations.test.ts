@@ -29,6 +29,7 @@ describe("sql migrations", () => {
       "0001_initial_core",
       "0002_tenant_rls",
       "0003_kb_vector_index",
+      "0004_tenant_retention_policy",
     ]);
     expect(migrations[0]?.sql).toContain(
       "create extension if not exists vector",
@@ -44,6 +45,18 @@ describe("sql migrations", () => {
     expect(migration).toBeDefined();
     expect(migration?.sql).toContain(
       "on kb_chunks using hnsw (embedding vector_cosine_ops)",
+    );
+  });
+
+  it("adds the tenant retention policy column", async () => {
+    const migrations = await loadSqlMigrations();
+    const migration = migrations.find(
+      (candidate) => candidate.id === "0004_tenant_retention_policy",
+    );
+
+    expect(migration).toBeDefined();
+    expect(migration?.sql).toContain(
+      "add column if not exists retention_policy jsonb not null default '{}'::jsonb",
     );
   });
 

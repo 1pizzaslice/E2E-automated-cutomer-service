@@ -155,9 +155,15 @@ function readRequiredHeader(
   return value;
 }
 
+/**
+ * Roles come only from the trusted `x-user-roles` header — there is no
+ * default role. A request without any parseable role is unauthenticated
+ * (deny-by-default, Milestone 12): granting `support_agent` implicitly would
+ * let a misconfigured gateway mint write access.
+ */
 function parseRoles(header: string | undefined): RoleName[] {
   if (!header) {
-    return ["support_agent"];
+    throw new HttpError(401, "AUTH_REQUIRED", "Authentication is required.");
   }
 
   const roles: RoleName[] = [];
@@ -176,7 +182,11 @@ function parseRoles(header: string | undefined): RoleName[] {
     roles.push(result.data);
   }
 
-  return roles.length > 0 ? roles : ["support_agent"];
+  if (roles.length === 0) {
+    throw new HttpError(401, "AUTH_REQUIRED", "Authentication is required.");
+  }
+
+  return roles;
 }
 
 function readHeader(request: FastifyRequest, name: string): string | undefined {

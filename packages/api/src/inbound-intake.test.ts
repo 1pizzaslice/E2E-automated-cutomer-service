@@ -231,3 +231,110 @@ describe("inbound intake persistence and workflow wiring", () => {
     expect(second.customer_id).toBe(first.customer_id);
   });
 });
+
+describe("inbound intake attachment validation", () => {
+  const oversized = {
+    filename: "huge.pdf",
+    content_type: "application/pdf",
+    size_bytes: 11 * 1024 * 1024,
+    object_ref: "memory://raw/attachments/huge.pdf",
+  };
+
+  const executable = {
+    filename: "invoice.exe",
+    content_type: "application/x-msdownload",
+    size_bytes: 1024,
+    object_ref: "memory://raw/attachments/invoice.exe",
+  };
+
+  it("rejects oversized attachments before any persistence or workflow signal", async () => {
+    const { store, launcher, intake } = makeService();
+
+    const result = await intake.ingestNormalizedMessage(
+      makeMessage({
+        external_message_id: "provider-msg-oversized",
+        idempotency_key: "provider-msg-oversized",
+        attachments: [oversized],
+      }),
+    );
+
+    expect(result.rejected).toBe(true);
+    expect(result.rejection_reason).toBe("attachment_too_large");
+    expect(result.message_id).toBe("");
+    expect(result.workflow).toBeNull();
+    expect(store.messages).toHaveLength(0);
+    expect(launcher.calls).toHaveLength(0);
+  });
+
+  it("rejects disallowed attachment types", async () => {
+    const { intake } = makeService();
+
+    const result = await intake.ingestNormalizedMessage(
+      makeMessage({
+        external_message_id: "provider-msg-exe",
+        idempotency_key: "provider-msg-exe",
+        attachments: [executable],
+      }),
+    );
+
+    expect(result.rejected).toBe(true);
+    expect(result.rejection_reason).toBe("attachment_type_not_allowed");
+  });
+
+  it("accepts allowed attachments and ingests normally", async () => {
+    const { intake } = makeService();
+
+    const result = await intake.ingestNormalizedMessage(
+      makeMessage({
+        external_message_id: "provider-msg-pdf",
+        idempotency_key: "provider-msg-pdf",
+        attachments: [
+          {
+            filename: "receipt.pdf",
+            content_type: "application/pdf",
+            size_bytes: 100_000,
+            object_ref: "memory://raw/attachments/receipt.pdf",
+          },
+        ],
+      }),
+    );
+
+    expect(result.rejected).toBe(false);
+    expect(result.rejection_reason).toBeNull();
+    expect(result.deduplicated).toBe(false);
+    expect(result.message_id).not.toBe("");
+  });
+
+  it("honors an injected attachment policy", async () => {
+    const store = createInMemoryInboundIntakeStore([channel]);
+    const launcher = createRecordingInboundWorkflowLauncher();
+    const intake = createInboundIntakeService({
+      store,
+      launcher,
+      secretResolver: fixedSecretResolver,
+      attachmentPolicy: {
+        maxSizeBytes: 1024,
+        allowedContentTypes: ["application/pdf"],
+        maxAttachmentsPerMessage: 1,
+      },
+    });
+
+    const result = await intake.ingestNormalizedMessage(
+      makeMessage({
+        external_message_id: "provider-msg-policy",
+        idempotency_key: "provider-msg-policy",
+        attachments: [
+          {
+            filename: "receipt.pdf",
+            content_type: "application/pdf",
+            size_bytes: 4096,
+            object_ref: "memory://raw/attachments/receipt.pdf",
+          },
+        ],
+      }),
+    );
+
+    expect(result.rejected).toBe(true);
+    expect(result.rejection_reason).toBe("attachment_too_large");
+  });
+});

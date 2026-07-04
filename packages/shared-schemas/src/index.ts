@@ -251,6 +251,24 @@ export type TenantListResponse = z.infer<typeof TenantListResponseSchema>;
 export type TenantCreateRequest = z.infer<typeof TenantCreateRequestSchema>;
 export type TenantUpdateRequest = z.infer<typeof TenantUpdateRequestSchema>;
 
+/**
+ * Per-tenant data retention configuration (BACKEND_SPEC section 22), stored
+ * on `tenants.retention_policy`. Values are whole days; a `null`/absent value
+ * means retain indefinitely (the v1 default). Consumed by the workers
+ * retention job; changing a tenant's retention policy is an ops action, not
+ * yet exposed on the tenant API contract.
+ */
+export const TenantRetentionPolicySchema = z
+  .object({
+    raw_payload_days: z.number().int().positive().nullish(),
+    attachment_days: z.number().int().positive().nullish(),
+    ai_run_days: z.number().int().positive().nullish(),
+    audit_event_days: z.number().int().positive().nullish(),
+  })
+  .strict();
+
+export type TenantRetentionPolicy = z.infer<typeof TenantRetentionPolicySchema>;
+
 export const CustomerResponseSchema = z.object({
   customer_id: z.string().min(1),
   tenant_id: z.string().min(1),
@@ -538,6 +556,8 @@ export const InboundWebhookMessageResultSchema = z
     conversation_id: z.string(),
     ticket_id: z.string(),
     deduplicated: z.boolean(),
+    rejected: z.boolean(),
+    rejection_reason: z.string().nullable(),
     workflow_id: z.string().nullable(),
   })
   .strict();
@@ -549,6 +569,7 @@ export const InboundWebhookAcceptedResponseSchema = z
     received: z.number().int().nonnegative(),
     accepted: z.number().int().nonnegative(),
     deduplicated: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
     results: z.array(InboundWebhookMessageResultSchema),
   })
   .strict();
@@ -599,6 +620,52 @@ export type PolicyResourceResponse = z.infer<
   typeof PolicyResourceResponseSchema
 >;
 export type PolicyListResponse = z.infer<typeof PolicyListResponseSchema>;
+
+/**
+ * The closed set of topics that may ever be allowlisted for auto-send. This
+ * is the contract-level ceiling mirrored by the AI runtime policy node: a
+ * tenant policy cannot allowlist a topic outside this set, regardless of
+ * configuration.
+ */
+export const AutoSendTopicSchema = z.enum(["faq", "order_status"]);
+
+/**
+ * Content contract for the active `automation`-domain tenant policy version
+ * (`policy_versions.content`). `auto_send_enabled` is the tenant kill
+ * switch: while false, auto-send is disabled everywhere regardless of the
+ * topic allowlist. The v1 default (and the pilot seed) is disabled with an
+ * empty allowlist.
+ */
+export const AutomationPolicyContentSchema = z
+  .object({
+    auto_send_enabled: z.boolean(),
+    auto_send_allowed_topics: z.array(AutoSendTopicSchema),
+  })
+  .strict();
+
+/**
+ * The resolved automation policy for a tenant. `configured` is false when no
+ * active `automation` policy version exists, in which case the effective
+ * controls are the safe defaults (auto-send disabled, empty allowlist).
+ */
+export const EffectiveAutomationPolicyResponseSchema = z.object({
+  tenant_id: z.string().min(1),
+  configured: z.boolean(),
+  policy_id: z.string().min(1).nullable(),
+  policy_version_id: z.string().min(1).nullable(),
+  version: z.number().int().positive().nullable(),
+  activated_at: z.string().datetime().nullable(),
+  auto_send_enabled: z.boolean(),
+  auto_send_allowed_topics: z.array(AutoSendTopicSchema),
+});
+
+export type AutoSendTopic = z.infer<typeof AutoSendTopicSchema>;
+export type AutomationPolicyContent = z.infer<
+  typeof AutomationPolicyContentSchema
+>;
+export type EffectiveAutomationPolicyResponse = z.infer<
+  typeof EffectiveAutomationPolicyResponseSchema
+>;
 
 export const KbDocumentSourceTypeSchema = z.enum([
   "manual",
@@ -1004,6 +1071,41 @@ export type ApprovalDecisionResponse = z.infer<
   typeof ApprovalDecisionResponseSchema
 >;
 
+/**
+ * Canonical audit action taxonomy (BACKEND_SPEC section 13 rules). Every
+ * audit-event producer must use an action from this closed set so audit
+ * completeness is checkable. Ticket transitions, AI runs, approvals,
+ * outbound sends, and retention have live producers today; the policy /
+ * integration-credential / permission actions are reserved for their write
+ * paths (tool calls are audited in the `tool_calls` table, not here).
+ */
+export const SupportAuditActionSchema = z.enum([
+  "ticket.created",
+  "ticket.updated",
+  "ticket.closed",
+  "ticket.close_requested",
+  "ticket.manual_escalated",
+  "ticket.sla_breached",
+  "ai_graph.failed",
+  "approval.requested",
+  "approval.completed",
+  "approval.approved",
+  "approval.edited",
+  "approval.rejected",
+  "approval.escalated",
+  "message.sent",
+  "message.send_failed",
+  "retention.applied",
+  "policy.created",
+  "policy.activated",
+  "policy.archived",
+  "integration.credential_changed",
+  "permission.granted",
+  "permission.revoked",
+]);
+
+export type SupportAuditAction = z.infer<typeof SupportAuditActionSchema>;
+
 export const AuditActorTypeSchema = z.enum([
   "system",
   "ai",
@@ -1365,6 +1467,73 @@ export type QaReviewCompleteRequest = z.infer<
 >;
 export type QaReviewEvidenceResponse = z.infer<
   typeof QaReviewEvidenceResponseSchema
+>;
+
+const ReportRateSchema = z.number().min(0).max(1).nullable();
+
+/**
+ * Weekly pilot review report (SOPS section 14). All counts are scoped to the
+ * tenant and the reporting window; rates are null when their denominator is
+ * zero. `first_response_minutes_avg` measures ticket creation to the first
+ * sent outbound message; `resolution_minutes_avg` measures creation to
+ * `resolved_at` for tickets resolved in the window.
+ */
+export const WeeklyPilotReportSchema = z.object({
+  tenant_id: z.string().min(1),
+  window: z.object({
+    since: z.string().datetime(),
+    until: z.string().datetime(),
+  }),
+  tickets: z.object({
+    created: z.number().int().nonnegative(),
+    resolved: z.number().int().nonnegative(),
+    manual_escalations: z.number().int().nonnegative(),
+    sla_breaches: z.number().int().nonnegative(),
+    first_response_minutes_avg: z.number().nonnegative().nullable(),
+    resolution_minutes_avg: z.number().nonnegative().nullable(),
+    escalation_rate: ReportRateSchema,
+  }),
+  ai_runs: z.object({
+    total: z.number().int().nonnegative(),
+    succeeded: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    draft_rate: ReportRateSchema,
+  }),
+  approvals: z.object({
+    requested: z.number().int().nonnegative(),
+    approved: z.number().int().nonnegative(),
+    edited: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+    escalated: z.number().int().nonnegative(),
+    approval_rate: ReportRateSchema,
+  }),
+  outbound_messages: z.object({
+    sent: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    auto_sent: z.number().int().nonnegative(),
+    auto_send_rate: ReportRateSchema,
+  }),
+  qa_reviews: z.object({
+    created: z.number().int().nonnegative(),
+    completed: z.number().int().nonnegative(),
+    with_defects: z.number().int().nonnegative(),
+    defect_rate: ReportRateSchema,
+  }),
+  top_topics: z.array(
+    z.object({
+      topic: z.string().min(1),
+      count: z.number().int().positive(),
+    }),
+  ),
+});
+
+export const WeeklyPilotReportResponseSchema = z.object({
+  report: WeeklyPilotReportSchema,
+});
+
+export type WeeklyPilotReport = z.infer<typeof WeeklyPilotReportSchema>;
+export type WeeklyPilotReportResponse = z.infer<
+  typeof WeeklyPilotReportResponseSchema
 >;
 
 export const MessageReceivedEventPayloadSchema = z

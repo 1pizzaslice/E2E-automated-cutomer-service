@@ -19,7 +19,10 @@ import {
   type JsonObject,
   type Message,
 } from "@support/db";
-import type { OutboundChannelSender } from "@support/integrations";
+import {
+  createEnvSecretResolver,
+  type OutboundChannelSender,
+} from "@support/integrations";
 import {
   createNoopSupportMetrics,
   type SupportMetrics,
@@ -28,6 +31,7 @@ import {
   NormalizedOutboundMessageSchema,
   type DomainEventActorType,
   type NormalizedOutboundMessage,
+  type SupportAuditAction,
 } from "@support/shared-schemas";
 import type {
   CreateApprovalActivityInput,
@@ -119,7 +123,7 @@ export interface AppendAuditEventInput {
   readonly actorId: string | null;
   readonly entityType: string;
   readonly entityId: string;
-  readonly action: string;
+  readonly action: SupportAuditAction;
   readonly metadata: Record<string, unknown>;
   readonly correlationId: string | null;
 }
@@ -215,7 +219,9 @@ export interface TicketLifecyclePersistenceStore {
  * Resolves an outbound provider credential from an opaque reference stored in
  * the channel config (`send_credential_ref`). Mirrors the inbound
  * `WebhookSecretResolver`: secrets stay out of channel rows (BACKEND_SPEC
- * §4.1) and the default reads the reference from the environment.
+ * §4.1) and the default reads the reference from the environment through the
+ * shared validating secret resolver, so malformed references resolve to null
+ * instead of addressing arbitrary process state.
  */
 export interface OutboundCredentialResolver {
   resolve(ref: string): Promise<string | null>;
@@ -224,12 +230,7 @@ export interface OutboundCredentialResolver {
 export function createEnvOutboundCredentialResolver(
   env: NodeJS.ProcessEnv = process.env,
 ): OutboundCredentialResolver {
-  return {
-    async resolve(ref) {
-      const value = env[ref];
-      return value && value.length > 0 ? value : null;
-    },
-  };
+  return createEnvSecretResolver(env);
 }
 
 export interface TicketLifecyclePersistenceActivities {

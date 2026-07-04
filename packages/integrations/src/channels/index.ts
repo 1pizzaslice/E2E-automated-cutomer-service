@@ -1,3 +1,4 @@
+export * from "./attachment-validation.js";
 export * from "./inbound-context.js";
 export * from "./email-adapter.js";
 export * from "./whatsapp-adapter.js";

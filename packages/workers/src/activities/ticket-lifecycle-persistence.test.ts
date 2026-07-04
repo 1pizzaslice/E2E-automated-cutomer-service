@@ -367,7 +367,7 @@ describe("recordAuditEvent activity", () => {
       tenant_id: TENANT,
       ticket_id: TICKET,
       correlation_id: CORRELATION,
-      action: "message.sent",
+      action: "message.sent" as const,
       actor: { type: "system" as const, id: "workflow" },
       metadata: { message_id: "msg_out_1", approval_id: APPROVAL },
     };

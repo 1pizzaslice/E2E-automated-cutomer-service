@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { JsonArray } from "@support/db";
+import {
+  createEnvSecretResolver,
+  validateInboundAttachments,
+  type AttachmentValidationPolicy,
+} from "@support/integrations";
 import type {
   NormalizedInboundChannel,
   NormalizedInboundMessage,
@@ -16,8 +21,10 @@ import type {
 
 /**
  * Resolves a per-channel webhook signing secret from an opaque reference. The
- * default reads the reference from the environment so secrets stay out of the
- * channel config row (see BACKEND_SPEC §4.1: reference by key, never plaintext).
+ * default reads the reference from the environment through the shared
+ * validating secret resolver so secrets stay out of the channel config row
+ * (see BACKEND_SPEC §4.1: reference by key, never plaintext) and malformed
+ * references never touch process state.
  */
 export interface WebhookSecretResolver {
   resolve(ref: string): Promise<string | null>;
@@ -26,12 +33,7 @@ export interface WebhookSecretResolver {
 export function createEnvWebhookSecretResolver(
   env: NodeJS.ProcessEnv = process.env,
 ): WebhookSecretResolver {
-  return {
-    async resolve(ref) {
-      const value = env[ref];
-      return value && value.length > 0 ? value : null;
-    },
-  };
+  return createEnvSecretResolver(env);
 }
 
 export interface ResolveInboundChannelParams {
@@ -50,6 +52,8 @@ export interface InboundChannelResolution {
 
 export interface InboundIngestResult {
   readonly deduplicated: boolean;
+  readonly rejected: boolean;
+  readonly rejection_reason: string | null;
   readonly message_id: string;
   readonly conversation_id: string;
   readonly customer_id: string | null;
@@ -72,6 +76,7 @@ export interface InboundIntakeServiceDeps {
   readonly launcher: InboundWorkflowLauncher;
   readonly secretResolver?: WebhookSecretResolver;
   readonly taskQueue?: string;
+  readonly attachmentPolicy?: AttachmentValidationPolicy;
 }
 
 function readSecretRef(config: InboundChannelRecord["config"]): string | null {
@@ -134,6 +139,26 @@ export function createInboundIntakeService(
       const tenantId = message.tenant_id;
       const channelId = message.channel_id;
 
+      // Attachment size/type validation runs before any persistence so a
+      // rejected message never creates customers, conversations, or workflow
+      // signals (PLAN §13).
+      const attachmentCheck = validateInboundAttachments(
+        message.attachments,
+        deps.attachmentPolicy,
+      );
+      if (!attachmentCheck.valid) {
+        return {
+          deduplicated: false,
+          rejected: true,
+          rejection_reason: attachmentCheck.reasonCode,
+          message_id: "",
+          conversation_id: "",
+          customer_id: null,
+          ticket_id: "",
+          workflow: null,
+        };
+      }
+
       const existing = await deps.store.findMessageByExternalId(
         tenantId,
         channelId,
@@ -143,6 +168,8 @@ export function createInboundIntakeService(
       if (existing) {
         return {
           deduplicated: true,
+          rejected: false,
+          rejection_reason: null,
           message_id: existing.message_id,
           conversation_id: existing.conversation_id,
           customer_id: null,
@@ -191,6 +218,8 @@ export function createInboundIntakeService(
 
         return {
           deduplicated: true,
+          rejected: false,
+          rejection_reason: null,
           message_id: raced?.message_id ?? messageId,
           conversation_id:
             raced?.conversation_id ?? conversation.conversation_id,
@@ -234,6 +263,8 @@ export function createInboundIntakeService(
 
       return {
         deduplicated: false,
+        rejected: false,
+        rejection_reason: null,
         message_id: messageId,
         conversation_id: conversation.conversation_id,
         customer_id: customer.customer_id,

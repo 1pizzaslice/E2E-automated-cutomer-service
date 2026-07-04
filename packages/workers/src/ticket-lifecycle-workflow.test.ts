@@ -516,6 +516,82 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       false,
     );
   });
+
+  it("still requires human approval when the AI recommends auto_send (no bypass)", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const autoSendRecommendation = makeAiGraphSuccess();
+    if (autoSendRecommendation.status !== "succeeded") {
+      throw new Error("Expected a succeeded AI fixture");
+    }
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls, {
+        aiGraphResult: {
+          ...autoSendRecommendation,
+          routing_decision: {
+            ...autoSendRecommendation.routing_decision,
+            topic: "faq",
+            automation_mode: "auto_send",
+            reason_codes: ["auto_send_allowlisted"],
+          },
+          final_recommendation: {
+            ...autoSendRecommendation.final_recommendation,
+            automation_mode: "auto_send",
+            reason_codes: ["auto_send_allowlisted"],
+          },
+        },
+      }),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      // The workflow must park in waiting_for_approval — an approval row
+      // exists and nothing has been sent — even though the AI recommended
+      // auto_send (Milestone 12 acceptance: no bypass of human approval).
+      const waitingState = await waitForWorkflowState(
+        handle,
+        (state) =>
+          state.phase === "waiting_for_approval" &&
+          state.approval_id === "apr_test",
+      );
+      expect(waitingState.ai_automation_mode).toBe("auto_send");
+      expect(calls.some((call) => call.name === "sendOutboundMessage")).toBe(
+        false,
+      );
+      expect(calls.some((call) => call.name === "createApproval")).toBe(true);
+
+      await handle.signal("approval_completed", {
+        approval_id: "apr_test",
+        status: "approved",
+        actor_id: "usr_approver",
+        decided_at: "2026-06-26T00:10:00.000Z",
+        notes: null,
+      });
+
+      return await handle.result();
+    });
+
+    expect(result.phase).toBe("responded");
+    expect(result.ai_automation_mode).toBe("auto_send");
+    const sendIndex = calls.findIndex(
+      (call) => call.name === "sendOutboundMessage",
+    );
+    const approvalAuditIndex = calls.findIndex(
+      (call) => call.name === "recordAuditEvent:approval.completed",
+    );
+    expect(sendIndex).toBeGreaterThan(approvalAuditIndex);
+  });
 });
 
 interface ActivityCall {

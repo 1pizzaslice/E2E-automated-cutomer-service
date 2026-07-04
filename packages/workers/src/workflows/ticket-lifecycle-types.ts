@@ -1,6 +1,7 @@
 import type {
   AutomationMode,
   DomainEventActor,
+  SupportAuditAction,
   TicketPriority,
   TicketStateTransitionEventName,
   TicketStatus,
@@ -254,7 +255,11 @@ export interface RecordAuditEventActivityInput {
   readonly tenant_id: string;
   readonly ticket_id: string;
   readonly correlation_id: string;
-  readonly action: string;
+  /**
+   * Constrained to the canonical audit taxonomy so audit completeness is
+   * checkable at compile time (BACKEND_SPEC section 13 rules).
+   */
+  readonly action: SupportAuditAction;
   readonly actor: DomainEventActor;
   readonly metadata: Record<string, unknown>;
 }

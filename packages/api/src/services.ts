@@ -1,14 +1,27 @@
 import { randomUUID } from "node:crypto";
 import {
+  activeAutomationPolicyVersionQuery,
+  aiDraftedTicketsCountQuery,
   aiRunByIdQuery,
   aiRunsListQuery,
+  aiRunStatusCountsQuery,
   approvalByIdQuery,
+  approvalResolutionCountsQuery,
   approvalsListQuery,
+  approvalsRequestedCountQuery,
+  auditActionCountQuery,
   auditEventByIdQuery,
   auditEventsListQuery,
   completeQaReviewByIdQuery,
   conversationByIdQuery,
   conversationsListQuery,
+  firstResponseMinutesAvgQuery,
+  outboundMessageCountsQuery,
+  qaReviewsCompletedStatsQuery,
+  qaReviewsCreatedCountQuery,
+  ticketsCreatedCountQuery,
+  ticketsResolvedStatsQuery,
+  ticketTopTopicsQuery,
   createAuditEventQuery,
   createCustomerQuery,
   createDatabaseFromEnv,
@@ -58,6 +71,12 @@ import {
   withSpan,
   type SupportMetrics,
 } from "@support/observability";
+import {
+  AutomationPolicyContentSchema,
+  SupportAuditActionSchema,
+  type EffectiveAutomationPolicyResponse,
+  type WeeklyPilotReport,
+} from "@support/shared-schemas";
 import type {
   AiRunListResponse,
   AiRunResponse,
@@ -207,6 +226,11 @@ export type QaReviewCompleteOutcome =
   | { readonly outcome: "not_found" }
   | { readonly outcome: "conflict"; readonly review: QaReviewResponse };
 
+export interface ReportWindowOptions {
+  readonly since: Date;
+  readonly until: Date;
+}
+
 export interface ApiServices {
   readonly tenants: {
     list(
@@ -277,6 +301,15 @@ export interface ApiServices {
       context: TenantRequestContext,
       policyId: string,
     ): Promise<PolicyResponse | null>;
+    getEffectiveAutomationPolicy(
+      context: TenantRequestContext,
+    ): Promise<EffectiveAutomationPolicyResponse>;
+  };
+  readonly reports: {
+    weekly(
+      context: TenantRequestContext,
+      window: ReportWindowOptions,
+    ): Promise<WeeklyPilotReport>;
   };
   readonly kbDocuments: {
     list(
@@ -706,6 +739,180 @@ export function createDatabaseApiServices(
           },
         );
       },
+      async getEffectiveAutomationPolicy(context) {
+        const tenantId = context.tenant.tenantId;
+
+        return withTenantTransaction(getClient(), { tenantId }, async (db) => {
+          const rows = await activeAutomationPolicyVersionQuery(db, {
+            tenantId,
+          });
+          const row = rows[0];
+          const content = row
+            ? AutomationPolicyContentSchema.safeParse(row.content)
+            : null;
+
+          // Only a valid, activated automation policy version counts as
+          // configured; anything else resolves to the safe defaults
+          // (auto-send disabled, empty allowlist).
+          if (!row || !content?.success) {
+            return {
+              tenant_id: tenantId,
+              configured: false,
+              policy_id: null,
+              policy_version_id: null,
+              version: null,
+              activated_at: null,
+              auto_send_enabled: false,
+              auto_send_allowed_topics: [],
+            };
+          }
+
+          return {
+            tenant_id: tenantId,
+            configured: true,
+            policy_id: row.policyId,
+            policy_version_id: row.policyVersionId,
+            version: row.version,
+            activated_at: row.activatedAt?.toISOString() ?? null,
+            auto_send_enabled: content.data.auto_send_enabled,
+            auto_send_allowed_topics: content.data.auto_send_allowed_topics,
+          };
+        });
+      },
+    },
+    reports: {
+      async weekly(context, window) {
+        const tenantId = context.tenant.tenantId;
+        const scope = { tenantId };
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const [
+            createdRows,
+            resolvedRows,
+            firstResponseRows,
+            escalationRows,
+            slaBreachRows,
+            aiStatusRows,
+            draftedRows,
+            approvalsRequestedRows,
+            approvalResolutionRows,
+            outboundRows,
+            qaCreatedRows,
+            qaCompletedRows,
+            topTopicRows,
+          ] = await Promise.all([
+            ticketsCreatedCountQuery(db, scope, window),
+            ticketsResolvedStatsQuery(db, scope, window),
+            firstResponseMinutesAvgQuery(db, scope, window),
+            auditActionCountQuery(db, scope, "ticket.manual_escalated", window),
+            auditActionCountQuery(db, scope, "ticket.sla_breached", window),
+            aiRunStatusCountsQuery(db, scope, window),
+            aiDraftedTicketsCountQuery(db, scope, window),
+            approvalsRequestedCountQuery(db, scope, window),
+            approvalResolutionCountsQuery(db, scope, window),
+            outboundMessageCountsQuery(db, scope, window),
+            qaReviewsCreatedCountQuery(db, scope, window),
+            qaReviewsCompletedStatsQuery(db, scope, window),
+            ticketTopTopicsQuery(db, scope, window),
+          ]);
+
+          const ticketsCreated = createdRows[0]?.count ?? 0;
+          const ticketsResolved = resolvedRows[0]?.count ?? 0;
+          const manualEscalations = escalationRows[0]?.count ?? 0;
+
+          const aiCounts = new Map(
+            aiStatusRows.map((row) => [row.status, row.count]),
+          );
+          const aiSucceeded = aiCounts.get("succeeded") ?? 0;
+          const aiFailed = aiCounts.get("failed") ?? 0;
+          const aiTotal = aiStatusRows.reduce((sum, row) => sum + row.count, 0);
+          const draftedTickets = draftedRows[0]?.count ?? 0;
+
+          const approvalCounts = new Map(
+            approvalResolutionRows.map((row) => [row.status, row.count]),
+          );
+          const approvalsApproved = approvalCounts.get("approved") ?? 0;
+          const approvalsEdited = approvalCounts.get("edited") ?? 0;
+          const approvalsRejected = approvalCounts.get("rejected") ?? 0;
+          const approvalsEscalated = approvalCounts.get("escalated") ?? 0;
+          const approvalsResolved =
+            approvalsApproved +
+            approvalsEdited +
+            approvalsRejected +
+            approvalsEscalated;
+
+          let outboundSent = 0;
+          let outboundFailed = 0;
+          let autoSent = 0;
+          for (const row of outboundRows) {
+            if (row.sendStatus === "sent") {
+              outboundSent += row.count;
+              if (row.sentByType === "ai_auto") {
+                autoSent += row.count;
+              }
+            } else if (row.sendStatus === "failed") {
+              outboundFailed += row.count;
+            }
+          }
+
+          const qaCompleted = qaCompletedRows[0]?.count ?? 0;
+          const qaWithDefects = qaCompletedRows[0]?.withDefects ?? 0;
+
+          const rate = (numerator: number, denominator: number) =>
+            denominator > 0 ? numerator / denominator : null;
+
+          return {
+            tenant_id: tenantId,
+            window: {
+              since: window.since.toISOString(),
+              until: window.until.toISOString(),
+            },
+            tickets: {
+              created: ticketsCreated,
+              resolved: ticketsResolved,
+              manual_escalations: manualEscalations,
+              sla_breaches: slaBreachRows[0]?.count ?? 0,
+              first_response_minutes_avg:
+                firstResponseRows[0]?.firstResponseMinutesAvg ?? null,
+              resolution_minutes_avg:
+                resolvedRows[0]?.resolutionMinutesAvg ?? null,
+              escalation_rate: rate(manualEscalations, ticketsCreated),
+            },
+            ai_runs: {
+              total: aiTotal,
+              succeeded: aiSucceeded,
+              failed: aiFailed,
+              draft_rate: rate(draftedTickets, ticketsCreated),
+            },
+            approvals: {
+              requested: approvalsRequestedRows[0]?.count ?? 0,
+              approved: approvalsApproved,
+              edited: approvalsEdited,
+              rejected: approvalsRejected,
+              escalated: approvalsEscalated,
+              approval_rate: rate(
+                approvalsApproved + approvalsEdited,
+                approvalsResolved,
+              ),
+            },
+            outbound_messages: {
+              sent: outboundSent,
+              failed: outboundFailed,
+              auto_sent: autoSent,
+              auto_send_rate: rate(autoSent, outboundSent),
+            },
+            qa_reviews: {
+              created: qaCreatedRows[0]?.count ?? 0,
+              completed: qaCompleted,
+              with_defects: qaWithDefects,
+              defect_rate: rate(qaWithDefects, qaCompleted),
+            },
+            top_topics: topTopicRows.flatMap((row) =>
+              row.topic ? [{ topic: row.topic, count: row.count }] : [],
+            ),
+          };
+        });
+      },
     },
     kbDocuments: {
       async list(context, options) {
@@ -901,7 +1108,9 @@ export function createDatabaseApiServices(
                   actorId: context.actor.userId,
                   entityType: "approval",
                   entityId: approvalId,
-                  action: `approval.${decision.status}`,
+                  action: SupportAuditActionSchema.parse(
+                    `approval.${decision.status}`,
+                  ),
                   metadata: {
                     ticket_id: existing.ticketId,
                     status: decision.status,

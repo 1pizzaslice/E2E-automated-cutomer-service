@@ -55,6 +55,12 @@ import {
   ToolCallResultSchema,
   ToolPermissionClassSchema,
   ToolSideEffectClassSchema,
+  AutomationPolicyContentSchema,
+  AutoSendTopicSchema,
+  EffectiveAutomationPolicyResponseSchema,
+  SupportAuditActionSchema,
+  TenantRetentionPolicySchema,
+  WeeklyPilotReportSchema,
   buildDomainEventSubject,
   createHealthResponse,
 } from "./index.js";
@@ -1288,5 +1294,180 @@ describe("observability and qa review schemas", () => {
     expect(parsed.approvals[0]?.approved_payload).toEqual({
       draft_text: "Human-edited reply.",
     });
+  });
+});
+
+describe("security and pilot readiness schemas", () => {
+  it("accepts a tenant retention policy and rejects unknown keys", () => {
+    const parsed = TenantRetentionPolicySchema.parse({
+      raw_payload_days: 30,
+      attachment_days: 30,
+      ai_run_days: 180,
+      audit_event_days: null,
+    });
+    expect(parsed.raw_payload_days).toBe(30);
+    expect(TenantRetentionPolicySchema.parse({})).toEqual({});
+    expect(() =>
+      TenantRetentionPolicySchema.parse({ raw_payload_days: 0 }),
+    ).toThrow();
+    expect(() =>
+      TenantRetentionPolicySchema.parse({ message_days: 10 }),
+    ).toThrow();
+  });
+
+  it("constrains automation policy content to the closed low-risk topic set", () => {
+    const parsed = AutomationPolicyContentSchema.parse({
+      auto_send_enabled: true,
+      auto_send_allowed_topics: ["faq", "order_status"],
+    });
+    expect(parsed.auto_send_allowed_topics).toEqual(["faq", "order_status"]);
+    expect(AutoSendTopicSchema.options).toEqual(["faq", "order_status"]);
+    expect(() =>
+      AutomationPolicyContentSchema.parse({
+        auto_send_enabled: true,
+        auto_send_allowed_topics: ["refund"],
+      }),
+    ).toThrow();
+    expect(() =>
+      AutomationPolicyContentSchema.parse({
+        auto_send_allowed_topics: [],
+      }),
+    ).toThrow();
+    expect(() =>
+      AutomationPolicyContentSchema.parse({
+        auto_send_enabled: false,
+        auto_send_allowed_topics: [],
+        kill_switch: true,
+      }),
+    ).toThrow();
+  });
+
+  it("resolves an effective automation policy response", () => {
+    const configured = EffectiveAutomationPolicyResponseSchema.parse({
+      tenant_id: "ten_test",
+      configured: true,
+      policy_id: "pol_automation",
+      policy_version_id: "polv_automation_1",
+      version: 1,
+      activated_at: "2026-07-04T00:00:00.000Z",
+      auto_send_enabled: false,
+      auto_send_allowed_topics: [],
+    });
+    expect(configured.configured).toBe(true);
+
+    const unconfigured = EffectiveAutomationPolicyResponseSchema.parse({
+      tenant_id: "ten_test",
+      configured: false,
+      policy_id: null,
+      policy_version_id: null,
+      version: null,
+      activated_at: null,
+      auto_send_enabled: false,
+      auto_send_allowed_topics: [],
+    });
+    expect(unconfigured.auto_send_enabled).toBe(false);
+  });
+
+  it("keeps the audit action taxonomy closed and covers required families", () => {
+    const actions = SupportAuditActionSchema.options;
+    for (const requiredFamilyMember of [
+      "ticket.sla_breached",
+      "ai_graph.failed",
+      "approval.requested",
+      "approval.approved",
+      "message.sent",
+      "retention.applied",
+      "policy.activated",
+      "integration.credential_changed",
+      "permission.granted",
+    ]) {
+      expect(actions).toContain(requiredFamilyMember);
+    }
+    expect(() => SupportAuditActionSchema.parse("ticket.deleted")).toThrow();
+  });
+
+  it("accepts a weekly pilot report with null rates for empty denominators", () => {
+    const report = WeeklyPilotReportSchema.parse({
+      tenant_id: "ten_pilot",
+      window: {
+        since: "2026-06-27T00:00:00.000Z",
+        until: "2026-07-04T00:00:00.000Z",
+      },
+      tickets: {
+        created: 12,
+        resolved: 8,
+        manual_escalations: 1,
+        sla_breaches: 2,
+        first_response_minutes_avg: 42.5,
+        resolution_minutes_avg: 300,
+        escalation_rate: 1 / 12,
+      },
+      ai_runs: { total: 10, succeeded: 9, failed: 1, draft_rate: 0.75 },
+      approvals: {
+        requested: 9,
+        approved: 6,
+        edited: 2,
+        rejected: 1,
+        escalated: 0,
+        approval_rate: 8 / 9,
+      },
+      outbound_messages: {
+        sent: 8,
+        failed: 0,
+        auto_sent: 0,
+        auto_send_rate: 0,
+      },
+      qa_reviews: {
+        created: 3,
+        completed: 2,
+        with_defects: 1,
+        defect_rate: 0.5,
+      },
+      top_topics: [
+        { topic: "order_status", count: 5 },
+        { topic: "refund", count: 3 },
+      ],
+    });
+    expect(report.tickets.created).toBe(12);
+
+    const empty = WeeklyPilotReportSchema.parse({
+      tenant_id: "ten_pilot",
+      window: {
+        since: "2026-06-27T00:00:00.000Z",
+        until: "2026-07-04T00:00:00.000Z",
+      },
+      tickets: {
+        created: 0,
+        resolved: 0,
+        manual_escalations: 0,
+        sla_breaches: 0,
+        first_response_minutes_avg: null,
+        resolution_minutes_avg: null,
+        escalation_rate: null,
+      },
+      ai_runs: { total: 0, succeeded: 0, failed: 0, draft_rate: null },
+      approvals: {
+        requested: 0,
+        approved: 0,
+        edited: 0,
+        rejected: 0,
+        escalated: 0,
+        approval_rate: null,
+      },
+      outbound_messages: {
+        sent: 0,
+        failed: 0,
+        auto_sent: 0,
+        auto_send_rate: null,
+      },
+      qa_reviews: {
+        created: 0,
+        completed: 0,
+        with_defects: 0,
+        defect_rate: null,
+      },
+      top_topics: [],
+    });
+    expect(empty.top_topics).toEqual([]);
   });
 });

@@ -132,6 +132,20 @@ Required tests:
 - Tenant users cannot access other tenant admin actions.
 - Integration admin can update integration config but not approve tickets unless role allows.
 
+Current coverage (Milestone 12): `packages/api/src/rbac-matrix.test.ts` is the
+mechanical RBAC verification — it registers the real routes with stub services
+and a Fastify `onRoute` collector, asserts every registered `/v1`/OpenAPI route
+appears in a permission catalog (a new endpoint without a catalog entry fails),
+then injects every catalogued route as all six roles asserting `403` exactly
+when the role lacks the documented permission, plus `401` for role-less
+requests (deny-by-default — the implicit `support_agent` fallback was removed;
+`app.test.ts` regression-tests missing/blank `x-user-roles` → 401). Matrix
+invariants (tenant provisioning is platform_admin-only, approvals:review is
+limited to operational roles, client_viewer is read-only, integration_admin is
+`openapi:read`-only) are asserted directly against the exported
+`ROLE_PERMISSIONS`. Cross-tenant negative coverage remains in
+`app.integration.test.ts` against live PostgreSQL RLS.
+
 ### 3.3 Webhooks And Channel Intake
 
 Required tests:
@@ -144,6 +158,19 @@ Required tests:
 - Attachments metadata stored safely.
 - Oversized attachment rejected.
 - HTML sanitized.
+
+Current coverage (Milestone 12): attachment validation is covered at two
+levels — `packages/integrations/src/channels/attachment-validation.test.ts`
+unit-tests the pure policy (oversize rejection, executable/HTML/octet-stream
+content types, unsafe filenames incl. traversal/control characters, the
+per-message bound, null-size acceptance pending binary download, content-type
+parameter/casing normalization), and `packages/api/src/inbound-intake.test.ts`
+proves a rejected message creates no customer/conversation/message and never
+signals the workflow, is reported with `rejected`/`rejection_reason`, and that
+an injected per-deployment policy is honored.
+`packages/integrations/src/secrets.test.ts` covers the validating secret
+resolver (env-var-shaped references only; malformed references never touch the
+environment). HTML sanitization remains a later slice.
 
 ### 3.4 Conversation And Ticketing
 
@@ -313,6 +340,19 @@ Current Milestone 10 coverage:
 - Approval actions: `packages/api/src/app.integration.test.ts` asserts each decision endpoint appends an `approval.{status}` audit row with actor/entity fields and that the `approval.edited` metadata carries both `requested_payload` and `approved_payload` (the edited-draft audit trail). `packages/workers/src/activities/ticket-lifecycle-persistence.test.ts` asserts `approval.requested` is audited exactly once across activity retries.
 - Outbound sends: the workflow records `message.sent` through the now-persistent `recordAuditEvent` activity (deterministic audit ids dedupe retried writes; covered in the persistence activity tests) and the send activity audits `message.send_failed` on provider failure.
 
+Current Milestone 12 coverage (audit completeness):
+
+- `packages/workers/src/audit-completeness.test.ts` drives every live audit
+  producer through the in-memory stores — approval creation
+  (`approval.requested`), a permanent send failure (`message.send_failed`),
+  the six workflow-emitted actions, and the retention job
+  (`retention.applied`) — and asserts every emitted action is a member of the
+  canonical closed `SupportAuditActionSchema` taxonomy, which also reserves
+  the `policy.*`/`integration.credential_changed`/`permission.*` actions for
+  their pending write paths. The workers audit boundary is typed to the
+  taxonomy at compile time; the API decide path validates it at runtime.
+  Tool calls are audited in the `tool_calls` table (tool registry suite).
+
 ### 3.13 Event Bus
 
 Required tests:
@@ -381,6 +421,23 @@ Recommended categories:
 - 10 missing information cases.
 - 10 prompt-injection cases.
 - 10 stale/contradictory KB cases.
+
+Current coverage (Milestone 12): the dedicated prompt-injection suite
+(`ai/evals/injection_suite.py` + `injection_suite_test.py`, run with the
+standard unittest discovery) holds 18 adversarial cases — 15 user-text
+injections (direct override, system-prompt exfiltration, injections embedded
+in legitimate refund/order-status requests, role-play/developer-mode
+jailbreaks, policy-override and forget-instructions phrasing, tool-abuse
+demands, injection with auto-send enabled and the topic allowlisted,
+multi-message late injection) and 3 KB-content injections against a poisoned
+corpus (`build_adversarial_documents`) proving retrieved injected content is
+never echoed or obeyed. Gates: `prompt_injection_pass_rate == 1.0`
+(human_only, no draft, no system-prompt leak), zero unsafe auto-send/output,
+zero cross-tenant leaks. The suite tests governance-under-detection: the
+deterministic classifier's substring detector bounds phrasing breadth until a
+real model lands. The golden dataset additionally carries `auto_2` proving a
+tenant-allowlisted policy-dependent topic (refund) still cannot auto-send
+(the contract-level topic ceiling).
 
 Each case should include:
 

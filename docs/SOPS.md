@@ -44,6 +44,41 @@ Required onboarding artifacts:
 - Escalation contacts.
 - Pilot success metrics.
 
+### 1.1 Pilot Onboarding (v1 Implementation)
+
+Concrete steps with the current codebase (Milestone 12):
+
+1. Start infrastructure (`pnpm infra:up`) and apply migrations
+   (`pnpm db:migrate`).
+2. Seed the pilot tenant: `pnpm db:seed:pilot` (idempotent; re-running is a
+   no-op). This creates the `ten_pilot` tenant with a default retention
+   policy (90-day raw payloads/attachments, 365-day AI runs), the six global
+   roles, three users (`ops_admin`, `support_agent`, `qa_reviewer`) with
+   role links, an active `mailgun` email channel whose secrets are
+   environment-variable references (`PILOT_MAILGUN_SIGNING_KEY`,
+   `PILOT_MAILGUN_API_KEY` — set the actual values in the deployment
+   environment, never in config rows), an active default SLA policy
+   (60/240/1440 minutes), active tenant policies for `refunds`,
+   `escalation`, and `automation` (auto-send disabled, empty allowlist — the
+   pilot default is human approval for everything), and the six global
+   first-party `tool_definitions`. For a second pilot, call
+   `buildPilotSeedPlan({ tenantId })` with a different tenant id.
+3. Configure the provider webhook to
+   `POST /v1/webhooks/email/mailgun?channel_id=chn_pilot_email` and confirm
+   signature verification with a test delivery.
+4. Ingest the client's KB via `POST /v1/kb/documents` +
+   `POST /v1/kb/documents/{id}/ingest`, then spot-check
+   `POST /v1/kb/search`.
+5. Run the offline gates: `pnpm test:py` (golden dataset + injection suite
+   hard-fail gates) and the API/DB integration suites against the live
+   database.
+6. Verify the effective automation controls read as disabled:
+   `GET /v1/policies/automation` must return `auto_send_enabled: false`.
+7. Confirm reporting works: `GET /v1/reports/pilot-weekly` returns the SOPS
+   §14 metrics (zeros for a fresh tenant).
+8. Schedule the QA sampling job (§10) and the retention job (§16) per
+   tenant.
+
 ## 2. KB Ingestion SOP
 
 Goal: Convert client support knowledge into versioned, retrievable evidence.
@@ -408,6 +443,25 @@ Rules:
 - Limit trace access to authorized roles.
 - Do not paste secrets into prompts.
 
+Current implementation (Milestone 12):
+
+- Log redaction is two-layered in `@support/observability`: secret-bearing
+  keys (`authorization`, `api_key`, `secret`, `token`, `password`,
+  `credential`, `cookie`) are replaced wholesale with `[REDACTED]`, and
+  string content (including the log message itself) is scrubbed for emails,
+  phone numbers, and card-like digit runs
+  (`[REDACTED_EMAIL]`/`[REDACTED_PHONE]`/`[REDACTED_NUMBER]`). Key-based
+  redaction cannot be disabled.
+- Tenant retention settings live on `tenants.retention_policy`
+  (BACKEND_SPEC §22). Run the retention job per tenant on a daily cadence:
+  `runTenantRetentionJob` clears expired raw-payload references in bounded
+  batches, reports planned attachment/AI-run purges, returns the cleared
+  refs for the storage sweeper, and audits `retention.applied`. No
+  configuration means nothing is purged.
+- Integration secrets are environment-variable references validated by the
+  shared `SecretResolver` (`packages/integrations`); config rows never hold
+  secret values.
+
 ## 17. Auto-Send Expansion SOP
 
 Before enabling auto-send for a topic:
@@ -432,6 +486,21 @@ Rollout:
 
 Any critical defect rolls back to human approval.
 
+Current implementation (Milestone 12): the tenant controls are stored as an
+active `automation`-domain policy version
+(`policy_versions.content = { auto_send_enabled, auto_send_allowed_topics }`,
+topics constrained to the closed low-risk set `faq | order_status`).
+`GET /v1/policies/automation` shows the effective controls;
+`evaluateAutoSendEligibility` in `packages/workers` is the single gate a
+future auto-send branch must consult (kill switch → succeeded run →
+explicit `auto_send` recommendation → low risk → guardrails passed → draft
+present → topic allowlisted; every check fails closed). The v1 workflow does
+not auto-send at all — every outbound message requires a human approval
+signal — so today the rollout ladder starts and stays at step 1 until the
+send branch is implemented behind this gate. The kill switch is
+`auto_send_enabled: false` on a new activated policy version (or archiving
+the policy header), which takes effect on the next policy resolution.
+
 ## 18. SOP Update Rule
 
 Update this file whenever:
@@ -443,3 +512,60 @@ Update this file whenever:
 - Incident process changes.
 - Pilot reporting changes.
 - Auto-send criteria changes.
+
+## 19. Production Deployment Checklist
+
+Run this checklist for every production (pilot) deployment. It encodes the
+Milestone 12 security acceptance criteria; a deployment that cannot check
+every box does not ship.
+
+Environment and infrastructure:
+
+- [ ] Separate credentials per environment; secrets exist only as environment
+      variables named by the `*_ref` values in config rows (never plaintext
+      in the database, repo, or prompts).
+- [ ] Managed PostgreSQL provisioned; `pnpm db:migrate` applied and
+      `schema_migrations` verified (0001-0004).
+- [ ] RLS verified on the deployed database: the `support_app` role exists
+      and a cross-tenant read/write smoke check fails.
+- [ ] Temporal, NATS JetStream, Redis, and object storage reachable from the
+      workers; OTel collector deployed with the Prometheus scrape endpoint,
+      dashboards and alert rules loaded from `infra/observability/`.
+
+Security gates (all automated — run the suites):
+
+- [ ] Full offline suite green: `pnpm -r typecheck`, `pnpm lint`,
+      `pnpm format:check`, `pnpm test` (includes the RBAC route matrix,
+      attachment validation, secret-resolver, audit-completeness, retention,
+      and auto-send eligibility tests).
+- [ ] Python gates green: golden dataset + prompt-injection suite hard-fail
+      gates (`pnpm test:py`; zero unsafe auto-send, zero cross-tenant leaks,
+      injection pass rate 1.0).
+- [ ] Live integration suites green against the deployed database
+      (`pnpm test:integration`): tenant isolation, approval decision audit
+      trail, send-once idempotency.
+- [ ] Webhook signature verification confirmed with a real provider test
+      delivery (bad signature rejected with 403).
+- [ ] `GET /v1/policies/automation` returns `auto_send_enabled: false` for
+      every tenant unless the Auto-Send Expansion SOP (§17) has been
+      completed and signed off for a topic.
+
+Tenant readiness:
+
+- [ ] Pilot tenant seeded/verified (§1.1) with retention policy set and the
+      QA sampling + retention jobs scheduled.
+- [ ] KB ingested and retrieval spot-checked; golden evals re-run if policy
+      or KB content changed.
+- [ ] Escalation contacts and incident channel confirmed (§13); on-call
+      owner for the deployment window identified.
+- [ ] `GET /v1/reports/pilot-weekly` returns data; the weekly review (§14)
+      is scheduled.
+
+Rollback:
+
+- [ ] Previous deployable artifact retained and the rollback command tested.
+- [ ] Database migrations in this release are backward-compatible with the
+      previous application version (additive-only), or a tested down-path
+      exists.
+- [ ] Any auto-send enablement in this release has its kill switch
+      procedure (§17) verified before traffic.

@@ -13,6 +13,8 @@ import {
   ApprovalListResponseSchema,
   ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
+  EffectiveAutomationPolicyResponseSchema,
+  WeeklyPilotReportResponseSchema,
   AuditEventListResponseSchema,
   AuditEventResourceResponseSchema,
   ConversationListResponseSchema,
@@ -119,6 +121,7 @@ describe("api request context and contract errors", () => {
       headers: {
         authorization: "Bearer test-token",
         "x-user-id": "usr_test",
+        "x-user-roles": "support_agent",
         "x-request-id": "req_missing_tenant",
       },
     });
@@ -131,6 +134,34 @@ describe("api request context and contract errors", () => {
     });
   });
 
+  it("denies requests without any role instead of defaulting one", async () => {
+    app = buildApp({ services: makeServices() });
+
+    for (const headers of [
+      {
+        authorization: "Bearer test-token",
+        "x-user-id": "usr_test",
+        "x-tenant-id": "ten_test",
+      },
+      {
+        authorization: "Bearer test-token",
+        "x-user-id": "usr_test",
+        "x-tenant-id": "ten_test",
+        "x-user-roles": " , ",
+      },
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/customers/cus_test",
+        headers,
+      });
+      const body = ApiErrorResponseSchema.parse(response.json());
+
+      expect(response.statusCode).toBe(401);
+      expect(body.error.code).toBe("AUTH_REQUIRED");
+    }
+  });
+
   it("serves the OpenAPI document behind auth", async () => {
     app = buildApp({ services: makeServices() });
     const response = await app.inject({
@@ -139,6 +170,7 @@ describe("api request context and contract errors", () => {
       headers: {
         authorization: "Bearer test-token",
         "x-user-id": "usr_test",
+        "x-user-roles": "support_agent",
       },
     });
     const body = response.json();
@@ -1282,6 +1314,63 @@ describe("api tenant-scoped resource contracts", () => {
     expect(response.statusCode).toBe(404);
     expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
   });
+
+  it("resolves the effective automation policy for the tenant", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/policies/automation",
+      headers: authHeaders,
+    });
+    const body = EffectiveAutomationPolicyResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.tenant_id).toBe("ten_test");
+    expect(body.configured).toBe(true);
+    expect(body.auto_send_enabled).toBe(false);
+    expect(body.auto_send_allowed_topics).toEqual([]);
+  });
+
+  it("serves the weekly pilot report with an explicit window", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/reports/pilot-weekly?since=2026-06-27T00:00:00.000Z&until=2026-07-04T00:00:00.000Z",
+      headers: tenantAdminHeaders,
+    });
+    const body = WeeklyPilotReportResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.report.window.since).toBe("2026-06-27T00:00:00.000Z");
+    expect(body.report.tickets.created).toBe(3);
+    expect(body.report.outbound_messages.auto_sent).toBe(0);
+  });
+
+  it("rejects an inverted weekly report window", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/reports/pilot-weekly?since=2026-07-04T00:00:00.000Z&until=2026-06-27T00:00:00.000Z",
+      headers: tenantAdminHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("denies the weekly pilot report to roles without reports:read", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/reports/pilot-weekly",
+      headers: authHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
 });
 
 describe("api observability", () => {
@@ -1677,6 +1766,64 @@ function makeServices(
           status: "active",
           created_at: now,
           updated_at: now,
+        };
+      },
+      async getEffectiveAutomationPolicy(context) {
+        expectTenantContext(context);
+
+        return {
+          tenant_id: context.tenant.tenantId,
+          configured: true,
+          policy_id: "pol_automation_test",
+          policy_version_id: "polv_automation_test_1",
+          version: 1,
+          activated_at: now,
+          auto_send_enabled: false,
+          auto_send_allowed_topics: [],
+        };
+      },
+    },
+    reports: {
+      async weekly(context, window) {
+        expectTenantContext(context);
+
+        return {
+          tenant_id: context.tenant.tenantId,
+          window: {
+            since: window.since.toISOString(),
+            until: window.until.toISOString(),
+          },
+          tickets: {
+            created: 3,
+            resolved: 2,
+            manual_escalations: 1,
+            sla_breaches: 1,
+            first_response_minutes_avg: 42,
+            resolution_minutes_avg: 240,
+            escalation_rate: 1 / 3,
+          },
+          ai_runs: { total: 3, succeeded: 2, failed: 1, draft_rate: 2 / 3 },
+          approvals: {
+            requested: 2,
+            approved: 1,
+            edited: 1,
+            rejected: 0,
+            escalated: 0,
+            approval_rate: 1,
+          },
+          outbound_messages: {
+            sent: 2,
+            failed: 0,
+            auto_sent: 0,
+            auto_send_rate: 0,
+          },
+          qa_reviews: {
+            created: 1,
+            completed: 1,
+            with_defects: 0,
+            defect_rate: 0,
+          },
+          top_topics: [{ topic: "order_status", count: 2 }],
         };
       },
     },

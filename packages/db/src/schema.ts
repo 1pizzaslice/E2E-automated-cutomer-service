@@ -246,6 +246,7 @@ export const tenants = pgTable(
     name: text("name").notNull(),
     status: tenantStatusEnum("status").notNull().default("active"),
     defaultTimezone: text("default_timezone").notNull().default("UTC"),
+    retentionPolicy: jsonObject("retention_policy"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -891,6 +892,12 @@ export type Tenant = typeof tenants.$inferSelect;
 export type NewTenant = typeof tenants.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type Role = typeof roles.$inferSelect;
+export type NewRole = typeof roles.$inferInsert;
+export type UserRole = typeof userRoles.$inferSelect;
+export type NewUserRole = typeof userRoles.$inferInsert;
+export type SlaPolicy = typeof slaPolicies.$inferSelect;
+export type NewSlaPolicy = typeof slaPolicies.$inferInsert;
 export type Customer = typeof customers.$inferSelect;
 export type NewCustomer = typeof customers.$inferInsert;
 export type CustomerIdentity = typeof customerIdentities.$inferSelect;
