@@ -7,7 +7,7 @@ This file is the cross-session source of truth for what has been done, what is n
 ## Current Status
 
 - Project phase: Milestone 3 API skeleton is complete with tenant/customer/ticket list-create-read-update contracts plus conversation/message/policy/KB document metadata/approval/audit event read-list contracts, ticket audit event list contracts, RBAC checks, and PostgreSQL-backed API integration coverage. Milestone 4 event bus foundation is complete with typed event payload schemas, subject naming, publisher wiring, workflow-ready emit helpers, explicit local NATS JetStream domain/error stream config, worker-side consumer base/idempotency/error handling, and live publish/consume integration coverage. Milestone 5 Temporal workflow foundation is complete with the deterministic ticket workflow shell, activity boundaries, first-response SLA timer breach behavior, an AI graph activity placeholder with success/failure-to-human routing, a `sendOutboundMessage` activity placeholder with deterministic approval-outcome routing (approved/edited send once, rejected does not send, escalated routes to manual handling), explicit activity retry policies, and replay coverage. Milestone 6 channel intake is complete (normalized inbound schema, provider adapters, signature verification, webhook ingress, tenant-scoped persistence, and workflow start/signal wiring). Milestone 7 KB and retrieval is complete: the ingestion vertical (KB document/chunk ingestion contracts, deterministic chunking + embedding pipelines, a pgvector HNSW cosine index, content stored by reference, and tenant-scoped document create/update/ingest endpoints) plus the retrieval vertical (`POST /v1/kb/search` tenant-scoped cosine nearest-neighbour retrieval over active chunks/documents with citation metadata, stale-document exclusion, a `kb:search` permission, retrieval eval + prompt-injection fixtures, and tenant-isolation tests) are both done. Milestone 8 tool registry is complete: shared tool contracts (side-effect + permission classes, tool-call request/result envelope), a tenant-scoped tool executor with schema validation, permission-class checks, timeout + size-bounded AI-safe results, `tool_calls` audit logging, and idempotent replay for side-effect tools, plus the six first-party tools (order/shipment/refund/cancellation/customer lookups and calculators + a `kb_search` tool reusing the Milestone 7 retrieval service). Milestone 9 AI runtime is complete: a dependency-free Python LangGraph-style support agent graph under `ai/` (normalize → classifier → retrieval planner → retrieval → policy → tool planner → tool execution → conditional composer → guardrail critic → escalation → finalize) with structured Pydantic-equivalent I/O contracts, a `ModelProvider` port + deterministic offline model, `RetrievalPort` and `ToolExecutor` ports (the latter mirroring the Milestone 8 tool-call envelope + permission classes), deterministic trace capture, and an initial golden dataset with an offline eval runner enforcing hard-fail safety gates. Milestone 10 approval and outbound messaging is complete: approve/edit/reject/escalate decision endpoints behind a new `approvals:review` permission (pending-guarded resolution under RLS, `approval.{status}` audit events carrying both `requested_payload` and `approved_payload` for the edited-draft trail, and an injectable `ApprovalWorkflowSignaler` delivering `approval_completed` to the Temporal workflow), the shared `NormalizedOutboundMessageSchema` + send-status/sent-by-type contracts, pure email/WhatsApp outbound adapters plus an HTTP `OutboundChannelSender` (Mailgun/WhatsApp Cloud, injectable fetch) in `packages/integrations`, and production `createApproval`/`sendOutboundMessage`/`recordAuditEvent` Temporal activity implementations over a `TicketLifecyclePersistenceStore` port with database-index-enforced outbound idempotency and deterministic retry-safe approval/audit ids. Milestone 11 observability and QA is complete: a shared `@support/observability` package (OTel tracing/metrics bootstrap to the local collector, a typed `SupportMetrics` port with OTel/no-op/recording implementations, canonical `support.*` metric names and span attributes, and a structured JSON logger with trace-id injection and secret-key redaction), per-request API tracing/metrics with correlation-id log binding, spans+metrics on the tool executor and approval decisions, instrumented ticket lifecycle activities with critical-failure metrics, event-consumer dead-letter metrics, AI-run persistence with trace links via `createPersistedRunAiGraph` (materializing the Milestone 10 `approvals.ai_run_id`/`messages.ai_run_id` FK links), `GET /v1/ai-runs*` read endpoints, the QA review surface (list/read/create/complete + composite evidence read) behind new `ai_runs:read`/`qa_reviews:read`/`qa_reviews:write` permissions, a deterministic QA sampling job emitting `support.qa.review_created.v1`, and dashboards/alert definitions under `infra/observability/` with a Prometheus scrape endpoint on the collector. Milestone 12 security and pilot readiness is complete: deny-by-default RBAC with a self-verifying route×role matrix test and a new `reports:read` permission, a shared validating integration-secret resolver (env-var references only), content-level PII redaction in structured logs, an 18-case prompt-injection eval suite with hard-fail gates, inbound attachment size/type validation rejecting before any persistence, a closed audit-action taxonomy (`SupportAuditActionSchema`) with compile-time typing and completeness tests, per-tenant data retention hooks (`tenants.retention_policy` via migration `0004` + a fail-closed retention job auditing `retention.applied`), an idempotent pilot tenant seed (`pnpm db:seed:pilot`, including the global first-party tool definitions), the weekly pilot report (`GET /v1/reports/pilot-weekly`), fail-closed auto-send allowlist controls (an `automation` policy version with kill switch and closed low-risk topic set, `GET /v1/policies/automation`, the workers `evaluateAutoSendEligibility` gate, and a live workflow no-bypass test), and the pilot onboarding + production deployment SOPs (SOPS §1.1, §19). All twelve planned milestones are complete.
-- Current milestone: Milestone 12 - Security And Pilot Readiness is complete (`feat-milestone12-security-pilot-readiness`) — the final planned milestone. Next: pilot-launch engineering from the accumulated follow-ups (production worker entrypoint, Python runtime behind `runAiGraph`, real auth). Done in the Milestone 11 session: the new `packages/observability` package (`startTelemetry`/`loadTelemetryConfig` OTLP bootstrap, `createInMemoryTelemetry` test double, `SupportMetrics` port + `SUPPORT_METRIC_NAMES`/`SUPPORT_ATTR` constants, `withSpan`/`getActiveTraceContext`, `createStructuredLogger` with redaction); API request telemetry (`observability.ts` hook: `http.request` spans with correlation attributes, request-log rebinding with `trace_id`/`request_id`/`correlation_id`/`tenant_id`, per-request metrics), telemetry-first `server.ts`, metrics in `approvals.decide` (decision counter + latency + `approval_signal_failed`) and the tool executor (`tool.execute` spans + outcome metrics); shared-schemas AI run/tool call/QA review contracts (`AiRunResponseSchema`, `ToolCallResponseSchema`, `QaReview*` request/response/evidence schemas, defect taxonomy enums); db helpers (`createAiRunQuery`, `completeAiRunByIdQuery`, `aiRunsListQuery`, `toolCallsListQuery`, QA review CRUD + `qaSamplingCandidatesQuery`); API endpoints `GET /v1/ai-runs`(+`/{id}`) and `GET|POST /v1/qa-reviews`, `GET /v1/qa-reviews/{id}`, `POST /v1/qa-reviews/{id}/complete`, `GET /v1/qa-reviews/{id}/evidence` with RBAC + OpenAPI; workers `createPersistedRunAiGraph` + store `recordAiRunResult` (DB + in-memory), `instrumentTicketLifecycleActivities`, event-consumer dead-letter metrics, the deterministic QA sampling job + `emitQaReviewCreatedEvent`, `startWorkersTelemetry`/`createWorkersLogger`; a committed live-PostgreSQL workers integration test (AI-run persist/dedupe, approval FK link, send-once replay, QA sampling); and infra dashboards/alerts + the collector Prometheus exporter.
+- Current milestone: Milestone 12 - Security And Pilot Readiness is complete (`feat-milestone12-security-pilot-readiness`) — the final planned milestone. Next: Milestone 13 - Production Worker Entrypoint And Ticket Persistence, the first of the V1 launch milestones (13-22, four phases — see the V1 Launch Plan section below and ADR-0020; planned 2026-07-04). Done in the Milestone 11 session: the new `packages/observability` package (`startTelemetry`/`loadTelemetryConfig` OTLP bootstrap, `createInMemoryTelemetry` test double, `SupportMetrics` port + `SUPPORT_METRIC_NAMES`/`SUPPORT_ATTR` constants, `withSpan`/`getActiveTraceContext`, `createStructuredLogger` with redaction); API request telemetry (`observability.ts` hook: `http.request` spans with correlation attributes, request-log rebinding with `trace_id`/`request_id`/`correlation_id`/`tenant_id`, per-request metrics), telemetry-first `server.ts`, metrics in `approvals.decide` (decision counter + latency + `approval_signal_failed`) and the tool executor (`tool.execute` spans + outcome metrics); shared-schemas AI run/tool call/QA review contracts (`AiRunResponseSchema`, `ToolCallResponseSchema`, `QaReview*` request/response/evidence schemas, defect taxonomy enums); db helpers (`createAiRunQuery`, `completeAiRunByIdQuery`, `aiRunsListQuery`, `toolCallsListQuery`, QA review CRUD + `qaSamplingCandidatesQuery`); API endpoints `GET /v1/ai-runs`(+`/{id}`) and `GET|POST /v1/qa-reviews`, `GET /v1/qa-reviews/{id}`, `POST /v1/qa-reviews/{id}/complete`, `GET /v1/qa-reviews/{id}/evidence` with RBAC + OpenAPI; workers `createPersistedRunAiGraph` + store `recordAiRunResult` (DB + in-memory), `instrumentTicketLifecycleActivities`, event-consumer dead-letter metrics, the deterministic QA sampling job + `emitQaReviewCreatedEvent`, `startWorkersTelemetry`/`createWorkersLogger`; a committed live-PostgreSQL workers integration test (AI-run persist/dedupe, approval FK link, send-once replay, QA sampling); and infra dashboards/alerts + the collector Prometheus exporter.
 - Current scope: Core PostgreSQL schema, migration runner, Drizzle schema, tenant-scoped repository query helpers, PostgreSQL RLS, live PostgreSQL repository/RLS execution tests, API request/auth/tenant context middleware placeholders, structured errors, OpenAPI skeleton, role permission checks for current endpoint families, PostgreSQL-backed API integration tests, tenant/customer/ticket list-create-read-update skeleton contracts, conversation/message/policy/KB document metadata/approval/audit event read-list skeleton contracts, ticket audit event list contracts, shared v1 domain event envelope/payload schemas, tenant-aware NATS subject naming, worker-side NATS JetStream publisher plus connection/domain/error stream setup wiring, worker-side NATS JetStream event emit helpers including ticket SLA breach emission, worker-side NATS JetStream consumer base with storage-agnostic idempotency/error handling, local NATS JetStream config, live NATS publish/consume integration coverage, Temporal worker config/runtime scaffold, deterministic ticket lifecycle workflow shell, workflow activity contracts/placeholders including a structured AI graph placeholder, first-response SLA timer breach handling, structured AI failure-to-human routing, workflow-owned domain event emission activity adapter, explicit Temporal activity retry policies, opt-in live Temporal workflow/replay coverage, session harness preflight/handoff checks, approval decision endpoints with workflow signaling and audit, outbound channel adapters/senders, production approval/outbound/audit persistence activities, the shared observability package (tracing/metrics/structured logging ports), API request telemetry, instrumented workflow activities, AI-run persistence with trace links, AI run read endpoints, the QA review surface with composite evidence reads, the deterministic QA sampling job, and dashboard/alert definitions. Full business workflow implementation is still pending.
 - Default stack: TypeScript API/workers, Python AI runtime, Temporal, LangGraph, PostgreSQL, pgvector, Redis, NATS JetStream, OpenTelemetry.
 
@@ -21,9 +21,11 @@ This file is the cross-session source of truth for what has been done, what is n
 
 ## Next Recommended Task
 
-All twelve planned milestones are complete. The next implementation task is pilot-launch engineering from the accumulated follow-ups, in this order:
+Start Milestone 13 - Production Worker Entrypoint And Ticket Persistence (the first V1 launch milestone; full checklist below, phase map in the V1 Launch Plan section, platform decisions in ADR-0020):
 
-> 1. Build the production worker entrypoint: compose `createTicketLifecyclePersistenceActivities` (+ `createDatabaseTicketLifecyclePersistenceStore`, `createHttpOutboundChannelSender`, `createPersistedRunAiGraph`, `instrumentTicketLifecycleActivities`, `startWorkersTelemetry`/`createWorkersLogger`) with the remaining placeholder activities (`createOrUpdateTicket`, `runInitialTriage`, `runAiGraph`, `recordInboundMessage`) into `createTicketLifecycleWorker` so the verified pieces run as one process. 2. Wire the Python AI runtime behind the Temporal `runAiGraph` activity (the `RuntimeResult` already mirrors `RunAiGraphActivityResult`), swap a real LLM `ModelProvider` via `uv sync --project ai --extra llm`, and feed `PolicyContext.auto_send_allowed_topics`/`allow_auto_send` from `createDatabaseAutomationPolicyStore` (the Milestone 12 bridge). 3. Replace placeholder header auth with real bearer-token verification + tenant-membership checks in `readAuthContext`, then the policy write/approve/activate endpoints emitting the reserved `policy.*` audit actions. 4. Schedule the QA sampling and retention jobs, ship Prometheus/Grafana loading `infra/observability/`, and run the SOPS §19 deployment checklist against staging.
+> Implement the production `createOrUpdateTicket`, `recordInboundMessage`, and `runInitialTriage` activities over the persistence store so the workflow mutates real ticket state under RLS, then compose them with the verified pieces (`createTicketLifecyclePersistenceActivities`, `createDatabaseTicketLifecyclePersistenceStore`, `createHttpOutboundChannelSender`, `createPersistedRunAiGraph`, `instrumentTicketLifecycleActivities`, `startWorkersTelemetry`/`createWorkersLogger`) into `createTicketLifecycleWorker` as one runnable, restart-safe process, verified by a live end-to-end drive: webhook fixture → persisted ticket → deterministic AI draft → approval decision → outbound send → complete audit trail.
+
+The per-milestone follow-up paragraphs below are retained for provenance; every item in them is absorbed into a Milestone 13-22 checklist.
 
 Milestone 12 follow-ups to fold into later work (not blockers): real token verification in `readAuthContext` (deny-by-default roles landed; token validity is still trusted-header placeholder); the auto-send workflow branch behind `evaluateAutoSendEligibility` with shadow mode first (SOPS §17 ladder — v1 deliberately has no auto-send path); policy write/approve/activate endpoints emitting the reserved `policy.created|activated|archived` audit actions (allowlist changes are ops-applied policy versions until then); blob deletion + anonymization so the retention job can execute the planned attachment/AI-run classes (currently counted-and-reported placeholders); scheduling the retention job alongside QA sampling; surfacing `retention_policy` on the tenant API contract; and post-download attachment size re-checks when binary storage lands.
 
@@ -39,10 +41,62 @@ Milestone 6 follow-ups to fold into later slices (not blockers): attachment bina
 
 Milestone 7 follow-ups to fold into later work (not blockers): a live-PostgreSQL KB ingestion integration test through the ingestion service (needs a seeded user for `created_by_user_id` FK, or keep it null); a Temporal `KbIngestionWorkflow` driving `load_document`/`chunk_document`/`embed_chunks`/`write_chunks`/`mark_document_active` as activities instead of the synchronous API path; choosing/documenting a production embedding model behind the `Embedder` port and wiring the same instance into both ingestion and retrieval (re-embed if its dimension != 1536); and optionally a similarity-score threshold / max-context-tokens cap on retrieval before the AI runtime consumes it.
 
+## V1 Launch Plan (Milestones 13-22)
+
+All twelve build milestones are complete. Launch engineering is organized into four phases, tracked as Milestones 13-22 below (checklists after Milestone 12). Platform decisions are recorded in ADR-0020: the Temporal `runAiGraph` activity calls the Python runtime as an HTTP sidecar service; model/embedding providers are config-driven behind the existing `ModelProvider`/`Embedder` ports with pilot defaults Anthropic Claude + OpenAI `text-embedding-3-small`; auth is hosted-IdP JWT verification via JWKS (default Clerk); staging/production run on a single VM with a hardened Compose profile; the reviewer console is a separate repository consuming this backend's APIs.
+
+### Phase 1: Run End-To-End (Milestones 13-17)
+
+The system runs as deployable processes with real persistence, real AI, real auth, and unattended jobs — all still on local infra.
+
+- Milestone 13: Production Worker Entrypoint And Ticket Persistence.
+- Milestone 14: AI Runtime Service Bridge.
+- Milestone 15: Provider-Agnostic Model Layer And Real LLM Default.
+- Milestone 16: Real Authentication And Policy Lifecycle.
+- Milestone 17: Scheduled Jobs And Retention Execution.
+
+### Phase 2: Deploy (Milestones 18-19)
+
+- Milestone 18: Staging Environment On Hardened Compose.
+- Milestone 19: Live Providers And Go-Live Rehearsal.
+
+### Phase 3: Console Enablement (Milestone 20)
+
+- Milestone 20: Console Enablement API. The console UI itself is a separate repository (user-owned track); this repo owes it CORS, queue ergonomics, an approval evidence composite, token-derived reviewer identity, rate limiting, and a published typed client.
+
+### Phase 4: Pilot Readiness And Go-Live (Milestones 21-22)
+
+- Milestone 21: Eval Expansion And Shadow Replay.
+- Milestone 22: Pilot Gap-Closing And Go-Live.
+
+Auto-send stays out of v1: the SOPS §17 ladder starts only after pilot QA data supports it, behind the existing `evaluateAutoSendEligibility` gate.
+
+### User-Owned Launch Track (Not Code)
+
+Start immediately (long lead times, parallel to Phase 1):
+
+- [ ] Mailgun account + pilot support domain with SPF/DKIM/DMARC access (used by Milestone 19).
+- [ ] Meta Business verification + WhatsApp Cloud API app (weeks of lead time; email go-live does not block on it).
+- [ ] IdP account (default Clerk) + application setup (used by Milestone 16 and the console repo).
+- [ ] Anthropic + OpenAI API keys with billing (used by Milestone 15).
+- [ ] VM provisioning (Hetzner/EC2/DO) + staging/production DNS records + alert notification channel (used by Milestone 18).
+- [ ] Pilot client outreach: target D2C brands, pilot contract, success metrics (SOPS §1).
+- [ ] Console repository kickoff (consumes the Milestone 20 typed client; IdP shared with Milestone 16).
+
+During Phases 2-4:
+
+- [ ] Collect pilot client KB, refund/cancellation/shipping policies, escalation rules (SOPS §1/§2; feeds Milestones 21-22).
+- [ ] Provide sanitized historical tickets for shadow replay (Milestone 21).
+- [ ] Reviewer staffing and rota; escalation contacts; on-call owner (Milestone 22 / SOPS §13).
+- [ ] Shadow-result review, threshold signoff, and the go/no-go decision (Milestones 21-22).
+- [ ] Weekly pilot review cadence scheduled (SOPS §14).
+
 ## Session Handoff
 
 ### Last Session Summary
 
+- Planning session on `docs-v1-launch-plan` (docs only, no app code): designed the V1 launch plan — four phases, Milestones 13-22 — by consolidating the accumulated milestone follow-ups, and recorded it in this file (V1 Launch Plan section + Milestone 13-22 checklists + refreshed Active Blockers/Open Questions), `PLAN.md` (§17 V1 Launch Phases), `docs/DECISIONS.md` (ADR-0020), `docs/PROJECT_HISTORY.md`, and `README.md`.
+- Platform decisions locked with the user (ADR-0020): (1) the Temporal `runAiGraph` activity calls the Python runtime as an HTTP sidecar (FastAPI `POST /internal/ai/run`, internal bearer token) so `createPersistedRunAiGraph`/instrumentation stay unchanged; (2) model/embedding providers are config-driven behind the existing `ModelProvider`/`Embedder` ports — pilot defaults Anthropic Claude + OpenAI `text-embedding-3-small`, 1536-dim standard, provider swap = config change + eval-gate re-run, embedding swap additionally = full re-embed; (3) auth is hosted-IdP JWT verification via JWKS (default Clerk) with DB-sourced roles and server-side tenant membership; (4) staging/production is a single VM running a hardened Compose profile with offsite backups and tested rollback; (5) the reviewer console is a separate repository — Milestone 20 provides its API surface.
 - Created feature branch `feat-milestone12-security-pilot-readiness` from `main` and ran `pnpm harness:preflight`.
 - Completed Milestone 12 - Security And Pilot Readiness in one coherent branch (all 12 checklist items + 4 acceptance criteria) — the final planned milestone. Recorded the approach in ADR-0019 (security controls fail closed).
 - `packages/api` RBAC: removed the implicit `support_agent` role fallback in `request-context.ts` (`parseRoles` now throws `401 AUTH_REQUIRED` for missing/blank/unparseable `x-user-roles` — deny-by-default), exported `ROLE_PERMISSIONS` from `rbac.ts` as the single source of truth, added the `reports:read` permission (platform_admin, ops_admin, qa_reviewer, client_viewer), and added `rbac-matrix.test.ts`: an `onRoute` collector proves every registered route is in a permission catalog, then a full route×role matrix asserts `403` exactly when the role lacks the documented permission plus `401` for role-less requests (8 tests, ~260 assertions).
@@ -581,23 +635,22 @@ Milestone 7 follow-ups to fold into later work (not blockers): a live-PostgreSQL
 
 ### Active Blockers
 
-- GitHub Actions includes the live PostgreSQL integration test step, but the latest workflow with DB/RLS plus API integration coverage has not run remotely yet.
-- API auth is still a placeholder header contract; no real identity provider exists yet.
-- RBAC exists only for the current skeleton OpenAPI, tenant/customer/ticket list-create-read-update endpoints, conversation/message/policy/KB document/approval/audit event read-list endpoints, and ticket audit event list endpoint; it must be extended as new endpoint families are added.
-- Tenant/customer/ticket create/update endpoints do not yet create idempotency records, audit events, or workflow side effects.
-- API endpoints do not yet start or signal Temporal workflows.
-- The ticket lifecycle workflow shell implements first-response SLA timer breach behavior, but next-response/resolution SLA timers, AI graph activities, outbound send activities, API start/signal wiring, and real DB/audit/approval persistence remain pending.
-- Conversation/message endpoints are read-list only; message ingestion, internal-note creation, outbound sends, attachment validation, and HTML sanitization enforcement remain future workflow/channel tasks.
-- KB document endpoints are metadata read-list only; creation, update, ingestion, chunking, embedding, retrieval search, audit events, and workflow side effects remain future KB/RAG tasks.
-- Approval endpoints are read-list only; approve/edit/reject/escalate actions, Temporal signals, audit events, outbound side effects, and workflow resume behavior remain future human-approval-loop tasks.
-- Python `uv` is not installed locally; scaffold uses stdlib `unittest` until Python dependency management is finalized.
-- No real client/pilot data exists yet.
-- No OpenAI/model provider credentials configured yet.
+Refreshed 2026-07-04 for the launch phase (each maps to a launch milestone or the user-owned track):
+
+- No production worker entrypoint runs the composed activities yet; ticket DB mutation from the workflow (`createOrUpdateTicket`, `recordInboundMessage`, `runInitialTriage`) is still placeholder (Milestone 13).
+- The AI runtime runs only in-process with the deterministic model; no service bridge, no real LLM or embedding providers configured (Milestones 14-15). The deterministic embedder is lexical, so real retrieval quality is unproven until Milestone 15.
+- API auth is still the trusted-header placeholder; no IdP exists (Milestone 16).
+- QA sampling and retention jobs have no scheduler; retention attachment/AI-run purges are counted-and-reported placeholders (Milestone 17).
+- No staging or production environment exists; no Mailgun/WhatsApp/IdP/Anthropic/OpenAI accounts or credentials provisioned (Milestones 18-19 + user-owned track).
+- No pilot client signed; no real client KB/policy/historical-ticket data (user-owned track; feeds Milestones 21-22).
+- The reviewer console repository does not exist yet (user-owned; Milestone 20 provides its API surface).
 
 ### Open Questions
 
-- Which Python package manager to use for the full AI runtime: recommended default remains `uv`, but local machine currently lacks `uv`.
-- Which embedding model/dimension to standardize before production KB ingestion; current initial column is `vector(1536)`.
+- Exact IdP vendor within the hosted-IdP decision (default Clerk; confirm at Milestone 16 kickoff).
+- Whether Milestone 15 swaps in the real LangGraph engine or keeps the ADR-0016 local engine behind the same node code (decide in-session, record either way).
+- Single-ticket-per-conversation: implement multi-ticket support or accept the limitation for the pilot (decide at Milestone 22).
+- WhatsApp launch timing relative to email go-live (depends on Meta Business verification lead time; email does not block on it).
 
 ## Global Completion Checklist
 
@@ -1032,12 +1085,229 @@ Acceptance criteria:
 - [x] Pilot metrics can be reported. (`GET /v1/reports/pilot-weekly` + the report service driven live against the seeded pilot tenant returning the full SOPS §14 metric set.)
 - [x] Incident and escalation SOPs are documented. (SOPS §5 Escalation and §13 Incident Response existed and were verified; §19 deployment checklist references them; alert-to-incident mapping in §13 from Milestone 11.)
 
+## Milestone 13: Production Worker Entrypoint And Ticket Persistence
+
+Goal: The verified workflow pieces run as one deployable worker process that persists real ticket state to PostgreSQL. (Phase 1.)
+
+Checklist:
+
+- [ ] Implement the production `createOrUpdateTicket` activity over `TicketLifecyclePersistenceStore` (create-or-load under RLS with the deterministic `tkt_{conversation_id}` id; workflow-owned state persisted to the `tickets` row).
+- [ ] Implement the production `recordInboundMessage` activity, reconciling workflow-signaled inbound messages with the intake-persisted `messages` rows (no duplicates; ticket moves to the correct waiting state).
+- [ ] Implement the production `runInitialTriage` activity persisting triage output (priority, topic/category, language metadata) onto the ticket row.
+- [ ] Persist every workflow-owned ticket state transition per BACKEND_SPEC §7 with audit events from the closed taxonomy; transitions visible through the existing read APIs.
+- [ ] Build the production worker entrypoint composing `createTicketLifecyclePersistenceActivities` + `createDatabaseTicketLifecyclePersistenceStore` + `createHttpOutboundChannelSender` + `createPersistedRunAiGraph` + `instrumentTicketLifecycleActivities` + `startWorkersTelemetry`/`createWorkersLogger` into `createTicketLifecycleWorker`, with fail-fast env config validation and graceful shutdown, exposed as a run script (e.g. `pnpm --filter @support/workers start`).
+- [ ] Migrate `messages.send_status`/`sent_by_type` from free text to PostgreSQL enums (contracts already exist in shared-schemas; Milestone 10 follow-up).
+- [ ] Add approval expiry handling: `expired` status + return-to-queue/escalation after a configurable wait (BACKEND_SPEC §12; Milestone 10 follow-up).
+- [ ] Emit `support.ai_run.completed.v1` and `support.tool_call.completed.v1` domain events from workflow activities (payload schemas already exist; Milestone 11 follow-up).
+- [ ] Add a committed live end-to-end integration test against Compose services: webhook fixture → conversation/ticket persisted → deterministic AI draft → approval created → decide via API → outbound send recorded → complete audit trail, all through the running worker entrypoint.
+- [ ] Update docs (BACKEND_SPEC workflow implementation notes, README commands, this file).
+
+Acceptance criteria:
+
+- [ ] One process runs the entire ticket lifecycle with the deterministic AI model.
+- [ ] Ticket rows and state transitions are persisted, audited, and visible through the existing read APIs.
+- [ ] The live end-to-end drive passes with no duplicate messages, approvals, or sends across a worker restart mid-workflow.
+
+## Milestone 14: AI Runtime Service Bridge
+
+Goal: The Python AI runtime runs as an HTTP sidecar service invoked by the Temporal `runAiGraph` activity, with retrieval and tool execution over the network — still on the deterministic model (the provider swap is Milestone 15). (Phase 1; ADR-0020.)
+
+Checklist:
+
+- [ ] Add the FastAPI service under `ai/service/` exposing `POST /internal/ai/run` (`RuntimeRequest` in, `RuntimeResult` out) plus `GET /health`; deps via a new uv extra (e.g. `uv sync --project ai --extra service`).
+- [ ] Secure the sidecar with an internal bearer token resolved from an env reference (SecretResolver conventions); unauthenticated requests are 401.
+- [ ] Implement the production TypeScript `runAiGraph` activity calling the sidecar over HTTP with explicit timeout and retryable-vs-permanent error classification; sidecar unavailability produces a structured `failed` result that routes to human — composed under the existing `createPersistedRunAiGraph` wrapper unchanged.
+- [ ] Expose an internal tool-execution endpoint in `packages/api` (e.g. `POST /internal/tools/execute`) speaking the Milestone 8 `ToolCallRequest`/`ToolCallResult` envelope, service-to-service authenticated, executing through the governed `createDatabaseToolExecutor`.
+- [ ] Implement the Python `ToolExecutor` port adapter calling that endpoint in service mode; granted permissions derived from tenant policy and enforced server-side (Milestone 8 follow-up).
+- [ ] Implement the Python `RetrievalPort` adapter calling `POST /v1/kb/search` service-to-service in service mode.
+- [ ] Feed `PolicyContext` (`allow_auto_send`, `auto_send_allowed_topics`, allowed tools) from `createDatabaseAutomationPolicyStore` and tenant policy into the `RuntimeRequest` built by the activity (the Milestone 12 bridge).
+- [ ] Propagate `correlation_id`/`trace_id` into the sidecar; sidecar logs are structured JSON carrying them (ADR-0018 attribute correlation).
+- [ ] Add the sidecar to Docker Compose for local dev (uv-based image) and document the run path.
+- [ ] Integration coverage: activity → sidecar round trip persisting an `ai_run` with trace link; sidecar-down and sidecar-500 paths produce structured failures routed to human approval; the eval runner can execute through the service path.
+- [ ] Update docs (AI_RUNTIME_HARNESS bridge section, BACKEND_SPEC internal endpoints, this file).
+
+Acceptance criteria:
+
+- [ ] The full lifecycle runs with the AI decision made in the Python service process, retrieval and tools over the network.
+- [ ] Sidecar failure degrades to human routing with an audited failed AI run — the workflow never fails.
+- [ ] Service-path runs are deterministic and identical to in-process runs for the same inputs (proven via the eval suite).
+
+## Milestone 15: Provider-Agnostic Model Layer And Real LLM Default
+
+Goal: Real model and embedding providers behind config-driven selection at the existing ports; the pilot default (Anthropic Claude + OpenAI `text-embedding-3-small`) passes the eval gates. (Phase 1; ADR-0020.)
+
+Checklist:
+
+- [ ] Implement the config-driven Python `ModelProvider` over LangChain's `init_chat_model` behind the existing port: provider/model from env (`SUPPORT_LLM_PROVIDER`, `SUPPORT_LLM_MODEL`), structured outputs enforced, timeouts/retries, token + latency capture; deps via `uv sync --project ai --extra llm`.
+- [ ] Pilot default model config: Anthropic Claude with keys from env refs; the deterministic model remains the offline default — real providers activate only by explicit config.
+- [ ] Decide whether to swap the graph engine to the real LangGraph library behind the unchanged node code (ADR-0016 seam) or record deferral with reasons in DECISIONS.
+- [ ] Add versioned prompt files with stable IDs for the classifier and composer prompts (AI_RUNTIME_HARNESS §8); prompt version recorded on every AI run.
+- [ ] Implement the production TypeScript `Embedder` factory: env-selected provider (`SUPPORT_EMBEDDING_PROVIDER`, `SUPPORT_EMBEDDING_MODEL`), pilot default OpenAI `text-embedding-3-small`; only 1536-dim-capable models accepted; deterministic embedder remains the test default.
+- [ ] Wire one shared embedder instance into both ingestion and retrieval (ADR-0014 follow-up); record the embedding model id at ingestion and enforce ingestion/retrieval model match at query time; document the provider-swap = re-embed procedure.
+- [ ] Add a similarity-score floor and max-context cap on retrieval results before they enter the AI runtime (ADR-0015 follow-up).
+- [ ] Capture model id, prompt version, latency, tokens, and cost on `ai_runs` end to end.
+- [ ] Run the golden dataset + injection suites against the pilot default model (live, opt-in command) and record pass rates; hard-fail gates must hold; triage regressions before completing.
+- [ ] Prove provider agnosticism: the same suite runs against a second configured provider (or a scripted fake) with only env changes.
+- [ ] Update docs (AI_RUNTIME_HARNESS provider/prompt sections, DECISIONS, this file).
+
+Acceptance criteria:
+
+- [ ] A ticket produces a real Claude-drafted, citation-grounded response end to end on local infra.
+- [ ] Switching LLM provider is a config change plus an eval-gate re-run — no code change (SOPS §11 enforced).
+- [ ] Hard-fail safety gates hold against the real model: zero unsafe auto-send, zero cross-tenant leaks, injection pass rate 1.0.
+
+## Milestone 16: Real Authentication And Policy Lifecycle
+
+Goal: Replace the placeholder header auth with IdP-issued JWT verification and add the policy write/activate endpoints. (Phase 1; ADR-0020.)
+
+Checklist:
+
+- [ ] Confirm and provision the IdP (default Clerk; user-owned account setup); record the final choice in DECISIONS.
+- [ ] Implement JWKS-based JWT verification in `readAuthContext`: issuer/audience checks, expiry with clock skew, cached key rotation; map the token subject to the `users` row and load roles from the DB (tokens carry identity; the DB stays the role source of truth).
+- [ ] Enforce tenant membership server-side: the authenticated user must belong to the tenant they operate on (403 on non-membership; explicit tenant selection remains).
+- [ ] Add machine-to-machine auth for internal service endpoints (AI sidecar → `/internal/tools/execute`, `/v1/kb/search`): scoped internal/client-credentials tokens distinct from user tokens.
+- [ ] Keep webhooks signature-authenticated and health endpoints public (unchanged); the header-injection auth mode survives only behind an explicit env flag for tests/local, default off.
+- [ ] Add policy lifecycle endpoints: create policy/version (draft), activate (immutable once active; archives the predecessor), archive — emitting the reserved `policy.created|activated|archived` audit actions; automation-allowlist changes become API-driven.
+- [ ] Surface `retention_policy` on the tenant API contract (Milestone 12 follow-up).
+- [ ] Update the RBAC matrix test to run under real-token fixtures; add negative tests: expired/forged/wrong-audience/absent tokens → 401 on every route; valid token + non-member tenant → 403; internal endpoints reject user tokens.
+- [ ] Update docs (BACKEND_SPEC auth section, SOPS user provisioning in onboarding, DECISIONS, this file).
+
+Acceptance criteria:
+
+- [ ] No endpoint trusts unverified headers when production auth mode is on.
+- [ ] Forged, expired, or wrong-audience tokens are rejected on every route; cross-tenant operation without membership is 403.
+- [ ] Policy versions are creatable/activatable via the API with `policy.*` audit events and activation immutability enforced.
+
+## Milestone 17: Scheduled Jobs And Retention Execution
+
+Goal: QA sampling and retention run unattended on schedule, and retention actually purges every configured class. (Phase 1.)
+
+Checklist:
+
+- [ ] Schedule the QA sampling job per tenant on Temporal Schedules (daily), with idempotent create-if-missing bootstrap from the worker entrypoint.
+- [ ] Schedule the retention job per tenant likewise (daily).
+- [ ] Implement the blob sweeper: delete cleared raw-payload refs from object storage (the retention job already returns them).
+- [ ] Implement the attachment purge and AI-run anonymization retention classes (currently counted-and-reported placeholders; fail-closed semantics preserved).
+- [ ] Add job observability: per-run metrics + structured logs, and a job-failure alert rule in `infra/observability/alerts.yaml`.
+- [ ] Live coverage: schedules fire against local Temporal; a retention run clears refs, sweeps blobs, and audits `retention.applied`; QA sampling emits `support.qa.review_created.v1` on schedule; re-runs stay idempotent.
+- [ ] Update docs (SOPS §10/§16 scheduling runbooks, this file).
+
+Acceptance criteria:
+
+- [ ] Both jobs run on cadence with no human action, and failures alert.
+- [ ] Retention purges raw payloads, attachments, and AI-run PII per tenant policy and audits every application.
+
+## Milestone 18: Staging Environment On Hardened Compose
+
+Goal: A production-shaped staging deployment on a single VM built from the existing Compose stack. (Phase 2; ADR-0020. User-owned inputs: the VM, staging/production DNS records, the alert notification channel.)
+
+Checklist:
+
+- [ ] Production Dockerfiles for the API, worker, and AI sidecar (multi-stage; pruned pnpm-deploy images; uv-locked Python image).
+- [ ] A production Compose profile under `infra/production/`: app services + PostgreSQL/Temporal/NATS/Redis/MinIO/collector with restart policies, resource limits, internal-only networks, no dev mounts or exposed dev ports.
+- [ ] TLS reverse proxy (Caddy or Traefik) terminating only the API + webhook endpoints; Temporal UI/Grafana behind auth or SSH tunnel; everything else internal.
+- [ ] Prometheus + Grafana + Alertmanager services provisioned from `infra/observability/` (dashboards + alert rules loaded as code); alert notifications wired to the chosen channel.
+- [ ] Secrets as env files outside the repo following the SecretResolver naming contract, documented per service.
+- [ ] Automated nightly PostgreSQL backups shipped offsite with a tested restore drill; MinIO data backup story documented.
+- [ ] CI deploy workflow: build + push images (GHCR) on tag, deploy to the VM over SSH, health-gate, and a tested one-command rollback to the previous tag.
+- [ ] Apply `pnpm db:migrate` + `pnpm db:seed:pilot` on staging; run the RLS smoke check (support_app role; cross-tenant read/write fails).
+- [ ] Run the live integration suites once against the staging database (per SOPS §19).
+- [ ] Update docs (infra README/deploy runbook, SOPS §19 refinements, this file).
+
+Acceptance criteria:
+
+- [ ] Staging serves the API over TLS with the worker and sidecar running as supervised services.
+- [ ] Grafana shows live dashboards; a synthetic critical failure fires an alert to the real channel.
+- [ ] Backup restore and deploy rollback have each been exercised successfully at least once.
+
+## Milestone 19: Live Providers And Go-Live Rehearsal
+
+Goal: Real channel providers wired to staging and the full production checklist rehearsed. (Phase 2. User-owned inputs: Mailgun account + DNS changes, Meta Business verification, the pilot support address/domain choice.)
+
+Checklist:
+
+- [ ] Configure the Mailgun domain (SPF/DKIM/DMARC verified) and inbound route to `POST /v1/webhooks/email/mailgun?channel_id=...` on staging; signing/API keys as env refs.
+- [ ] Confirm signature verification with a real Mailgun delivery; confirm a bad signature is rejected 403.
+- [ ] Verify outbound delivery: an approved draft lands in a real external mailbox, threaded correctly via the RFC 5322 reply headers.
+- [ ] Wire WhatsApp Cloud API when Meta verification completes (parallel track; email go-live does not block on it).
+- [ ] Full rehearsal on staging: real inbound email → ticket → real-model draft with citations → human approval → reply delivered → audit trail + QA sample verified.
+- [ ] Modest load/chaos smoke: a burst of concurrent inbound emails (dedup holds), worker restart mid-flight (no duplicate sends), provider 5xx injection (retry then alert).
+- [ ] Execute the complete SOPS §19 production deployment checklist against staging and record results in this file.
+- [ ] Update docs (provider setup runbook if needed, this file).
+
+Acceptance criteria:
+
+- [ ] A real email round-trips the entire system on staging with a real-model draft and human approval.
+- [ ] Every SOPS §19 box checks green.
+
+## Milestone 20: Console Enablement API
+
+Goal: Everything the separate console repository needs to build the reviewer experience without backend rework. (Phase 3. User-owned: the console repository itself, built against the published client; IdP app config shared with Milestone 16.)
+
+Checklist:
+
+- [ ] CORS support with an env-driven origin allowlist (off by default).
+- [ ] Approval queue ergonomics on `GET /v1/approvals`: pending/status filters, age/created ordering, pagination hardening, and a cheap open-counts summary.
+- [ ] `GET /v1/approvals/{approval_id}/evidence`: the reviewer composite (conversation, messages, AI run + trace link, tool calls, draft with policy/KB citations, prior approvals), mirroring the QA evidence read.
+- [ ] Reviewer identity from the verified token: decisions record the reviewer from auth context, not the request body.
+- [ ] Queue freshness contract for polling clients (`updated_since` filtering and/or ETag) documented in OpenAPI; SSE deferred unless trivial.
+- [ ] Basic rate limiting on authenticated endpoints backed by Redis (first production use of the Redis service).
+- [ ] OpenAPI completeness pass over every endpoint + a generated typed TypeScript client package the console repo can consume, with a documented regeneration command.
+- [ ] A scripted end-to-end walkthrough (login → queue → evidence → decide → QA complete) validating the documented call sequences a console will make.
+- [ ] Update docs (BACKEND_SPEC console API section, this file).
+
+Acceptance criteria:
+
+- [ ] The console repo can implement login → queue → review → decide → QA purely from the OpenAPI doc and typed client, with no backend changes required mid-build.
+
+## Milestone 21: Eval Expansion And Shadow Replay
+
+Goal: Statistical confidence in the real-model pipeline before real customer traffic. (Phase 4. User-owned inputs: sanitized historical tickets/FAQs from the pilot client, threshold signoff, shadow-result review.)
+
+Checklist:
+
+- [ ] Expand the golden dataset to the TEST_STRATEGY §4 per-category counts (100-300 cases), including sanitized real samples from the pilot client where available.
+- [ ] Add the LLM-graded draft-quality rubric (grounding, policy fidelity, tone, completeness) as soft gates with agreed thresholds, reported alongside the hard gates.
+- [ ] Build the shadow replay harness: feed historical tickets through the full staging pipeline with sends disabled, recording classification, routing, draft, guardrails, and would-have-auto-sent verdicts (SOPS §11 stage 3).
+- [ ] Produce the shadow-run report (extend the pilot-weekly report or a dedicated eval report) for client and internal review.
+- [ ] Re-run the injection suite on the expanded set; hard-fail gates hold.
+- [ ] Update docs (TEST_STRATEGY §4 counts recorded as met, AI_RUNTIME_HARNESS eval sections, this file).
+
+Acceptance criteria:
+
+- [ ] Eval report over ≥100 cases: hard gates green, quality rubric at or above the agreed thresholds.
+- [ ] A shadow run over real historical tickets is reviewed with a defect rate below the agreed bar.
+
+## Milestone 22: Pilot Gap-Closing And Go-Live
+
+Goal: Close the known product gaps real traffic will hit, then take the pilot live in 100% human-approval mode. (Phase 4. User-owned inputs: pilot contract + success metrics, reviewer staffing/rota, go/no-go decision, client comms.)
+
+Checklist:
+
+- [ ] Attachment binary storage: download provider media to object storage, post-download size/type re-validation (Milestone 12 follow-up), reference-only serving.
+- [ ] HTML sanitization to `body_html_ref` for inbound email bodies (Milestone 6 follow-up).
+- [ ] Next-response and resolution SLA timers in the workflow alongside the existing first-response timer (Milestone 5 follow-up).
+- [ ] Outbound email subject strategy (Milestone 10 follow-up).
+- [ ] Decide and implement — or explicitly accept for the pilot — the single-ticket-per-conversation limitation (Milestone 6 follow-up; record in DECISIONS).
+- [ ] Fix whatever the shadow run surfaced (reserve capacity; enumerate in-session).
+- [ ] Production tenant configuration: real KB ingested + retrieval spot-checked, SLA policy per the pilot contract, escalation contacts, retention policy confirmed.
+- [ ] Final production deploy; SOPS §19 re-run on production; go-live: route the pilot client's support address to the platform.
+- [ ] Hypercare: elevated monitoring window with an on-call owner and daily QA review of 100% of sent replies for the first week.
+- [ ] Update docs (PROJECT_HISTORY go-live record, SOPS refinements, this file).
+
+Acceptance criteria:
+
+- [ ] The pilot tenant is live on real customer traffic with every outbound reply human-approved.
+- [ ] The weekly pilot report generates from real data; alerting is live; the hypercare owner is assigned.
+- [ ] No SEV1/SEV2 in the first hypercare week, or each one is postmortem'd per SOPS §13.
+
 ## Completed Log
 
 Use reverse chronological order.
 
 ### 2026-07-04
 
+- Designed and recorded the V1 launch plan (`docs-v1-launch-plan`, docs only): four phases, Milestones 13-22, consolidating all accumulated milestone follow-ups into concrete checklists plus a user-owned non-code launch track; locked the launch platform decisions with the user in ADR-0020 (HTTP sidecar AI bridge, provider-agnostic model layer with Anthropic Claude + OpenAI `text-embedding-3-small` pilot defaults, hosted-IdP JWKS auth, single-VM hardened-Compose deployment, reviewer console in a separate repository); updated `PLAN.md`, `docs/PROJECT_HISTORY.md`, and `README.md`.
 - Completed Milestone 12 - Security And Pilot Readiness (`feat-milestone12-security-pilot-readiness`) — the final planned milestone: deny-by-default RBAC (no implicit role) with a self-verifying route×role matrix test and a `reports:read` permission; a shared validating integration-secret resolver; content-level PII redaction in structured logs; the 18-case prompt-injection eval suite with hard-fail gates; inbound attachment size/type/filename validation rejecting before any persistence with per-message webhook reporting; the closed `SupportAuditActionSchema` audit taxonomy with compile-time typing and completeness tests; per-tenant data retention hooks (`tenants.retention_policy` via migration `0004` + a fail-closed retention job auditing `retention.applied`); the idempotent pilot tenant seed (`pnpm db:seed:pilot`, incl. the six global first-party `tool_definitions`); the weekly pilot report (`GET /v1/reports/pilot-weekly`, SOPS §14 metrics in one RLS transaction); fail-closed auto-send allowlist controls (automation policy version + kill switch + closed low-risk topic set, `GET /v1/policies/automation`, the workers `evaluateAutoSendEligibility` gate, a live workflow no-bypass test, and golden case `auto_2`); and SOPS §1.1 pilot onboarding + §19 production deployment checklist. ADR-0019. Verified offline (458 TS tests + 56 Python) and live (DB 19, API 37, workers 6, Temporal workflow 8, migration 0004, idempotent seed drive, live report/automation-policy/retention drive incl. an actual expired-ref purge with audit row).
 - Completed Milestone 11 - Observability And QA (`feat-milestone11-observability-qa`): the shared `@support/observability` package (OTel tracing/metrics bootstrap, `SupportMetrics` port, structured logging with trace ids and redaction), API request telemetry + approval/tool metrics, instrumented workflow activities with critical-failure metrics, AI-run persistence with trace links (materializing the Milestone 10 `ai_run_id` FK links), AI run read endpoints, the QA review surface (list/read/create/complete + composite evidence read), the deterministic QA sampling job, event-consumer dead-letter metrics, and dashboards/alert definitions + a collector Prometheus exporter under `infra/`. ADR-0018. Verified offline (363 TS tests + 49 Python) and live (DB 19, API 37, workers 6, Temporal workflow 7, collector smoke drive).
 - Completed Milestone 10 - Approval And Outbound Messaging (`feat-milestone10-approval-outbound`): approval decision endpoints with the edited-draft audit trail and post-commit workflow signaling, outbound email/WhatsApp adapters + HTTP sender, and production approval/outbound/audit persistence activities with deterministic retry-safe ids and database-enforced send-once. ADR-0017.
