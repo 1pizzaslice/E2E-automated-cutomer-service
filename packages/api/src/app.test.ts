@@ -203,6 +203,7 @@ describe("api request context and contract errors", () => {
     expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}/audit-events");
     expect(body.paths).toHaveProperty("/v1/tickets");
     expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}");
+    expect(body.paths).toHaveProperty("/internal/tools/execute");
   });
 });
 

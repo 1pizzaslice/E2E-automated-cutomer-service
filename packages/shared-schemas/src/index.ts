@@ -78,6 +78,10 @@ export const RoleNameSchema = z.enum([
   "qa_reviewer",
   "client_viewer",
   "integration_admin",
+  // Machine identity minted only by verifying the internal service token
+  // (Milestone 14). It must never be accepted from the `x-user-roles` header:
+  // a request claiming it there is rejected as unauthenticated.
+  "internal_service",
 ]);
 
 export type RoleName = z.infer<typeof RoleNameSchema>;
@@ -1748,3 +1752,188 @@ function getDomainEventPayloadSchema(
       return QaReviewCreatedEventPayloadSchema;
   }
 }
+
+// --- AI runtime service bridge (Milestone 14) --------------------------------
+
+/**
+ * Request envelope for `POST /internal/tools/execute`: the AI runtime sidecar
+ * asks the governed TypeScript tool registry to execute one tool call. The
+ * inner `request` is the unchanged Milestone 8 `ToolCallRequest` envelope;
+ * `tenant_id`/`ticket_id`/`ai_run_id` anchor the persisted `tool_calls` audit
+ * row, and `granted_permissions` is the permission-class set the runtime's
+ * policy node derived from tenant policy — the registry still enforces it
+ * server-side against each tool definition's required class (a runtime cannot
+ * grant itself a class the executor does not honor).
+ */
+export const InternalToolExecuteRequestSchema = z
+  .object({
+    tenant_id: z.string().min(1),
+    ticket_id: z.string().min(1),
+    ai_run_id: z.string().min(1),
+    granted_permissions: z.array(ToolPermissionClassSchema),
+    request: ToolCallRequestSchema,
+  })
+  .strict();
+
+/** Response of `POST /internal/tools/execute`: the Milestone 8 result envelope. */
+export const InternalToolExecuteResponseSchema = ToolCallResultSchema;
+
+export type InternalToolExecuteRequest = z.infer<
+  typeof InternalToolExecuteRequestSchema
+>;
+export type InternalToolExecuteResponse = z.infer<
+  typeof InternalToolExecuteResponseSchema
+>;
+
+export const AiRiskLevelSchema = z.enum(["low", "medium", "high"]);
+
+/**
+ * One conversation message handed to the AI runtime. `is_internal` marks
+ * internal notes that must never be copied into customer-visible text.
+ */
+export const AiRuntimeMessageSchema = z
+  .object({
+    role: z.enum(["customer", "agent", "system"]),
+    content: z.string(),
+    is_internal: z.boolean(),
+  })
+  .strict();
+
+/**
+ * Wire request for `POST /internal/ai/run` — the JSON mirror of the Python
+ * runtime's `RuntimeRequest` (`ai/runtime/schemas.py`). The TypeScript
+ * `runAiGraph` activity builds and validates this shape; the sidecar
+ * deserializes it with its own stdlib parser, so optional sections omitted
+ * here take the runtime's documented defaults (AI_RUNTIME_HARNESS section 3).
+ */
+export const AiRuntimeRunRequestSchema = z
+  .object({
+    tenant_id: z.string().min(1),
+    ticket_id: z.string().min(1),
+    conversation_id: z.string().min(1),
+    correlation_id: z.string().min(1),
+    messages: z.array(AiRuntimeMessageSchema).min(1),
+    customer: z
+      .object({
+        customer_id: z.string().min(1).nullable(),
+        email: z.string().min(1).nullable(),
+        display_name: z.string().min(1).nullable(),
+        tier: z.enum(["standard", "vip"]),
+        locale: z.string().min(1).nullable(),
+      })
+      .strict()
+      .optional(),
+    tenant: z
+      .object({
+        brand_name: z.string().min(1),
+        tone: z.string().min(1),
+        timezone: z.string().min(1),
+      })
+      .strict()
+      .optional(),
+    policy: z
+      .object({
+        auto_send_allowed_topics: z.array(z.string().min(1)),
+        active_policy_version_ids: z.array(z.string().min(1)),
+      })
+      .strict()
+      .optional(),
+    options: z
+      .object({
+        allow_auto_send: z.boolean(),
+        max_tool_calls: z.number().int().min(0),
+        max_retrieved_chunks: z.number().int().min(1),
+      })
+      .strict()
+      .optional(),
+    ai_run_type: AiRunTypeSchema.optional(),
+  })
+  .strict();
+
+/**
+ * Wire result of `POST /internal/ai/run` — the JSON emitted by the Python
+ * runtime's `RuntimeResult.to_dict()`. A `succeeded` run carries the full
+ * graph output; a `failed` run carries the structured error that routes the
+ * ticket to a human. `routing_decision.priority` is the runtime's own
+ * priority vocabulary (`p1`-`p4`), deliberately looser than the platform
+ * `TicketPrioritySchema`: the workflow-owned ticket priority remains the
+ * platform truth and the activity maps accordingly.
+ */
+export const AiRuntimeRoutingDecisionSchema = z.object({
+  topic: z.string().nullable(),
+  subtopic: z.string().nullable(),
+  language: z.string().nullable(),
+  sentiment: z.string().nullable(),
+  urgency: z.string().nullable(),
+  priority: z.string(),
+  risk_level: AiRiskLevelSchema,
+  confidence: z.number().min(0).max(1),
+  automation_mode: AutomationModeSchema,
+  assigned_queue: z.string().nullable(),
+  reason_codes: z.array(z.string()),
+  required_tools: z.array(z.string()),
+  required_evidence: z.array(z.string()),
+});
+
+export const AiRuntimeDraftSchema = z.object({
+  draft_text: z.string().min(1),
+  customer_language: z.string(),
+  tone: z.string(),
+  evidence: z.array(
+    z.object({
+      type: z.string(),
+      ref_id: z.string(),
+      summary: z.string(),
+    }),
+  ),
+  actions: z.array(JsonObjectSchema),
+  risk_level: AiRiskLevelSchema,
+  confidence: z.number().min(0).max(1),
+  needs_human: z.boolean(),
+  human_review_reasons: z.array(z.string()),
+});
+
+export const AiRuntimeFinalRecommendationSchema = z.object({
+  automation_mode: AutomationModeSchema,
+  risk_level: AiRiskLevelSchema,
+  confidence: z.number().min(0).max(1),
+  reason_codes: z.array(z.string()),
+});
+
+export const AiRuntimeRunResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("succeeded"),
+    ai_run_id: z.string().min(1),
+    trace_id: z.string().nullable(),
+    classification: JsonObjectSchema,
+    routing_decision: AiRuntimeRoutingDecisionSchema,
+    tool_calls: z.array(JsonObjectSchema),
+    draft: AiRuntimeDraftSchema.nullable(),
+    guardrails: JsonObjectSchema,
+    final_recommendation: AiRuntimeFinalRecommendationSchema,
+    approval_package: JsonObjectSchema.nullable().optional(),
+    eval_signals: JsonObjectSchema,
+  }),
+  z.object({
+    status: z.literal("failed"),
+    ai_run_id: z.string().nullable(),
+    trace_id: z.string().nullable(),
+    error_code: z.string().min(1),
+    error_message: z.string(),
+    retryable: z.boolean(),
+    reason_codes: z.array(z.string()),
+    eval_signals: JsonObjectSchema,
+  }),
+]);
+
+export type AiRiskLevel = z.infer<typeof AiRiskLevelSchema>;
+export type AiRuntimeMessage = z.infer<typeof AiRuntimeMessageSchema>;
+export type AiRuntimeRunRequest = z.infer<typeof AiRuntimeRunRequestSchema>;
+export type AiRuntimeRoutingDecision = z.infer<
+  typeof AiRuntimeRoutingDecisionSchema
+>;
+export type AiRuntimeDraft = z.infer<typeof AiRuntimeDraftSchema>;
+export type AiRuntimeFinalRecommendation = z.infer<
+  typeof AiRuntimeFinalRecommendationSchema
+>;
+export type AiRuntimeRunResult = z.infer<typeof AiRuntimeRunResultSchema>;

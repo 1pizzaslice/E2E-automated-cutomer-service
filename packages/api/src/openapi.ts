@@ -1493,6 +1493,38 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/internal/tools/execute": {
+        post: {
+          summary:
+            "Execute a governed tool call on behalf of the AI runtime (service-to-service)",
+          description:
+            "Internal machine-token route for the AI runtime sidecar; it is never exposed through the user gateway. The bearer token must be the shared internal service token (SUPPORT_INTERNAL_API_TOKEN by default) — user identity headers are ignored and no user role holds the required permission. Tenant context arrives in the request body, not headers. Every tool outcome (succeeded, failed, blocked) returns HTTP 200 with the result envelope; HTTP errors are reserved for auth and body validation.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ $ref: "#/components/parameters/RequestIdHeader" }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/InternalToolExecuteRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description:
+                "Tool call result envelope (status: succeeded, failed, or blocked)",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ToolCallResult" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -2298,6 +2330,123 @@ export function buildOpenApiDocument() {
             completed_at: { type: ["string", "null"], format: "date-time" },
             error_code: { type: ["string", "null"] },
             error_message: { type: ["string", "null"] },
+          },
+        },
+        ToolPermissionClass: {
+          enum: [
+            "customer_read",
+            "order_read",
+            "kb_read",
+            "eligibility_evaluate",
+            "reply_draft",
+            "action_execute",
+          ],
+        },
+        ToolSideEffectClass: {
+          enum: [
+            "read_only",
+            "draft_side_effect",
+            "reversible_write",
+            "irreversible_write",
+          ],
+        },
+        ToolCallRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["tool_name", "arguments"],
+          properties: {
+            tool_name: { type: "string", minLength: 1 },
+            arguments: { type: "object", additionalProperties: true },
+            idempotency_key: { type: "string", minLength: 1, maxLength: 200 },
+          },
+        },
+        ToolCallError: {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "message"],
+          properties: {
+            code: {
+              enum: [
+                "invalid_arguments",
+                "unauthorized",
+                "not_visible",
+                "not_found",
+                "timeout",
+                "result_too_large",
+                "output_invalid",
+                "tool_error",
+              ],
+            },
+            message: { type: "string", minLength: 1 },
+          },
+        },
+        ToolCallResult: {
+          oneOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "status",
+                "tool_call_id",
+                "tool_name",
+                "side_effect_class",
+                "output",
+                "idempotent_replay",
+              ],
+              properties: {
+                status: { enum: ["succeeded"] },
+                tool_call_id: { type: "string", minLength: 1 },
+                tool_name: { type: "string", minLength: 1 },
+                side_effect_class: {
+                  $ref: "#/components/schemas/ToolSideEffectClass",
+                },
+                output: { type: "object", additionalProperties: true },
+                idempotent_replay: { type: "boolean" },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "status",
+                "tool_call_id",
+                "tool_name",
+                "side_effect_class",
+                "error",
+                "idempotent_replay",
+              ],
+              properties: {
+                status: { enum: ["failed", "blocked"] },
+                tool_call_id: { type: "string" },
+                tool_name: { type: "string", minLength: 1 },
+                side_effect_class: {
+                  $ref: "#/components/schemas/ToolSideEffectClass",
+                },
+                error: { $ref: "#/components/schemas/ToolCallError" },
+                idempotent_replay: { type: "boolean" },
+              },
+            },
+          ],
+        },
+        InternalToolExecuteRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "tenant_id",
+            "ticket_id",
+            "ai_run_id",
+            "granted_permissions",
+            "request",
+          ],
+          properties: {
+            tenant_id: { type: "string", minLength: 1 },
+            ticket_id: { type: "string", minLength: 1 },
+            ai_run_id: { type: "string", minLength: 1 },
+            granted_permissions: {
+              type: "array",
+              items: { $ref: "#/components/schemas/ToolPermissionClass" },
+            },
+            request: { $ref: "#/components/schemas/ToolCallRequest" },
           },
         },
         QaSampleReason: {

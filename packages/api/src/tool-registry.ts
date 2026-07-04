@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
 import {
+  aiRunByIdQuery,
+  createAiRunQuery,
   createDatabaseFromEnv,
   insertToolCallQuery,
+  ticketByIdQuery,
   toolCallByIdempotencyKeyQuery,
   updateToolCallByIdQuery,
   visibleToolDefinitionByNameQuery,
   withTenantTransaction,
   type JsonObject,
   type PostgresClient,
+  type SupportDatabase,
 } from "@support/db";
 import type { ToolDefinition } from "@support/integrations";
 import {
@@ -668,6 +672,54 @@ export function createInMemoryToolRegistryStore(
  * required reuse surface); the `record*` methods persist the `tool_calls` audit
  * trail, whose unique idempotency index enforces at-most-once side effects.
  */
+/**
+ * `tool_calls.ai_run_id` is a non-null foreign key, but in the Milestone 14
+ * service bridge tool calls execute while the owning AI run is still in
+ * flight — the worker persists the terminal `ai_runs` row only after the
+ * graph completes. Anchor the run here with a `started` skeleton
+ * (conversation resolved from the ticket row, provenance marked
+ * `unrecorded`); the worker's `recordAiRunResult` completes it with the real
+ * outcome and provenance. Existing rows are never touched, and a missing
+ * ticket falls through to the tool-call insert's own FK error, preserving
+ * pre-bridge behavior for callers that seed their own runs.
+ */
+async function ensureAiRunAnchor(
+  db: SupportDatabase,
+  params: {
+    readonly tenantId: string;
+    readonly ticketId: string;
+    readonly aiRunId: string;
+  },
+): Promise<void> {
+  const scope = { tenantId: params.tenantId };
+  const existing = await aiRunByIdQuery(db, scope, params.aiRunId);
+
+  if (existing[0]) {
+    return;
+  }
+
+  const ticketRows = await ticketByIdQuery(db, scope, params.ticketId);
+  const ticket = ticketRows[0];
+
+  if (!ticket) {
+    return;
+  }
+
+  await createAiRunQuery(db, scope, {
+    aiRunId: params.aiRunId,
+    ticketId: params.ticketId,
+    conversationId: ticket.conversationId,
+    runType: "full_graph",
+    promptVersion: "unrecorded",
+    modelProvider: "unrecorded",
+    modelId: "unrecorded",
+    inputRefs: {},
+    retrievedContextRefs: {},
+    guardrailResults: {},
+    status: "started",
+  });
+}
+
 export function createDatabaseToolRegistryStore(
   database?: ReturnType<typeof createDatabaseFromEnv>,
 ): ToolRegistryStore {
@@ -722,6 +774,7 @@ export function createDatabaseToolRegistryStore(
         getClient(),
         { tenantId: params.tenantId },
         async (db) => {
+          await ensureAiRunAnchor(db, params);
           await insertToolCallQuery(
             db,
             { tenantId: params.tenantId },

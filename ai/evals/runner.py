@@ -88,6 +88,8 @@ def _build_request(case: EvalCase) -> RuntimeRequest:
 def run_eval(
     cases: tuple[EvalCase, ...] = GOLDEN_CASES,
     documents: list[KbDocumentFixture] | None = None,
+    *,
+    invoke=None,
 ) -> EvalReport:
     # ``documents`` optionally overrides the KB corpus (e.g. the adversarial
     # corpus in evals.injection_suite); the default preserves the golden setup.
@@ -96,6 +98,18 @@ def run_eval(
     else:
         retrieval = InMemoryRetrieval(list(documents))
         tool_executor = InMemoryToolExecutor(build_commerce(), retrieval)
+
+    # ``invoke`` optionally replaces the in-process run_support_graph call —
+    # e.g. service.eval_parity routes every case through the Milestone 14
+    # FastAPI sidecar. The default preserves the original behavior exactly.
+    if invoke is None:
+
+        def invoke(request, *, model, retrieval, tool_executor):
+            result, _trace = run_support_graph(
+                request, model=model, retrieval=retrieval, tool_executor=tool_executor
+            )
+            return result
+
     report = EvalReport(total=len(cases))
 
     topic_hits = 0
@@ -114,7 +128,7 @@ def run_eval(
 
     for case in cases:
         request = _build_request(case)
-        result, _trace = run_support_graph(
+        result = invoke(
             request,
             model=DeterministicSupportModel(),
             retrieval=retrieval,

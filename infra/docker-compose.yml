@@ -90,6 +90,38 @@ services:
       - "4318:4318"
       - "8889:8889"
 
+  # Python AI runtime sidecar (Milestone 14, ADR-0020). The Temporal worker on
+  # the host calls it at http://localhost:8090; in service mode the sidecar
+  # calls back into the host-run API (pnpm dev) for tool execution and KB
+  # retrieval via host-gateway. Tokens default to local development values —
+  # override them (and the worker's SUPPORT_AI_SERVICE_TOKEN /
+  # SUPPORT_INTERNAL_API_TOKEN) outside local dev.
+  ai-service:
+    build:
+      context: ../ai
+      dockerfile: Dockerfile
+    environment:
+      SUPPORT_AI_SERVICE_MODE: ${SUPPORT_AI_SERVICE_MODE:-service}
+      SUPPORT_AI_SERVICE_TOKEN: ${SUPPORT_AI_SERVICE_TOKEN:-local-ai-service-token}
+      SUPPORT_API_BASE_URL: ${SUPPORT_API_BASE_URL:-http://host.docker.internal:3000}
+      SUPPORT_INTERNAL_API_TOKEN: ${SUPPORT_INTERNAL_API_TOKEN:-local-internal-api-token}
+      SUPPORT_ENVIRONMENT: local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/app/ai/.venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres-data:
   nats-data:

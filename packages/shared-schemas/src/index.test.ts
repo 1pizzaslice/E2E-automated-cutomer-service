@@ -3,6 +3,8 @@ import {
   AiRunListResponseSchema,
   AiRunResourceResponseSchema,
   AiRunResponseSchema,
+  AiRuntimeRunRequestSchema,
+  AiRuntimeRunResultSchema,
   ApprovalApproveRequestSchema,
   ApprovalDecisionResponseSchema,
   ApprovalEditRequestSchema,
@@ -19,6 +21,7 @@ import {
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
   DomainEventEnvelopeSchema,
+  InternalToolExecuteRequestSchema,
   MessageReceivedEventPayloadSchema,
   KbChunkResponseSchema,
   KbDocumentCreateRequestSchema,
@@ -44,6 +47,7 @@ import {
   QaReviewListResponseSchema,
   QaReviewResourceResponseSchema,
   QaReviewResponseSchema,
+  RoleNameSchema,
   TicketCreateRequestSchema,
   TicketCreatedEventPayloadSchema,
   TicketListResponseSchema,
@@ -1470,5 +1474,201 @@ describe("security and pilot readiness schemas", () => {
       top_topics: [],
     });
     expect(empty.top_topics).toEqual([]);
+  });
+});
+
+describe("ai runtime service bridge schemas", () => {
+  const toolExecuteRequest = {
+    tenant_id: "ten_test",
+    ticket_id: "ticket_test",
+    ai_run_id: "air_test",
+    granted_permissions: ["order_read", "kb_read"],
+    request: {
+      tool_name: "order_lookup",
+      arguments: { order_id: "ord_1001" },
+    },
+  };
+
+  it("reserves the internal_service role in the shared role vocabulary", () => {
+    expect(RoleNameSchema.options).toContain("internal_service");
+    expect(RoleNameSchema.parse("internal_service")).toBe("internal_service");
+  });
+
+  it("validates an internal tool execute request", () => {
+    expect(InternalToolExecuteRequestSchema.parse(toolExecuteRequest)).toEqual(
+      toolExecuteRequest,
+    );
+  });
+
+  it("rejects internal tool execute requests with unknown keys or bad fields", () => {
+    expect(() =>
+      InternalToolExecuteRequestSchema.parse({
+        ...toolExecuteRequest,
+        unexpected: true,
+      }),
+    ).toThrow();
+    expect(() =>
+      InternalToolExecuteRequestSchema.parse({
+        ...toolExecuteRequest,
+        granted_permissions: ["not_a_permission_class"],
+      }),
+    ).toThrow();
+    expect(() =>
+      InternalToolExecuteRequestSchema.parse({
+        ...toolExecuteRequest,
+        tenant_id: "",
+      }),
+    ).toThrow();
+    expect(() =>
+      InternalToolExecuteRequestSchema.parse({
+        ...toolExecuteRequest,
+        request: { tool_name: "order_lookup" },
+      }),
+    ).toThrow();
+  });
+
+  const runtimeRunRequest = {
+    tenant_id: "ten_test",
+    ticket_id: "ticket_test",
+    conversation_id: "cnv_test",
+    correlation_id: "corr_test",
+    messages: [
+      { role: "customer", content: "Where is my order?", is_internal: false },
+    ],
+  };
+
+  it("validates a minimal AI runtime run request (optional sections take runtime defaults)", () => {
+    expect(AiRuntimeRunRequestSchema.parse(runtimeRunRequest)).toEqual(
+      runtimeRunRequest,
+    );
+  });
+
+  it("validates a fully populated AI runtime run request", () => {
+    const full = {
+      ...runtimeRunRequest,
+      customer: {
+        customer_id: "cus_test",
+        email: "customer@example.test",
+        display_name: "Test Customer",
+        tier: "vip",
+        locale: "en-US",
+      },
+      tenant: { brand_name: "Acme", tone: "friendly", timezone: "UTC" },
+      policy: {
+        auto_send_allowed_topics: ["faq"],
+        active_policy_version_ids: ["polv_1"],
+      },
+      options: {
+        allow_auto_send: false,
+        max_tool_calls: 4,
+        max_retrieved_chunks: 8,
+      },
+      ai_run_type: "full_graph",
+    };
+
+    expect(AiRuntimeRunRequestSchema.parse(full)).toEqual(full);
+  });
+
+  it("rejects AI runtime run requests with no messages or unknown keys", () => {
+    expect(() =>
+      AiRuntimeRunRequestSchema.parse({ ...runtimeRunRequest, messages: [] }),
+    ).toThrow();
+    expect(() =>
+      AiRuntimeRunRequestSchema.parse({
+        ...runtimeRunRequest,
+        unexpected: true,
+      }),
+    ).toThrow();
+    expect(() =>
+      AiRuntimeRunRequestSchema.parse({
+        ...runtimeRunRequest,
+        customer: {
+          customer_id: null,
+          email: null,
+          display_name: null,
+          tier: "standard",
+          locale: null,
+          unexpected: true,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a succeeded AI runtime run result", () => {
+    const succeeded = {
+      status: "succeeded",
+      ai_run_id: "air_test",
+      trace_id: "trace_test",
+      classification: { topic: "order_status" },
+      routing_decision: {
+        topic: "order_status",
+        subtopic: null,
+        language: "en",
+        sentiment: "neutral",
+        urgency: "low",
+        priority: "p3",
+        risk_level: "low",
+        confidence: 0.92,
+        automation_mode: "human_approve",
+        assigned_queue: null,
+        reason_codes: ["low_risk_topic"],
+        required_tools: ["order_lookup"],
+        required_evidence: ["order_status"],
+      },
+      tool_calls: [{ tool_name: "order_lookup" }],
+      draft: {
+        draft_text: "Your order shipped yesterday.",
+        customer_language: "en",
+        tone: "friendly",
+        evidence: [
+          { type: "tool_call", ref_id: "tcl_1", summary: "Order status." },
+        ],
+        actions: [],
+        risk_level: "low",
+        confidence: 0.9,
+        needs_human: true,
+        human_review_reasons: ["policy_requires_approval"],
+      },
+      guardrails: { passed: true },
+      final_recommendation: {
+        automation_mode: "human_approve",
+        risk_level: "low",
+        confidence: 0.9,
+        reason_codes: ["policy_requires_approval"],
+      },
+      approval_package: null,
+      eval_signals: {},
+    };
+
+    const parsed = AiRuntimeRunResultSchema.parse(succeeded);
+    expect(parsed.status).toBe("succeeded");
+    if (parsed.status !== "succeeded") return;
+    expect(parsed.routing_decision.priority).toBe("p3");
+    expect(parsed.draft?.needs_human).toBe(true);
+  });
+
+  it("accepts a failed AI runtime run result and rejects out-of-contract variants", () => {
+    const failed = {
+      status: "failed",
+      ai_run_id: null,
+      trace_id: null,
+      error_code: "runtime_unreachable",
+      error_message: "sidecar did not respond",
+      retryable: true,
+      reason_codes: ["ai_runtime_failed"],
+      eval_signals: {},
+    };
+
+    const parsed = AiRuntimeRunResultSchema.parse(failed);
+    expect(parsed.status).toBe("failed");
+    if (parsed.status !== "failed") return;
+    expect(parsed.retryable).toBe(true);
+
+    expect(() =>
+      AiRuntimeRunResultSchema.parse({ ...failed, status: "canceled" }),
+    ).toThrow();
+    expect(() =>
+      AiRuntimeRunResultSchema.parse({ ...failed, error_code: "" }),
+    ).toThrow();
   });
 });
