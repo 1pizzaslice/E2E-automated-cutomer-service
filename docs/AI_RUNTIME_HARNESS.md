@@ -130,12 +130,12 @@ Rules:
 - Any validation failure becomes `AI_RUNTIME_ERROR` and routes ticket to human.
 - Output must include reason codes for escalations or human review.
 
-Current backend placeholder:
+Current backend boundary:
 
 - `packages/workers/src/workflows/ticket-lifecycle-types.ts` defines `RunAiGraphActivityInput` and `RunAiGraphActivityResult` for the Temporal workflow boundary.
 - Successful results include `classification`, `routing_decision`, `tool_calls`, optional `draft`, `guardrails`, `final_recommendation`, eval signals, and trace identifiers.
 - Structured failures return `status: "failed"`, an error code/message, retryability, reason codes, eval signals, and optional run/trace IDs; `ticketLifecycleWorkflow` audits the failure and routes the ticket to human approval.
-- The placeholder does not call LangGraph yet. Real Python runtime calls, Pydantic validation, prompt/tool execution, and trace export remain future AI runtime work behind the activity boundary.
+- Since Milestone 14 the production activity calls the Python runtime over HTTP (section 20); the in-process deterministic TypeScript stand-in remains the offline default when no sidecar is configured.
 
 ## 5. LangGraph State
 
@@ -833,3 +833,97 @@ writes those replies, so no AI draft is produced.
 Prompt IDs are realized as `support_classifier.v1` and
 `support_response_composer.v1` (section 8); versioned prompt files land when a
 real model provider is wired.
+
+## 20. Service Bridge (Milestone 14)
+
+Per ADR-0020 the runtime runs as an HTTP sidecar: a FastAPI service under
+`ai/service/` that the Temporal `runAiGraph` activity calls over the network.
+The graph, ports, schemas, and governance of section 19 are unchanged — the
+bridge only moves where the graph executes and swaps the in-memory ports for
+HTTP adapters.
+
+### 20.1 Endpoints And Auth
+
+- `POST /internal/ai/run` — the wire mirror of `RuntimeRequest` in and
+  `RuntimeResult.to_dict()` out (`AiRuntimeRunRequestSchema` /
+  `AiRuntimeRunResultSchema` in `@support/shared-schemas` are the TypeScript
+  side of the contract; `ai/service/request_parsing.py` is the strict stdlib
+  parser on the Python side). Both `succeeded` and `failed` runs are HTTP
+  200 — a failed run is a valid domain outcome. HTTP errors are reserved for
+  auth (401) and contract violations (400 malformed/unknown-key bodies),
+  which the caller treats as permanent.
+- `GET /health` — unauthenticated liveness with `graph_version` and mode.
+- Auth: a bearer token resolved from an env reference per SecretResolver
+  conventions (`SUPPORT_AI_SERVICE_TOKEN_REF`, default ref
+  `SUPPORT_AI_SERVICE_TOKEN`), compared constant-time; unauthenticated
+  requests are 401.
+
+### 20.2 Modes And Port Adapters
+
+`SUPPORT_AI_SERVICE_MODE` selects the ports:
+
+- `local` — the in-memory deterministic ports (section 19); used for eval
+  parity and tests.
+- `service` — HTTP adapters (`ai/service/adapters.py`): `HttpToolExecutor`
+  posts the Milestone 8 envelope to the API's
+  `POST /internal/tools/execute` (BACKEND_SPEC §17.16) with the runtime's
+  policy-derived `granted_permissions` (re-enforced server-side);
+  `HttpRetrieval` posts to `POST /v1/kb/search` with `x-tenant-id`. Both
+  authenticate with the internal API machine token
+  (`SUPPORT_API_TOKEN_REF`, default ref `SUPPORT_INTERNAL_API_TOKEN`) and
+  carry `x-correlation-id`. Tool transport/contract failures degrade to
+  `failed` tool results (visible in the approval package, section 6.7);
+  retrieval failures raise and become a structured failed run that routes to
+  human (section 6.4). The model provider stays `DeterministicSupportModel`
+  until Milestone 15.
+
+### 20.3 Worker-Side Activity
+
+`createHttpRunAiGraph` (`packages/workers/src/activities/http-ai-graph.ts`)
+builds the `RuntimeRequest` from workflow input plus database context — the
+conversation's messages/customer/tenant rows
+(`createDatabaseAiGraphContextStore`) and the tenant automation policy
+(`createDatabaseAutomationPolicyStore` feeds `policy.auto_send_allowed_topics`
+and `options.allow_auto_send`; the Milestone 12 bridge) — then posts it with
+an explicit per-attempt timeout (`AI_RUNTIME_SERVICE_TIMEOUT_MS`, default
+30s). Failure classification, all returned as structured `failed` results so
+the workflow never fails and every outcome is persisted/audited by the
+unchanged `createPersistedRunAiGraph` wrapper:
+
+- Transport errors / timeouts / 5xx: retried in-activity with backoff (3
+  attempts), then `AI_SIDECAR_UNAVAILABLE` / `AI_SIDECAR_ERROR`
+  (`retryable: true`).
+- 401/403: `AI_SIDECAR_UNAUTHORIZED` (permanent, deployment misconfig).
+- Other 4xx: `AI_SIDECAR_REJECTED` (permanent contract drift).
+- 200 with a non-contract body: `AI_SIDECAR_CONTRACT_ERROR` (permanent).
+- Missing conversation context: `AI_CONTEXT_UNAVAILABLE` (permanent) without
+  calling the sidecar.
+
+Mapping notes: `routing_decision.priority` keeps the workflow-owned ticket
+priority (the runtime's own `p1`-`p4` stays in `classification`), and the
+runtime's `approval_package` is not part of the activity contract. Enabled by
+`AI_RUNTIME_SERVICE_URL` (unset → the deterministic TypeScript stand-in);
+sidecar runs record provenance `deterministic-support-v1` on `ai_runs`.
+
+### 20.4 Correlation And Logs
+
+The activity forwards `x-correlation-id` (workflow correlation id) and
+`x-trace-id` (active OTel span); the request body carries `correlation_id`.
+The sidecar logs exactly one structured JSON line per run
+(`ai/service/logs.py`: service `ai-runtime`, correlation/trace/tenant/ticket/
+ai_run ids, status, error code, duration) — ids and outcomes only, never
+message content, drafts, or secrets (ADR-0018 attribute correlation).
+
+### 20.5 Running And Parity
+
+- Local sidecar: `pnpm ai:service` (uvicorn on `127.0.0.1:8090`), or the
+  Compose `ai-service` container (uv-based `ai/Dockerfile`, port 8090,
+  service mode pointed at the host API).
+- Service-path determinism: `PYTHONPATH=ai uv run --frozen --project ai
+--extra service python -m service.eval_parity` runs every golden case
+  in-process and through the service path and diffs the results byte-for-byte,
+  then re-runs the eval gates through the service path
+  (`ai/service/eval_parity_test.py` keeps this in `pnpm test:py`).
+- Live drive: `pnpm --filter @support/workers test:e2e:service` (Compose +
+  spawned sidecar; happy path with retrieval/tools over the network, plus
+  sidecar-down and sidecar-500 degradation).

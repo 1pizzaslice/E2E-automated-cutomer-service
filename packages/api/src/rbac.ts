@@ -26,7 +26,8 @@ export type ApiPermission =
   | "reports:read"
   | "tickets:read"
   | "tickets:create"
-  | "tickets:update";
+  | "tickets:update"
+  | "tools:execute_internal";
 
 /**
  * Deny-by-default role → permission matrix. Exported so the RBAC matrix test
@@ -137,6 +138,11 @@ export const ROLE_PERMISSIONS: Readonly<
     "tickets:read",
   ]),
   integration_admin: new Set(["openapi:read"]),
+  // Machine principal for the AI runtime sidecar (Milestone 14). It is minted
+  // only by the internal bearer token (never via x-user-roles) and holds
+  // exactly what the runtime needs: KB retrieval and governed tool execution.
+  // No user role is ever granted tools:execute_internal.
+  internal_service: new Set(["kb:search", "tools:execute_internal"]),
 };
 
 export function requirePermission(

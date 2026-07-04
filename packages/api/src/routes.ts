@@ -979,7 +979,8 @@ function parseQuery<T extends z.ZodType>(
   return parsed.data;
 }
 
-function parseBody<T extends z.ZodType>(
+/** Parses the request body against a schema; exported for sibling route modules. */
+export function parseBody<T extends z.ZodType>(
   schema: T,
   request: FastifyRequest,
 ): z.infer<T> {

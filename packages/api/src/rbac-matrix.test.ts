@@ -2,12 +2,20 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { RoleNameSchema, type RoleName } from "@support/shared-schemas";
 import { registerErrorHandler } from "./errors.js";
+import { registerInternalRoutes } from "./internal-routes.js";
 import { registerRequestContext } from "./request-context.js";
 import { registerRoutes } from "./routes.js";
 import { ROLE_PERMISSIONS, type ApiPermission } from "./rbac.js";
 import type { ApiServices } from "./services.js";
+import type { ToolExecutor } from "./tool-registry.js";
 
 const ROLES = RoleNameSchema.options;
+
+/**
+ * `internal_service` cannot be minted via `x-user-roles` (a claim there is
+ * 401), so the matrix authenticates it with the machine bearer token instead.
+ */
+const INTERNAL_TEST_TOKEN = "rbac-matrix-internal-token";
 
 /**
  * Every RBAC-guarded route with the permission it must enforce and concrete
@@ -279,6 +287,12 @@ const ROUTE_PERMISSION_CATALOG: ReadonlyArray<{
     routePath: "/v1/tickets/:ticket_id",
     permission: "tickets:update",
   },
+  {
+    method: "POST",
+    url: "/internal/tools/execute",
+    routePath: "/internal/tools/execute",
+    permission: "tools:execute_internal",
+  },
 ];
 
 const UNGUARDED_ROUTES = new Set(["GET /health", "GET /ready"]);
@@ -305,6 +319,21 @@ function makeStubServices(): ApiServices {
   ) as unknown as ApiServices;
 }
 
+/**
+ * The matrix only exercises the permission gate: requests that pass it fail
+ * later on body validation (400), so the executor is never reached.
+ */
+function makeStubToolExecutor(): ToolExecutor {
+  return {
+    async execute() {
+      throw new Error("tool executor must not be reached by the rbac matrix");
+    },
+    listTools() {
+      return [];
+    },
+  };
+}
+
 function buildMatrixApp() {
   const app = Fastify({ logger: false });
   const registered = new Set<string>();
@@ -320,13 +349,25 @@ function buildMatrixApp() {
   });
 
   registerErrorHandler(app);
-  registerRequestContext(app);
+  registerRequestContext(app, {
+    internalAuth: { token: INTERNAL_TEST_TOKEN },
+  });
   registerRoutes(app, makeStubServices());
+  registerInternalRoutes(app, { toolExecutor: makeStubToolExecutor() });
 
   return { app, registered };
 }
 
 function headersFor(role: RoleName): Record<string, string> {
+  if (role === "internal_service") {
+    // The machine principal authenticates with the internal bearer token; it
+    // carries no user identity headers, only tenant context for /v1 routes.
+    return {
+      authorization: `Bearer ${INTERNAL_TEST_TOKEN}`,
+      "x-tenant-id": "ten_test",
+    };
+  }
+
   return {
     authorization: "Bearer rbac-matrix-test-token",
     "x-user-id": "usr_rbac_matrix",
@@ -370,9 +411,29 @@ describe("rbac role permission matrix", () => {
     expect([...ROLE_PERMISSIONS.integration_admin]).toEqual(["openapi:read"]);
   });
 
-  it("grants every role openapi:read and nothing implicitly", () => {
+  it("grants every user role openapi:read and nothing implicitly", () => {
     for (const role of ROLES) {
+      if (role === "internal_service") {
+        continue;
+      }
       expect(ROLE_PERMISSIONS[role].has("openapi:read")).toBe(true);
+    }
+  });
+
+  it("scopes internal_service to exactly kb search and internal tool execution", () => {
+    expect([...ROLE_PERMISSIONS.internal_service].sort()).toEqual([
+      "kb:search",
+      "tools:execute_internal",
+    ]);
+
+    for (const role of ROLES) {
+      if (role === "internal_service") {
+        continue;
+      }
+      expect(
+        ROLE_PERMISSIONS[role].has("tools:execute_internal"),
+        `${role} must not hold tools:execute_internal`,
+      ).toBe(false);
     }
   });
 });
@@ -461,6 +522,31 @@ describe("rbac route enforcement matrix", () => {
       expect(
         response.statusCode,
         `${entry.method} ${entry.url} without roles`,
+      ).toBe(401);
+    }
+  });
+
+  it("rejects internal_service claimed via the x-user-roles header on every route", async () => {
+    const built = buildMatrixApp();
+    app = built.app;
+    await app.ready();
+
+    for (const entry of ROUTE_PERMISSION_CATALOG) {
+      const response = await app.inject({
+        method: entry.method,
+        url: entry.url,
+        headers: {
+          authorization: "Bearer rbac-matrix-test-token",
+          "x-user-id": "usr_rbac_matrix",
+          "x-user-roles": "internal_service",
+          "x-tenant-id": "ten_test",
+        },
+        ...(entry.method === "GET" ? {} : { payload: {} }),
+      });
+
+      expect(
+        response.statusCode,
+        `${entry.method} ${entry.url} claiming internal_service via headers`,
       ).toBe(401);
     }
   });

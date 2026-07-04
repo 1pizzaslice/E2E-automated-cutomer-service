@@ -5,6 +5,7 @@ import {
   approvalByIdQuery,
   channelByIdQuery,
   conversationByIdQuery,
+  completeAiRunByIdQuery,
   createAiRunQuery,
   createApprovalQuery,
   createAuditEventQuery,
@@ -455,10 +456,23 @@ export const AI_RUN_PROMPT_VERSION = "support_graph.v1";
 export const AI_RUN_MODEL_PROVIDER = "deterministic";
 export const AI_RUN_MODEL_ID = "deterministic-support-model.v1";
 
+/**
+ * Provenance stamped on every persisted `ai_runs` row. The defaults describe
+ * the in-process deterministic stand-in; the Milestone 14 sidecar composition
+ * overrides `modelId` with the Python runtime's deterministic model id so the
+ * row records which implementation actually produced the run.
+ */
+export interface AiRunProvenance {
+  readonly promptVersion: string;
+  readonly modelProvider: string;
+  readonly modelId: string;
+}
+
 export interface PersistedRunAiGraphDependencies {
   readonly store: TicketLifecyclePersistenceStore;
   readonly now?: () => Date;
   readonly metrics?: SupportMetrics;
+  readonly provenance?: AiRunProvenance;
 }
 
 /**
@@ -479,6 +493,11 @@ export function createPersistedRunAiGraph(
 ): (input: RunAiGraphActivityInput) => Promise<RunAiGraphActivityResult> {
   const now = dependencies.now ?? (() => new Date());
   const metrics = dependencies.metrics ?? createNoopSupportMetrics();
+  const provenance = dependencies.provenance ?? {
+    promptVersion: AI_RUN_PROMPT_VERSION,
+    modelProvider: AI_RUN_MODEL_PROVIDER,
+    modelId: AI_RUN_MODEL_ID,
+  };
 
   return async (input) => {
     const startedAt = now();
@@ -500,9 +519,9 @@ export function createPersistedRunAiGraph(
       ticketId: input.ticket_id,
       conversationId: input.ticket.conversation_id,
       runType: "full_graph",
-      promptVersion: AI_RUN_PROMPT_VERSION,
-      modelProvider: AI_RUN_MODEL_PROVIDER,
-      modelId: AI_RUN_MODEL_ID,
+      promptVersion: provenance.promptVersion,
+      modelProvider: provenance.modelProvider,
+      modelId: provenance.modelId,
       inputRefs: {
         correlation_id: input.correlation_id,
         initial_message_id: input.initial_message_id,
@@ -1629,6 +1648,31 @@ export function createDatabaseTicketLifecyclePersistenceStore(
           traceId: input.traceId,
           completedAt: input.completedAt,
         });
+
+        if (inserted[0] === undefined) {
+          // The row already exists: either an activity retry replaying the
+          // same deterministic run id, or the `started` anchor the tool
+          // registry created mid-run so `tool_calls.ai_run_id` could resolve
+          // (Milestone 14 service bridge). Complete it with the terminal
+          // outcome and real provenance — the modeled lifecycle transition
+          // from `started` to the run's final state.
+          await completeAiRunByIdQuery(db, scope, input.aiRunId, {
+            promptVersion: input.promptVersion,
+            modelProvider: input.modelProvider,
+            modelId: input.modelId,
+            inputRefs: input.inputRefs,
+            retrievedContextRefs: input.retrievedContextRefs,
+            structuredOutput: input.structuredOutput,
+            confidence: input.confidence,
+            riskLevel: input.riskLevel,
+            automationRecommendation: input.automationRecommendation,
+            guardrailResults: input.guardrailResults,
+            status: input.status,
+            latencyMs: input.latencyMs,
+            traceId: input.traceId,
+            completedAt: input.completedAt,
+          });
+        }
 
         return {
           aiRunId: input.aiRunId,

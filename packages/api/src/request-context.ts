@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { RoleNameSchema, type RoleName } from "@support/shared-schemas";
 import { HttpError } from "./errors.js";
+import {
+  INTERNAL_SERVICE_USER_ID,
+  isInternalServiceToken,
+  type InternalAuthConfig,
+} from "./internal-auth.js";
 
 export interface AuthContext {
   readonly userId: string;
@@ -43,7 +48,20 @@ const HEALTH_PATHS = new Set(["/health", "/ready"]);
 // webhook handler resolves tenant/channel and verifies the signature itself.
 const WEBHOOK_PATH_PREFIX = "/v1/webhooks/";
 
-export function registerRequestContext(app: FastifyInstance): void {
+export interface RegisterRequestContextOptions {
+  /**
+   * Machine-token auth for the AI runtime sidecar. When configured and a
+   * request's bearer token matches (constant-time), the actor becomes the
+   * `internal_service` principal and the `x-user-id`/`x-user-roles` headers
+   * are ignored. Omitted/undefined disables machine auth entirely.
+   */
+  readonly internalAuth?: InternalAuthConfig;
+}
+
+export function registerRequestContext(
+  app: FastifyInstance,
+  options: RegisterRequestContextOptions = {},
+): void {
   app.addHook("onRequest", async (request, reply) => {
     const requestId = readHeader(request, "x-request-id") ?? randomUUID();
     const correlationId = readHeader(request, "x-correlation-id") ?? requestId;
@@ -57,7 +75,10 @@ export function registerRequestContext(app: FastifyInstance): void {
       return;
     }
 
-    const actor = readAuthContext(request);
+    const actor = readAuthContext(request, options.internalAuth);
+    // `/internal/*` routes are not tenant-scoped by header: the tenant arrives
+    // in the request body and is enforced by the tool registry, so only /v1/*
+    // requests (including those from the machine actor) read `x-tenant-id`.
     const tenant = path.startsWith("/v1/")
       ? readOptionalTenantContext(request)
       : undefined;
@@ -99,11 +120,29 @@ export function requireAuthenticatedRequestContext(
   return context as AuthenticatedRequestContext;
 }
 
-function readAuthContext(request: FastifyRequest): AuthContext {
+function readAuthContext(
+  request: FastifyRequest,
+  internalAuth?: InternalAuthConfig,
+): AuthContext {
   const authorization = readHeader(request, "authorization");
 
   if (!authorization?.startsWith("Bearer ") || authorization.length <= 7) {
     throw new HttpError(401, "AUTH_REQUIRED", "Authentication is required.");
+  }
+
+  // Machine-token path: the AI runtime sidecar presents the shared internal
+  // token as its bearer credential. On a constant-time match the actor is the
+  // internal service principal; identity headers from the request are ignored
+  // so a caller cannot decorate the machine actor with arbitrary claims.
+  if (internalAuth) {
+    const presented = authorization.slice("Bearer ".length).trim();
+
+    if (isInternalServiceToken(internalAuth, presented)) {
+      return {
+        userId: INTERNAL_SERVICE_USER_ID,
+        roles: ["internal_service"],
+      };
+    }
   }
 
   const userId = readRequiredHeader(request, "x-user-id", "AUTH_REQUIRED");
@@ -176,6 +215,13 @@ function parseRoles(header: string | undefined): RoleName[] {
     const result = RoleNameSchema.safeParse(role);
 
     if (!result.success) {
+      throw new HttpError(401, "AUTH_REQUIRED", "Authentication is required.");
+    }
+
+    // `internal_service` is reserved for the machine token verified in
+    // readAuthContext — a gateway must never mint it via headers. A request
+    // claiming it here is treated as unauthenticated, not merely unauthorized.
+    if (result.data === "internal_service") {
       throw new HttpError(401, "AUTH_REQUIRED", "Authentication is required.");
     }
 

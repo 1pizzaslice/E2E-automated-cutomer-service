@@ -94,6 +94,17 @@ Non-responsibilities:
 - Direct tool calls outside registry.
 - Direct outbound customer sends.
 
+Current implementation (Milestone 14, ADR-0020): the Python runtime under
+`ai/` runs as an HTTP sidecar — a FastAPI service (`ai/service/`) exposing
+`POST /internal/ai/run` (bearer-token authenticated) and `GET /health`. The
+Temporal `runAiGraph` activity calls it over HTTP
+(`packages/workers/src/activities/http-ai-graph.ts`); in service mode the
+sidecar executes tools through `POST /internal/tools/execute` (§17.16) and
+retrieval through `POST /v1/kb/search`, both service-to-service authenticated
+against the API. Sidecar failure produces a structured `failed` AI run routed
+to human approval — never a failed workflow. The model is still the
+deterministic support model; the real-provider swap is Milestone 15.
+
 ### 2.4 Integration/Tool Service
 
 Responsibilities:
@@ -1218,6 +1229,46 @@ Current implementation:
   and approval rate, outbound send/failure counts with auto-send rate
   (`sent_by_type = 'ai_auto'`), QA review counts with defect rate, and the
   top ticket topics. Rates are `null` when the denominator is zero.
+
+### 17.16 Internal Service Endpoints (Milestone 14)
+
+Internal endpoints live under `/internal/` (not `/v1/`) and are
+service-to-service surfaces for the AI runtime sidecar — they are never
+exposed to end users or the console.
+
+Authentication: a machine bearer token, distinct from user tokens
+(ADR-0020). The API resolves it at boot from an env reference per the
+SecretResolver conventions (`SUPPORT_INTERNAL_API_TOKEN_REF`, default ref
+`SUPPORT_INTERNAL_API_TOKEN`; `packages/api/src/internal-auth.ts`). A request
+presenting the token (constant-time comparison) is minted the
+`internal_service` actor (`svc:ai-runtime`), whose deny-by-default RBAC grant
+is exactly `tools:execute_internal` + `kb:search`. The `internal_service`
+role is reserved: claiming it via the `x-user-roles` header is rejected as
+unauthenticated, and with no token configured the internal surface is
+unreachable (fail closed).
+
+- `POST /internal/tools/execute` — executes one tool call through the
+  governed registry (`createDatabaseToolExecutor`: tenant visibility,
+  permission classes, argument/output schemas, timeouts, bounded output,
+  idempotency, `tool_calls` audit rows). Request
+  (`InternalToolExecuteRequestSchema`): `tenant_id`, `ticket_id`,
+  `ai_run_id`, `granted_permissions` (the permission-class set the runtime's
+  policy node derived from tenant policy — re-enforced server-side per tool
+  definition), and `request`, the unchanged Milestone 8 `ToolCallRequest`
+  envelope. Response: the Milestone 8 `ToolCallResult` envelope. All tool
+  outcomes (`succeeded`/`failed`/`blocked`) are HTTP 200 — the envelope
+  carries the outcome; HTTP errors are reserved for auth (401/403) and body
+  validation (400). Tenant scope comes from the validated body (internal
+  paths read no `x-tenant-id` header) and is enforced by RLS in the
+  executor's transactions.
+- The sidecar's retrieval adapter calls the existing `POST /v1/kb/search`
+  (§17.9) with the same machine token plus `x-tenant-id`, so retrieval stays
+  behind the `kb:search` permission and tenant-scoped RLS.
+
+The sidecar itself exposes `POST /internal/ai/run` (the wire mirror of the
+runtime request/result, `AiRuntimeRunRequestSchema` /
+`AiRuntimeRunResultSchema` in shared-schemas) and `GET /health`; see
+AI_RUNTIME_HARNESS §20 for the bridge contract and failure semantics.
 
 ## 18. Event Envelope
 
