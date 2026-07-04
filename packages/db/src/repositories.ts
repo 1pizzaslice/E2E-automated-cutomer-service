@@ -11,6 +11,7 @@ import {
 } from "drizzle-orm";
 import type { SupportDatabase } from "./client.js";
 import {
+  aiRuns,
   approvals,
   auditEvents,
   channels,
@@ -28,6 +29,8 @@ import {
   type CustomerIdentity,
   type KbDocument,
   type Message,
+  type NewApproval,
+  type NewAuditEvent,
   type NewConversation,
   type NewCustomer,
   type NewCustomerIdentity,
@@ -954,6 +957,179 @@ export function createInboundMessageQuery(
 ) {
   return db
     .insert(messages)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+// --- Milestone 10 approvals + outbound messaging + audit ---------------------
+
+/**
+ * Resolve the outbound recipient identity for a customer on a channel type.
+ * The earliest identity wins so repeated intake upserts keep a stable
+ * recipient; outbound sends deliver back to the address/number the customer
+ * contacted us from.
+ */
+export function customerIdentityForCustomerQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  params: {
+    readonly customerId: string;
+    readonly channel: ChannelType;
+  },
+) {
+  return db
+    .select()
+    .from(customerIdentities)
+    .where(
+      and(
+        eq(customerIdentities.tenantId, scope.tenantId),
+        eq(customerIdentities.customerId, params.customerId),
+        eq(customerIdentities.channel, params.channel),
+      ),
+    )
+    .orderBy(
+      asc(customerIdentities.createdAt),
+      asc(customerIdentities.customerIdentityId),
+    )
+    .limit(1);
+}
+
+/**
+ * Read a tenant-scoped AI run by id. The approval/message writers use this to
+ * decide whether an `ai_run_id` can be stored as a foreign key: until AI run
+ * persistence lands, the id travels inside the approval payload instead.
+ */
+export function aiRunByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  aiRunId: string,
+) {
+  return db
+    .select()
+    .from(aiRuns)
+    .where(
+      and(eq(aiRuns.tenantId, scope.tenantId), eq(aiRuns.aiRunId, aiRunId)),
+    )
+    .limit(1);
+}
+
+/**
+ * Insert an approval record. Callers supply a deterministic `approvalId` so a
+ * retried Temporal `createApproval` activity re-inserting the same approval is
+ * a no-op; an empty result means the approval already exists.
+ */
+export function createApprovalQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewApproval, "tenantId">,
+) {
+  return db
+    .insert(approvals)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+/**
+ * Resolve a pending approval with a terminal reviewer decision. The `pending`
+ * status guard makes concurrent double-decides safe: the second decision
+ * matches zero rows and the caller reports a conflict instead of overwriting
+ * the first reviewer's outcome.
+ */
+export function resolvePendingApprovalByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  approvalId: string,
+  values: Partial<NewApproval>,
+) {
+  return db
+    .update(approvals)
+    .set(values)
+    .where(
+      and(
+        eq(approvals.tenantId, scope.tenantId),
+        eq(approvals.approvalId, approvalId),
+        eq(approvals.status, "pending"),
+      ),
+    )
+    .returning();
+}
+
+/**
+ * Look up an outbound (or any) message by its idempotency key. Backs the
+ * outbound send dedupe required by BACKEND_SPEC §21: a repeated
+ * `outbound:{tenant}:{ticket}:{approval}` key replays the earlier send instead
+ * of delivering twice. Mirrors the partial unique `messages_idempotency_idx`.
+ */
+export function messageByIdempotencyKeyQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  idempotencyKey: string,
+) {
+  return db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        eq(messages.idempotencyKey, idempotencyKey),
+      ),
+    )
+    .limit(1);
+}
+
+/**
+ * Insert an outbound message row, deduplicating on the idempotency-key unique
+ * constraint. An empty result means a concurrent send already persisted the
+ * row; callers re-read via {@link messageByIdempotencyKeyQuery}.
+ */
+export function createOutboundMessageQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewMessage, "tenantId">,
+) {
+  return db
+    .insert(messages)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+/**
+ * Record the terminal provider outcome (`sent`/`failed`) for an outbound
+ * message row, mirroring the tool-call insert-then-update audit pattern.
+ */
+export function updateMessageSendResultByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  messageId: string,
+  values: Partial<NewMessage>,
+) {
+  return db
+    .update(messages)
+    .set(values)
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        eq(messages.messageId, messageId),
+      ),
+    )
+    .returning();
+}
+
+/**
+ * Append an audit event row (BACKEND_SPEC §13: append-only). Callers that can
+ * be retried (Temporal activities) supply a deterministic `auditEventId` so a
+ * replayed write is a no-op instead of a duplicate audit row.
+ */
+export function createAuditEventQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewAuditEvent, "tenantId">,
+) {
+  return db
+    .insert(auditEvents)
     .values({ ...values, tenantId: scope.tenantId })
     .onConflictDoNothing()
     .returning();

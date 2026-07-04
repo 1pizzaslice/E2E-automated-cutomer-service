@@ -848,6 +848,151 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/approvals/{approval_id}/approve": {
+        post: {
+          summary: "Approve a pending approval and resume the workflow",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "approval_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/ApprovalApproveRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Approval decision",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ApprovalDecision" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/approvals/{approval_id}/edit": {
+        post: {
+          summary:
+            "Approve a pending approval with a human-edited payload and resume the workflow",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "approval_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ApprovalEditRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Approval decision",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ApprovalDecision" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/approvals/{approval_id}/reject": {
+        post: {
+          summary: "Reject a pending approval; no response is sent",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "approval_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ApprovalRejectRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Approval decision",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ApprovalDecision" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/approvals/{approval_id}/escalate": {
+        post: {
+          summary: "Escalate a pending approval to manual handling",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "approval_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/ApprovalEscalateRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Approval decision",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ApprovalDecision" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/audit-events": {
         get: {
           summary: "List tenant-scoped audit events",
@@ -1677,6 +1822,56 @@ export function buildOpenApiDocument() {
               items: { $ref: "#/components/schemas/Approval" },
             },
             page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        ApprovalApproveRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            review_notes: { type: ["string", "null"], minLength: 1 },
+          },
+        },
+        ApprovalEditRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["approved_payload"],
+          properties: {
+            approved_payload: { type: "object", additionalProperties: true },
+            review_notes: { type: ["string", "null"], minLength: 1 },
+          },
+        },
+        ApprovalRejectRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            review_notes: { type: ["string", "null"], minLength: 1 },
+          },
+        },
+        ApprovalEscalateRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            review_notes: { type: ["string", "null"], minLength: 1 },
+          },
+        },
+        ApprovalWorkflowSignalResult: {
+          type: "object",
+          additionalProperties: false,
+          required: ["delivered", "workflow_id", "reason"],
+          properties: {
+            delivered: { type: "boolean" },
+            workflow_id: { type: ["string", "null"], minLength: 1 },
+            reason: { type: ["string", "null"], minLength: 1 },
+          },
+        },
+        ApprovalDecision: {
+          type: "object",
+          required: ["approval", "workflow_signal"],
+          properties: {
+            approval: { $ref: "#/components/schemas/Approval" },
+            workflow_signal: {
+              $ref: "#/components/schemas/ApprovalWorkflowSignalResult",
+            },
           },
         },
         AuditEventResource: {

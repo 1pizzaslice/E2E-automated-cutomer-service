@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
+  ApprovalDecisionResponseSchema,
   ApprovalListResponseSchema,
   ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
@@ -150,6 +151,10 @@ describe("api request context and contract errors", () => {
     expect(body.paths).toHaveProperty("/v1/kb/search");
     expect(body.paths).toHaveProperty("/v1/approvals");
     expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}");
+    expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}/approve");
+    expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}/edit");
+    expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}/reject");
+    expect(body.paths).toHaveProperty("/v1/approvals/{approval_id}/escalate");
     expect(body.paths).toHaveProperty("/v1/audit-events");
     expect(body.paths).toHaveProperty("/v1/audit-events/{audit_event_id}");
     expect(body.paths).toHaveProperty("/v1/tickets/{ticket_id}/audit-events");
@@ -720,6 +725,145 @@ describe("api tenant-scoped resource contracts", () => {
       method: "GET",
       url: "/v1/approvals/apr_test",
       headers: integrationAdminHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("approves a pending approval and reports the workflow signal", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_test/approve",
+      headers: authHeaders,
+      payload: { review_notes: "Looks right." },
+    });
+    const body = ApprovalDecisionResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.approval).toMatchObject({
+      approval_id: "apr_test",
+      status: "approved",
+      reviewer_user_id: "usr_test",
+      review_notes: "Looks right.",
+    });
+    expect(body.approval.approved_payload).toEqual(
+      body.approval.requested_payload,
+    );
+    expect(body.workflow_signal).toEqual({
+      delivered: true,
+      workflow_id: "ticket-lifecycle:ten_test:con_test",
+      reason: null,
+    });
+  });
+
+  it("approves without a request body", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_test/approve",
+      headers: authHeaders,
+    });
+    const body = ApprovalDecisionResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.approval.status).toBe("approved");
+    expect(body.approval.review_notes).toBeNull();
+  });
+
+  it("edits an approval with the human payload preserved separately from the AI draft", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_test/edit",
+      headers: authHeaders,
+      payload: {
+        approved_payload: { draft_text: "Softer edited response." },
+        review_notes: "Softened the tone.",
+      },
+    });
+    const body = ApprovalDecisionResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.approval.status).toBe("edited");
+    expect(body.approval.approved_payload).toEqual({
+      draft_text: "Softer edited response.",
+    });
+    expect(body.approval.requested_payload).toMatchObject({
+      draft: "Where is my order response draft.",
+    });
+  });
+
+  it("rejects an edit without the edited payload", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_test/edit",
+      headers: authHeaders,
+      payload: { review_notes: "Missing payload." },
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("rejects and escalates pending approvals", async () => {
+    app = buildApp({ services: makeServices() });
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_test/reject",
+      headers: authHeaders,
+      payload: { review_notes: "Not accurate." },
+    });
+    const escalated = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_test/escalate",
+      headers: authHeaders,
+    });
+
+    expect(rejected.statusCode).toBe(200);
+    expect(
+      ApprovalDecisionResponseSchema.parse(rejected.json()).approval,
+    ).toMatchObject({ status: "rejected", approved_payload: null });
+    expect(escalated.statusCode).toBe(200);
+    expect(
+      ApprovalDecisionResponseSchema.parse(escalated.json()).approval.status,
+    ).toBe("escalated");
+  });
+
+  it("returns structured not-found and conflict decision errors", async () => {
+    app = buildApp({ services: makeServices() });
+    const missing = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_missing/approve",
+      headers: authHeaders,
+    });
+    const resolved = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_resolved/approve",
+      headers: authHeaders,
+    });
+
+    expect(missing.statusCode).toBe(404);
+    expect(ApiErrorResponseSchema.parse(missing.json()).error.code).toBe(
+      "RESOURCE_NOT_FOUND",
+    );
+    expect(resolved.statusCode).toBe(409);
+    expect(ApiErrorResponseSchema.parse(resolved.json()).error.code).toBe(
+      "CONFLICT",
+    );
+  });
+
+  it("rejects approval decisions for read-only roles", async () => {
+    app = buildApp({ services: makeServices() });
+    const qaHeaders = { ...authHeaders, "x-user-roles": "qa_reviewer" };
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/approvals/apr_test/approve",
+      headers: qaHeaders,
     });
     const body = ApiErrorResponseSchema.parse(response.json());
 
@@ -1398,6 +1542,68 @@ function makeServices(
           review_notes: null,
           created_at: now,
           resolved_at: null,
+        };
+      },
+      async decide(context, approvalId, decision) {
+        expectTenantContext(context);
+
+        if (approvalId === "apr_missing") {
+          return { outcome: "not_found" };
+        }
+
+        const requestedPayload = {
+          draft: "Where is my order response draft.",
+          risk_reasons: ["v1_default_human_approval"],
+        };
+
+        if (approvalId === "apr_resolved") {
+          return {
+            outcome: "conflict",
+            approval: {
+              approval_id: approvalId,
+              tenant_id: context.tenant.tenantId,
+              ticket_id: "ticket_test",
+              ai_run_id: null,
+              approval_type: "reply",
+              status: "approved",
+              requested_payload: requestedPayload,
+              approved_payload: requestedPayload,
+              reviewer_user_id: "usr_other",
+              review_notes: null,
+              created_at: now,
+              resolved_at: now,
+            },
+          };
+        }
+
+        return {
+          outcome: "resolved",
+          decision: {
+            approval: {
+              approval_id: approvalId,
+              tenant_id: context.tenant.tenantId,
+              ticket_id: "ticket_test",
+              ai_run_id: null,
+              approval_type: "reply",
+              status: decision.status,
+              requested_payload: requestedPayload,
+              approved_payload:
+                decision.status === "edited"
+                  ? (decision.approved_payload ?? {})
+                  : decision.status === "approved"
+                    ? requestedPayload
+                    : null,
+              reviewer_user_id: context.actor.userId,
+              review_notes: decision.review_notes ?? null,
+              created_at: now,
+              resolved_at: now,
+            },
+            workflow_signal: {
+              delivered: true,
+              workflow_id: `ticket-lifecycle:${context.tenant.tenantId}:con_test`,
+              reason: null,
+            },
+          },
         };
       },
     },

@@ -3,6 +3,7 @@ import postgres from "postgres";
 import { createDatabase, type PostgresClient } from "./client.js";
 import {
   activeKbChunksForDocumentQuery,
+  aiRunByIdQuery,
   approvalByIdQuery,
   approvalsListQuery,
   auditEventByIdQuery,
@@ -12,9 +13,13 @@ import {
   conversationByExternalThreadQuery,
   conversationsListQuery,
   conversationByIdQuery,
+  createApprovalQuery,
+  createAuditEventQuery,
   createInboundMessageQuery,
   createKbDocumentQuery,
+  createOutboundMessageQuery,
   customerIdentityByValueQuery,
+  customerIdentityForCustomerQuery,
   deleteKbChunksForDocumentQuery,
   insertKbChunksQuery,
   customersListQuery,
@@ -24,7 +29,9 @@ import {
   kbDocumentsListQuery,
   messageByExternalIdQuery,
   messageByIdQuery,
+  messageByIdempotencyKeyQuery,
   messagesListQuery,
+  resolvePendingApprovalByIdQuery,
   policiesListQuery,
   policyByIdQuery,
   searchKbChunksQuery,
@@ -34,6 +41,7 @@ import {
   ticketByIdQuery,
   updateCustomerByIdQuery,
   updateKbDocumentByIdQuery,
+  updateMessageSendResultByIdQuery,
   updateTicketByIdQuery,
   visibleToolDefinitionByNameQuery,
 } from "./repositories.js";
@@ -608,5 +616,157 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain("on conflict do nothing");
     expect(compiled.sql).toContain("returning");
     expect(compiled.params).toContain("ten_a");
+  });
+
+  it("resolves outbound recipient identities by customer and channel", () => {
+    const query = customerIdentityForCustomerQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      { customerId: "cus_a", channel: "email" },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"customer_identities"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"customer_identities"."customer_id" = $2');
+    expect(compiled.sql).toContain('"customer_identities"."channel" = $3');
+    expect(compiled.sql).toContain("order by");
+    expect(compiled.params).toEqual(["ten_a", "cus_a", "email", 1]);
+  });
+
+  it("reads AI runs by tenant and id for foreign-key linking", () => {
+    const query = aiRunByIdQuery(makeDb(), { tenantId: "ten_a" }, "run_a");
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"ai_runs"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"ai_runs"."ai_run_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "run_a", 1]);
+  });
+
+  it("inserts approvals with conflict-safe retry dedup", () => {
+    const query = createApprovalQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        approvalId: "apr_a",
+        ticketId: "tic_a",
+        aiRunId: null,
+        approvalType: "reply",
+        status: "pending",
+        requestedPayload: { draft_text: "Original draft." },
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "approvals"');
+    expect(compiled.sql).toContain("on conflict do nothing");
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("apr_a");
+  });
+
+  it("resolves approvals only while they are still pending", () => {
+    const query = resolvePendingApprovalByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "apr_a",
+      {
+        status: "approved",
+        reviewerUserId: "usr_reviewer",
+        resolvedAt: new Date("2026-07-04T00:00:00.000Z"),
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "approvals"');
+    expect(compiled.sql).toContain('"approvals"."tenant_id" = ');
+    expect(compiled.sql).toContain('"approvals"."approval_id" = ');
+    expect(compiled.sql).toContain('"approvals"."status" = ');
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("apr_a");
+    expect(compiled.params).toContain("pending");
+  });
+
+  it("reads outbound sends by tenant and idempotency key", () => {
+    const query = messageByIdempotencyKeyQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "outbound:ten_a:tic_a:apr_a",
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"messages"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"messages"."idempotency_key" = $2');
+    expect(compiled.params).toEqual(["ten_a", "outbound:ten_a:tic_a:apr_a", 1]);
+  });
+
+  it("inserts outbound messages with conflict-safe idempotency", () => {
+    const query = createOutboundMessageQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        messageId: "msg_out_a",
+        conversationId: "cnv_a",
+        ticketId: "tic_a",
+        channelId: "chn_a",
+        direction: "outbound",
+        createdByType: "human",
+        bodyText: "Your order shipped yesterday.",
+        sendStatus: "queued",
+        sentByType: "human",
+        approvalId: "apr_a",
+        idempotencyKey: "outbound:ten_a:tic_a:apr_a",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "messages"');
+    expect(compiled.sql).toContain("on conflict do nothing");
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("outbound:ten_a:tic_a:apr_a");
+  });
+
+  it("records terminal outbound send results by tenant and message id", () => {
+    const query = updateMessageSendResultByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "msg_out_a",
+      {
+        sendStatus: "sent",
+        providerMessageId: "provider-out-1",
+        sentAt: new Date("2026-07-04T00:00:00.000Z"),
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "messages"');
+    expect(compiled.sql).toContain('"messages"."tenant_id" = ');
+    expect(compiled.sql).toContain('"messages"."message_id" = ');
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("msg_out_a");
+    expect(compiled.params).toContain("provider-out-1");
+  });
+
+  it("appends audit events with conflict-safe deterministic ids", () => {
+    const query = createAuditEventQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        auditEventId: "aud_a",
+        actorType: "human",
+        actorId: "usr_reviewer",
+        entityType: "approval",
+        entityId: "apr_a",
+        action: "approval.approved",
+        metadata: { status: "approved" },
+        correlationId: "corr-1",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "audit_events"');
+    expect(compiled.sql).toContain("on conflict do nothing");
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("approval.approved");
   });
 });

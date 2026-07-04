@@ -18,6 +18,7 @@ export type ApiPermission =
   | "kb_documents:write"
   | "kb:search"
   | "approvals:read"
+  | "approvals:review"
   | "audit_events:read"
   | "tickets:read"
   | "tickets:create"
@@ -41,6 +42,7 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "kb_documents:write",
       "kb:search",
       "approvals:read",
+      "approvals:review",
       "audit_events:read",
       "tickets:read",
       "tickets:create",
@@ -60,6 +62,7 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "kb_documents:write",
       "kb:search",
       "approvals:read",
+      "approvals:review",
       "audit_events:read",
       "tickets:read",
       "tickets:create",
@@ -77,6 +80,7 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "kb_documents:write",
       "kb:search",
       "approvals:read",
+      "approvals:review",
       "audit_events:read",
       "tickets:read",
       "tickets:create",

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
+  ApprovalDecisionResponseSchema,
   ApprovalListResponseSchema,
   ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
@@ -36,9 +37,12 @@ import {
   tenantPolicies,
   tenants,
   tickets,
+  users,
   type PostgresClient,
 } from "@support/db";
 import { buildApp } from "./app.js";
+import { createRecordingApprovalWorkflowSignaler } from "./approval-workflow-signaler.js";
+import { createDatabaseApiServices } from "./services.js";
 
 const describeLive =
   process.env.RUN_API_INTEGRATION_TESTS === "true" ? describe : describe.skip;
@@ -63,6 +67,11 @@ const ids = {
   kbDocumentB: `${fixturePrefix}_kbd_b`,
   approvalA: `${fixturePrefix}_apr_a`,
   approvalB: `${fixturePrefix}_apr_b`,
+  approvalApprove: `${fixturePrefix}_apr_approve`,
+  approvalEdit: `${fixturePrefix}_apr_edit`,
+  approvalReject: `${fixturePrefix}_apr_reject`,
+  approvalEscalate: `${fixturePrefix}_apr_escalate`,
+  reviewerUser: `${fixturePrefix}_usr`,
   auditA: `${fixturePrefix}_aud_a`,
   auditB: `${fixturePrefix}_aud_b`,
   ticketA: `${fixturePrefix}_tic_a`,
@@ -74,6 +83,7 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
   let app: FastifyInstance | undefined;
   let client: PostgresClient | undefined;
   let db: ReturnType<typeof createDatabase>;
+  const approvalSignaler = createRecordingApprovalWorkflowSignaler();
 
   beforeAll(async () => {
     if (!process.env.DATABASE_URL) {
@@ -88,7 +98,9 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     await migrateDatabase(client);
     await seedFixtures(db);
 
-    app = buildApp();
+    app = buildApp({
+      services: createDatabaseApiServices({ approvalSignaler }),
+    });
   });
 
   afterAll(async () => {
@@ -626,6 +638,173 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
       status: "new",
     });
   });
+
+  it("approves a pending approval, audits the decision, and signals the workflow", async () => {
+    const response = await app!.inject({
+      method: "POST",
+      url: `/v1/approvals/${ids.approvalApprove}/approve`,
+      headers: authHeaders("support_agent"),
+      payload: { review_notes: "Verified against the order record." },
+    });
+    const body = ApprovalDecisionResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.approval).toMatchObject({
+      approval_id: ids.approvalApprove,
+      tenant_id: ids.tenantA,
+      status: "approved",
+      reviewer_user_id: ids.reviewerUser,
+      review_notes: "Verified against the order record.",
+    });
+    expect(body.approval.approved_payload).toEqual(
+      body.approval.requested_payload,
+    );
+    expect(body.approval.resolved_at).not.toBeNull();
+    expect(body.workflow_signal).toEqual({
+      delivered: true,
+      workflow_id: `ticket-lifecycle:${ids.tenantA}:${ids.conversationA}`,
+      reason: null,
+    });
+    expect(approvalSignaler.calls.at(-1)).toMatchObject({
+      workflowId: `ticket-lifecycle:${ids.tenantA}:${ids.conversationA}`,
+      signal: {
+        approval_id: ids.approvalApprove,
+        status: "approved",
+        actor_id: ids.reviewerUser,
+        notes: "Verified against the order record.",
+      },
+    });
+
+    const auditResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/audit-events?entity_type=approval&entity_id=${ids.approvalApprove}&action=approval.approved&limit=10`,
+      headers: authHeaders("support_agent"),
+    });
+    const auditBody = AuditEventListResponseSchema.parse(auditResponse.json());
+
+    expect(auditBody.audit_events).toHaveLength(1);
+    expect(auditBody.audit_events[0]!).toMatchObject({
+      actor_type: "human",
+      actor_id: ids.reviewerUser,
+      entity_type: "approval",
+      entity_id: ids.approvalApprove,
+      action: "approval.approved",
+    });
+  });
+
+  it("conflicts on double-deciding an already-resolved approval", async () => {
+    const response = await app!.inject({
+      method: "POST",
+      url: `/v1/approvals/${ids.approvalApprove}/reject`,
+      headers: authHeaders("support_agent"),
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(409);
+    expect(body.error.code).toBe("CONFLICT");
+
+    const readBack = await app!.inject({
+      method: "GET",
+      url: `/v1/approvals/${ids.approvalApprove}`,
+      headers: authHeaders("support_agent"),
+    });
+
+    expect(
+      ApprovalResourceResponseSchema.parse(readBack.json()).approval.status,
+    ).toBe("approved");
+  });
+
+  it("stores the human edit alongside the preserved AI draft for eval and QA", async () => {
+    const response = await app!.inject({
+      method: "POST",
+      url: `/v1/approvals/${ids.approvalEdit}/edit`,
+      headers: authHeaders("support_agent"),
+      payload: {
+        approved_payload: { draft_text: "Softer, corrected response." },
+        review_notes: "Fixed the refund window wording.",
+      },
+    });
+    const body = ApprovalDecisionResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.approval.status).toBe("edited");
+    expect(body.approval.approved_payload).toEqual({
+      draft_text: "Softer, corrected response.",
+    });
+    expect(body.approval.requested_payload).toMatchObject({
+      draft: "Tenant A API approval decision draft.",
+    });
+
+    const auditResponse = await app!.inject({
+      method: "GET",
+      url: `/v1/audit-events?entity_type=approval&entity_id=${ids.approvalEdit}&action=approval.edited&limit=10`,
+      headers: authHeaders("support_agent"),
+    });
+    const auditBody = AuditEventListResponseSchema.parse(auditResponse.json());
+
+    expect(auditBody.audit_events).toHaveLength(1);
+    expect(auditBody.audit_events[0]!.metadata).toMatchObject({
+      requested_payload: {
+        draft: "Tenant A API approval decision draft.",
+        risk_reasons: ["v1_default_human_approval"],
+      },
+      approved_payload: { draft_text: "Softer, corrected response." },
+      review_notes: "Fixed the refund window wording.",
+    });
+  });
+
+  it("rejects and escalates pending approvals with matching workflow signals", async () => {
+    const rejected = await app!.inject({
+      method: "POST",
+      url: `/v1/approvals/${ids.approvalReject}/reject`,
+      headers: authHeaders("support_agent"),
+      payload: { review_notes: "Draft is wrong; do not send." },
+    });
+    const rejectedBody = ApprovalDecisionResponseSchema.parse(rejected.json());
+
+    expect(rejected.statusCode).toBe(200);
+    expect(rejectedBody.approval).toMatchObject({
+      status: "rejected",
+      approved_payload: null,
+    });
+    expect(approvalSignaler.calls.at(-1)?.signal.status).toBe("rejected");
+
+    const escalated = await app!.inject({
+      method: "POST",
+      url: `/v1/approvals/${ids.approvalEscalate}/escalate`,
+      headers: authHeaders("support_agent"),
+    });
+
+    expect(escalated.statusCode).toBe(200);
+    expect(
+      ApprovalDecisionResponseSchema.parse(escalated.json()).approval.status,
+    ).toBe("escalated");
+    expect(approvalSignaler.calls.at(-1)?.signal.status).toBe("escalated");
+  });
+
+  it("returns 404 for cross-tenant approval decisions", async () => {
+    const response = await app!.inject({
+      method: "POST",
+      url: `/v1/approvals/${ids.approvalB}/approve`,
+      headers: authHeaders("support_agent"),
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(404);
+    expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("denies approval decisions to read-only roles", async () => {
+    const response = await app!.inject({
+      method: "POST",
+      url: `/v1/approvals/${ids.approvalA}/approve`,
+      headers: authHeaders("qa_reviewer"),
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
 });
 
 function authHeaders(role: RoleName) {
@@ -733,6 +912,15 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
     },
   ]);
 
+  await db.insert(users).values([
+    {
+      userId: ids.reviewerUser,
+      tenantId: ids.tenantA,
+      email: `${fixturePrefix}.reviewer@example.test`,
+      displayName: "Tenant A Reviewer",
+    },
+  ]);
+
   await db.insert(approvals).values([
     {
       approvalId: ids.approvalA,
@@ -756,6 +944,22 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
         risk_reasons: ["v1_default_human_approval"],
       },
     },
+    ...[
+      ids.approvalApprove,
+      ids.approvalEdit,
+      ids.approvalReject,
+      ids.approvalEscalate,
+    ].map((approvalId) => ({
+      approvalId,
+      tenantId: ids.tenantA,
+      ticketId: ids.ticketA,
+      approvalType: "reply" as const,
+      status: "pending" as const,
+      requestedPayload: {
+        draft: "Tenant A API approval decision draft.",
+        risk_reasons: ["v1_default_human_approval"],
+      },
+    })),
   ]);
 
   await db.insert(auditEvents).values([
@@ -858,6 +1062,10 @@ async function cleanupFixtures(client: PostgresClient) {
   `;
   await client`
     delete from approvals
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
+  await client`
+    delete from users
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})
   `;
   await client`
