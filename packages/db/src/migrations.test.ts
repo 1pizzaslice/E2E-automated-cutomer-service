@@ -30,6 +30,7 @@ describe("sql migrations", () => {
       "0002_tenant_rls",
       "0003_kb_vector_index",
       "0004_tenant_retention_policy",
+      "0005_message_send_status_enums",
     ]);
     expect(migrations[0]?.sql).toContain(
       "create extension if not exists vector",
@@ -57,6 +58,27 @@ describe("sql migrations", () => {
     expect(migration).toBeDefined();
     expect(migration?.sql).toContain(
       "add column if not exists retention_policy jsonb not null default '{}'::jsonb",
+    );
+  });
+
+  it("converts message send columns to postgres enums", async () => {
+    const migrations = await loadSqlMigrations();
+    const migration = migrations.find(
+      (candidate) => candidate.id === "0005_message_send_status_enums",
+    );
+
+    expect(migration).toBeDefined();
+    expect(migration?.sql).toContain(
+      "create type message_send_status as enum ('queued', 'sent', 'failed', 'canceled')",
+    );
+    expect(migration?.sql).toContain(
+      "create type message_sent_by_type as enum ('human', 'ai_auto', 'system')",
+    );
+    expect(migration?.sql).toContain(
+      "alter column send_status type message_send_status",
+    );
+    expect(migration?.sql).toContain(
+      "alter column sent_by_type type message_sent_by_type",
     );
   });
 

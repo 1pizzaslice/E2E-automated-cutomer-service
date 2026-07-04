@@ -186,6 +186,7 @@ function makeActivityImplementations(): Omit<
       return {
         approval_id: "apr_test",
         status: "pending",
+        expires_in_ms: null,
       };
     },
     async sendOutboundMessage() {
@@ -199,6 +200,16 @@ function makeActivityImplementations(): Omit<
       };
     },
     async recordInboundMessage() {},
+    async applyTicketStateTransition(input) {
+      return {
+        applied: true,
+        from_status: "new",
+        to_status: input.to_status,
+      };
+    },
+    async expireApproval() {
+      return { expired: true, status: "expired" };
+    },
     async recordAuditEvent() {},
   };
 }

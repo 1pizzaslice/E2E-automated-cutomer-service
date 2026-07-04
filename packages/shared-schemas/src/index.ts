@@ -1093,6 +1093,7 @@ export const SupportAuditActionSchema = z.enum([
   "approval.edited",
   "approval.rejected",
   "approval.escalated",
+  "approval.expired",
   "message.sent",
   "message.send_failed",
   "retention.applied",
@@ -1703,6 +1704,12 @@ export type MessageSentEventPayload = z.infer<
 >;
 export type QaReviewCreatedEventPayload = z.infer<
   typeof QaReviewCreatedEventPayloadSchema
+>;
+export type AiRunCompletedEventPayload = z.infer<
+  typeof AiRunCompletedEventPayloadSchema
+>;
+export type ToolCallCompletedEventPayload = z.infer<
+  typeof ToolCallCompletedEventPayloadSchema
 >;
 
 function getDomainEventPayloadSchema(

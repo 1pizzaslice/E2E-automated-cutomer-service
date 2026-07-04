@@ -17,7 +17,9 @@
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "lint": "pnpm -r lint && uv run --frozen --project ai python -m compileall -q ai/runtime ai/evals",
     "test": "pnpm -r test && pnpm test:py",
+    "test:e2e": "pnpm --filter @support/workers test:e2e",
     "test:integration": "pnpm --filter @support/db test:integration && pnpm --filter @support/api test:integration && pnpm --filter @support/workers test:integration",
+    "worker:start": "pnpm --filter @support/workers start",
     "test:py": "uv run --frozen --project ai python -m unittest discover -s ai -p '*_test.py'",
     "typecheck": "pnpm -r typecheck",
     "db:seed:pilot": "pnpm --filter @support/db seed:pilot"

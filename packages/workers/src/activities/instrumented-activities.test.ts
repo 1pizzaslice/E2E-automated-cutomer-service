@@ -48,9 +48,16 @@ function makeActivities(
     createApproval: async () => ({
       approval_id: "apr_test",
       status: "pending",
+      expires_in_ms: null,
     }),
     sendOutboundMessage: async () => SUCCEEDED_SEND,
     recordInboundMessage: async () => {},
+    applyTicketStateTransition: async (input) => ({
+      applied: true,
+      from_status: "new",
+      to_status: input.to_status,
+    }),
+    expireApproval: async () => ({ expired: true, status: "expired" }),
     recordAuditEvent: async () => {},
     emitDomainEvent: async () => {},
     ...overrides,

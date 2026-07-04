@@ -129,7 +129,11 @@ describe("createApproval activity", () => {
 
     const result = await activities.createApproval(createApprovalInput);
 
-    expect(result).toEqual({ approval_id: APPROVAL, status: "pending" });
+    expect(result).toEqual({
+      approval_id: APPROVAL,
+      status: "pending",
+      expires_in_ms: null,
+    });
     const approvals = store.listApprovals();
     expect(approvals).toHaveLength(1);
     expect(approvals[0]).toMatchObject({

@@ -48,13 +48,16 @@ import {
   type NewQaReview,
   type NewTenant,
   type NewTicket,
+  type NewTicketEvent,
   type NewToolCall,
   type TenantPolicy,
   type Ticket,
   type ToolCall,
   policyVersions,
+  slaPolicies,
   tenantPolicies,
   tenants,
+  ticketEvents,
   tickets,
   toolCalls,
   toolDefinitions,
@@ -383,6 +386,104 @@ export function updateTicketByIdQuery(
     .set(values)
     .where(
       and(eq(tickets.tenantId, scope.tenantId), eq(tickets.ticketId, ticketId)),
+    )
+    .returning();
+}
+
+/**
+ * Conflict-safe ticket creation for the workflow's deterministic
+ * `tkt_{conversation_id}` id: a Temporal activity retry that lost the race
+ * matches zero rows and the caller reads the existing ticket back instead of
+ * failing on the primary key.
+ */
+export function createTicketIfAbsentQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewTicket, "tenantId">,
+) {
+  return db
+    .insert(tickets)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+/**
+ * The tenant's active SLA policy, oldest first so the selection is stable
+ * when several are active (the pilot seed activates exactly one).
+ */
+export function activeSlaPolicyForTenantQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+) {
+  return db
+    .select()
+    .from(slaPolicies)
+    .where(
+      and(
+        eq(slaPolicies.tenantId, scope.tenantId),
+        eq(slaPolicies.status, "active"),
+      ),
+    )
+    .orderBy(asc(slaPolicies.createdAt), asc(slaPolicies.slaPolicyId))
+    .limit(1);
+}
+
+/**
+ * Append-only ticket event (BACKEND_SPEC section 6.3): every workflow-owned
+ * status transition writes one. Deterministic ids + `onConflictDoNothing`
+ * make Temporal activity retries replay instead of duplicating.
+ */
+export function createTicketEventQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewTicketEvent, "tenantId">,
+) {
+  return db
+    .insert(ticketEvents)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+export function ticketEventsForTicketQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  ticketId: string,
+) {
+  return db
+    .select()
+    .from(ticketEvents)
+    .where(
+      and(
+        eq(ticketEvents.tenantId, scope.tenantId),
+        eq(ticketEvents.ticketId, ticketId),
+      ),
+    )
+    .orderBy(asc(ticketEvents.createdAt), asc(ticketEvents.ticketEventId));
+}
+
+/**
+ * Link an intake-persisted message row to its workflow-owned ticket. The
+ * guard accepts unlinked rows and idempotent replays (already linked to the
+ * same ticket); a row linked to a different ticket matches zero rows so the
+ * caller can surface the integrity violation instead of overwriting it.
+ */
+export function linkMessageToTicketByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  messageId: string,
+  ticketId: string,
+) {
+  return db
+    .update(messages)
+    .set({ ticketId })
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        eq(messages.messageId, messageId),
+        or(isNull(messages.ticketId), eq(messages.ticketId, ticketId)),
+      ),
     )
     .returning();
 }

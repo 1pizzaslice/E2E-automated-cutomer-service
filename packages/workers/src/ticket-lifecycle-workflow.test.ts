@@ -99,12 +99,16 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "emitDomainEvent:ticket_created",
       "runInitialTriage",
       "emitDomainEvent:ticket_state_transition",
+      "applyTicketStateTransition:waiting_ai",
       "runAiGraph",
+      "emitDomainEvent:ai_run_completed",
       "createApproval",
+      "applyTicketStateTransition:waiting_human",
       "recordAuditEvent:approval.completed",
       "sendOutboundMessage",
       "emitDomainEvent:message_sent",
       "recordAuditEvent:message.sent",
+      "applyTicketStateTransition:waiting_customer",
     ]);
     expect(calls.find((call) => call.name === "createApproval")).toEqual(
       expect.objectContaining({
@@ -256,8 +260,11 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "emitDomainEvent:ticket_created",
       "runInitialTriage",
       "emitDomainEvent:ticket_state_transition",
+      "applyTicketStateTransition:waiting_ai",
       "runAiGraph",
+      "emitDomainEvent:ai_run_completed",
       "createApproval",
+      "applyTicketStateTransition:waiting_human",
       "emitDomainEvent:ticket_sla_breached",
       "recordAuditEvent:ticket.sla_breached",
     ]);
@@ -329,13 +336,17 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "emitDomainEvent:ticket_created",
       "runInitialTriage",
       "emitDomainEvent:ticket_state_transition",
+      "applyTicketStateTransition:waiting_ai",
       "runAiGraph",
       "recordAuditEvent:ai_graph.failed",
+      "emitDomainEvent:ai_run_completed",
       "createApproval",
+      "applyTicketStateTransition:waiting_human",
       "recordAuditEvent:approval.completed",
       "sendOutboundMessage",
       "emitDomainEvent:message_sent",
       "recordAuditEvent:message.sent",
+      "applyTicketStateTransition:waiting_customer",
     ]);
     expect(calls.find((call) => call.name === "createApproval")).toEqual(
       expect.objectContaining({
@@ -395,12 +406,16 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "emitDomainEvent:ticket_created",
       "runInitialTriage",
       "emitDomainEvent:ticket_state_transition",
+      "applyTicketStateTransition:waiting_ai",
       "runAiGraph",
+      "emitDomainEvent:ai_run_completed",
       "createApproval",
+      "applyTicketStateTransition:waiting_human",
       "recordAuditEvent:approval.completed",
       "sendOutboundMessage",
       "emitDomainEvent:message_sent",
       "recordAuditEvent:message.sent",
+      "applyTicketStateTransition:waiting_customer",
     ]);
     expect(calls.find((call) => call.name === "sendOutboundMessage")).toEqual(
       expect.objectContaining({
@@ -454,8 +469,11 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "emitDomainEvent:ticket_created",
       "runInitialTriage",
       "emitDomainEvent:ticket_state_transition",
+      "applyTicketStateTransition:waiting_ai",
       "runAiGraph",
+      "emitDomainEvent:ai_run_completed",
       "createApproval",
+      "applyTicketStateTransition:waiting_human",
       "recordAuditEvent:approval.completed",
     ]);
     expect(calls.some((call) => call.name === "sendOutboundMessage")).toBe(
@@ -507,8 +525,11 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
       "emitDomainEvent:ticket_created",
       "runInitialTriage",
       "emitDomainEvent:ticket_state_transition",
+      "applyTicketStateTransition:waiting_ai",
       "runAiGraph",
+      "emitDomainEvent:ai_run_completed",
       "createApproval",
+      "applyTicketStateTransition:waiting_human",
       "recordAuditEvent:approval.completed",
       "recordAuditEvent:ticket.manual_escalated",
     ]);
@@ -592,6 +613,141 @@ describeTemporalWorkflow("ticketLifecycleWorkflow", () => {
     );
     expect(sendIndex).toBeGreaterThan(approvalAuditIndex);
   });
+
+  it("expires an undecided approval after the configured wait and returns to the human queue", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls, { approvalExpiresInMs: 5 }),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      return await handle.result();
+    });
+
+    expect(result.phase).toBe("approval_expired");
+    expect(result.approval_status).toBeNull();
+    expect(result.outbound_message_id).toBeNull();
+    expect(calls.some((call) => call.name === "expireApproval")).toBe(true);
+    expect(calls.some((call) => call.name === "sendOutboundMessage")).toBe(
+      false,
+    );
+  });
+
+  it("keeps waiting for the decision signal when a reviewer beats the expiry timer", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls, {
+        approvalExpiresInMs: 5,
+        // The store reports the approval already decided: expiry lost the
+        // race and the workflow must wait for the decision signal instead.
+        expireApprovalResult: { expired: false, status: "approved" },
+      }),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      const startedAt = Date.now();
+      while (
+        !calls.some((call) => call.name === "expireApproval") &&
+        Date.now() - startedAt < 5_000
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(calls.some((call) => call.name === "expireApproval")).toBe(true);
+
+      await handle.signal("approval_completed", {
+        approval_id: "apr_test",
+        status: "approved",
+        actor_id: "usr_approver",
+        decided_at: "2026-06-26T00:10:00.000Z",
+        notes: null,
+      });
+
+      return await handle.result();
+    });
+
+    expect(result.phase).toBe("responded");
+    expect(result.approval_status).toBe("approved");
+    expect(result.outbound_message_id).toBe("msg_outbound_test");
+  });
+
+  it("closes the ticket on a close request with a persisted transition and domain event", async () => {
+    const calls: ActivityCall[] = [];
+    const taskQueue = `ticket-lifecycle-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: workflowsPath(),
+      activities: makeActivities(calls),
+    });
+
+    const result = await worker.runUntil(async () => {
+      const handle = await testEnv.client.workflow.start(
+        ticketLifecycleWorkflow,
+        {
+          taskQueue,
+          workflowId: `ticket-lifecycle-${randomUUID()}`,
+          args: [makeWorkflowInput()],
+        },
+      );
+
+      await waitForWorkflowState(
+        handle,
+        (state) => state.phase === "waiting_for_approval",
+      );
+
+      await handle.signal("close_requested", {
+        requested_by_actor_id: "usr_ops",
+        reason_code: "duplicate_ticket",
+        requested_at: "2026-06-26T00:10:00.000Z",
+      });
+
+      return await handle.result();
+    });
+
+    expect(result.phase).toBe("closed");
+    expect(result.close_reason_code).toBe("duplicate_ticket");
+    expect(result.outbound_message_id).toBeNull();
+    expect(calls.map((call) => call.name)).toEqual([
+      "createOrUpdateTicket",
+      "emitDomainEvent:ticket_created",
+      "runInitialTriage",
+      "emitDomainEvent:ticket_state_transition",
+      "applyTicketStateTransition:waiting_ai",
+      "runAiGraph",
+      "emitDomainEvent:ai_run_completed",
+      "createApproval",
+      "applyTicketStateTransition:waiting_human",
+      "applyTicketStateTransition:closed",
+      "emitDomainEvent:ticket_state_transition",
+      "recordAuditEvent:ticket.close_requested",
+    ]);
+  });
 });
 
 interface ActivityCall {
@@ -613,12 +769,25 @@ interface ActivityFixtureOptions {
     readonly timer_ms: number;
   };
   readonly aiGraphResult?: RunAiGraphActivityResult;
+  readonly approvalExpiresInMs?: number | null;
+  readonly expireApprovalResult?: { expired: boolean; status: string };
 }
 
 function makeActivities(
   calls: ActivityCall[],
   options: ActivityFixtureOptions = {},
 ): TicketLifecycleActivities {
+  let ticketStatus:
+    | "new"
+    | "triaged"
+    | "waiting_ai"
+    | "waiting_human"
+    | "waiting_customer"
+    | "resolved"
+    | "closed"
+    | "reopened"
+    | "failed" = "new";
+
   return {
     async createOrUpdateTicket() {
       calls.push({ name: "createOrUpdateTicket" });
@@ -677,6 +846,7 @@ function makeActivities(
       return {
         approval_id: "apr_test",
         status: "pending",
+        expires_in_ms: options.approvalExpiresInMs ?? null,
       };
     },
     async sendOutboundMessage(input) {
@@ -699,6 +869,22 @@ function makeActivities(
         name: "recordInboundMessage",
         message_id: input.message.message_id,
       });
+    },
+    async applyTicketStateTransition(input) {
+      calls.push({ name: `applyTicketStateTransition:${input.to_status}` });
+      const fromStatus = ticketStatus;
+      ticketStatus = input.to_status;
+      return {
+        applied: fromStatus !== input.to_status,
+        from_status: fromStatus,
+        to_status: input.to_status,
+      };
+    },
+    async expireApproval() {
+      calls.push({ name: "expireApproval" });
+      return (
+        options.expireApprovalResult ?? { expired: true, status: "expired" }
+      );
     },
     async recordAuditEvent(input) {
       calls.push({ name: `recordAuditEvent:${input.action}` });

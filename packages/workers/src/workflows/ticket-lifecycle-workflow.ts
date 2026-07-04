@@ -156,6 +156,16 @@ export async function ticketLifecycleWorkflow(
 
   if (triage.route === "manual_escalation") {
     phase = "manual_escalated";
+    await activities.applyTicketStateTransition({
+      tenant_id: input.tenant_id,
+      ticket_id: input.ticket_id,
+      correlation_id: input.correlation_id,
+      to_status: "waiting_human",
+      reason_code: triage.reason_code,
+      metadata: { source: "triage" },
+      actor: workflowActor(),
+      transition_key: "manual-escalation-triage",
+    });
     await recordAuditEvent({
       tenant_id: input.tenant_id,
       ticket_id: input.ticket_id,
@@ -172,6 +182,16 @@ export async function ticketLifecycleWorkflow(
   }
 
   phase = "running_ai";
+  await activities.applyTicketStateTransition({
+    tenant_id: input.tenant_id,
+    ticket_id: input.ticket_id,
+    correlation_id: input.correlation_id,
+    to_status: "waiting_ai",
+    reason_code: "ai_drafting",
+    metadata: { source: "workflow" },
+    actor: workflowActor(),
+    transition_key: "ai-drafting",
+  });
   aiGraphResult = await activities.runAiGraph({
     ...input,
     ticket: ticketResult.ticket,
@@ -196,6 +216,8 @@ export async function ticketLifecycleWorkflow(
     });
   }
 
+  await emitAiGraphCompletionEvents(input, aiGraphResult);
+
   phase = "waiting_for_approval";
   const approval = await activities.createApproval({
     tenant_id: input.tenant_id,
@@ -205,16 +227,71 @@ export async function ticketLifecycleWorkflow(
     metadata: approvalMetadata(triage, aiGraphResult),
   });
   approvalId = approval.approval_id;
+  await activities.applyTicketStateTransition({
+    tenant_id: input.tenant_id,
+    ticket_id: input.ticket_id,
+    correlation_id: input.correlation_id,
+    to_status: "waiting_human",
+    reason_code: "approval_requested",
+    metadata: {
+      approval_id: approval.approval_id,
+      ai_status: aiGraphResult.status,
+    },
+    actor: workflowActor(),
+    transition_key: "approval-requested",
+  });
 
-  const approvalWaitResult = await waitForApprovalSignalOrFirstResponseSla(
+  const signalReceived = () =>
+    signalState.approvalResult !== null ||
+    signalState.manualEscalation !== null ||
+    signalState.closeRequest !== null;
+  const waitStartMs = Date.now();
+  const slaDeadlineAtMs = computeSlaDeadlineAtMs(
     firstResponseSlaTimer,
-    () =>
-      signalState.approvalResult !== null ||
-      signalState.manualEscalation !== null ||
-      signalState.closeRequest !== null,
+    waitStartMs,
+  );
+  const expiryDeadlineAtMs = computeApprovalExpiryDeadlineAtMs(
+    approval.expires_in_ms,
+    waitStartMs,
   );
 
-  if (approvalWaitResult === "sla_breached" && firstResponseSlaTimer !== null) {
+  let approvalWaitResult = await waitForApprovalOutcome(
+    slaDeadlineAtMs,
+    expiryDeadlineAtMs,
+    signalReceived,
+  );
+  let approvalExpired = false;
+
+  if (approvalWaitResult === "approval_expired") {
+    const expiry = await activities.expireApproval({
+      tenant_id: input.tenant_id,
+      ticket_id: input.ticket_id,
+      correlation_id: input.correlation_id,
+      approval_id: approval.approval_id,
+    });
+
+    if (expiry.expired) {
+      approvalExpired = true;
+    } else {
+      // A reviewer decision won the race. The API signals after commit, so
+      // keep waiting for it (without the expiry timer).
+      approvalWaitResult = await waitForApprovalOutcome(
+        slaDeadlineAtMs,
+        null,
+        signalReceived,
+      );
+    }
+  }
+
+  if (approvalExpired) {
+    // BACKEND_SPEC section 12: expired approvals return the ticket to the
+    // human queue. The ticket already sits in `waiting_human`; the expiry
+    // audit is written by the `expireApproval` activity.
+    phase = "approval_expired";
+  } else if (
+    approvalWaitResult === "sla_breached" &&
+    firstResponseSlaTimer !== null
+  ) {
     slaBreach = firstResponseSlaTimer;
     phase = "sla_breached";
     await emitDomainEvent({
@@ -265,6 +342,46 @@ export async function ticketLifecycleWorkflow(
   } else if (signalState.closeRequest !== null) {
     const closeRequest = signalState.closeRequest;
     phase = "closed";
+    const closeTransition = await activities.applyTicketStateTransition({
+      tenant_id: input.tenant_id,
+      ticket_id: input.ticket_id,
+      correlation_id: input.correlation_id,
+      to_status: "closed",
+      reason_code: closeRequest.reason_code,
+      metadata: {
+        requested_by_actor_id: closeRequest.requested_by_actor_id,
+        requested_at: closeRequest.requested_at,
+      },
+      actor: {
+        type: "human",
+        id: closeRequest.requested_by_actor_id,
+      },
+      transition_key: "close-requested",
+    });
+
+    if (closeTransition.applied) {
+      await emitDomainEvent({
+        event_type: "ticket_state_transition",
+        event_id: buildWorkflowEventId(input, "ticket-closed"),
+        tenant_id: input.tenant_id,
+        correlation_id: input.correlation_id,
+        causation_id: input.initial_message_id,
+        actor: {
+          type: "human",
+          id: closeRequest.requested_by_actor_id,
+        },
+        event_name: "support.ticket.closed.v1",
+        ticket_id: input.ticket_id,
+        from_status: closeTransition.from_status,
+        to_status: "closed",
+        reason_code: closeRequest.reason_code,
+        metadata: {
+          requested_by_actor_id: closeRequest.requested_by_actor_id,
+          requested_at: closeRequest.requested_at,
+        },
+      });
+    }
+
     await recordAuditEvent({
       tenant_id: input.tenant_id,
       ticket_id: input.ticket_id,
@@ -345,6 +462,19 @@ export async function ticketLifecycleWorkflow(
           sent_at: outbound.sent_at,
         },
       });
+      await activities.applyTicketStateTransition({
+        tenant_id: input.tenant_id,
+        ticket_id: input.ticket_id,
+        correlation_id: input.correlation_id,
+        to_status: "waiting_customer",
+        reason_code: "response_sent",
+        metadata: {
+          message_id: outbound.message_id,
+          approval_id: approvalResult.approval_id,
+        },
+        actor: workflowActor(),
+        transition_key: "response-sent",
+      });
       phase = "responded";
     } else if (approvalResult.status === "escalated") {
       phase = "manual_escalated";
@@ -389,31 +519,164 @@ async function recordReceivedMessage(
   });
 }
 
-async function waitForApprovalSignalOrFirstResponseSla(
+function computeSlaDeadlineAtMs(
   timer: TicketLifecycleSlaTimer | null,
-  signalReceived: () => boolean,
-): Promise<"signal_received" | "sla_breached"> {
-  if (signalReceived()) {
-    return "signal_received";
-  }
-
+  startMs: number,
+): number | null {
   if (timer === null) {
-    await condition(signalReceived);
-    return "signal_received";
+    return null;
   }
 
   if (!Number.isFinite(timer.timer_ms)) {
     throw new Error(`Invalid SLA timer duration: ${timer.timer_ms}`);
   }
 
-  if (timer.timer_ms <= 0) {
-    return "sla_breached";
+  return startMs + Math.trunc(timer.timer_ms);
+}
+
+function computeApprovalExpiryDeadlineAtMs(
+  expiresInMs: number | null,
+  startMs: number,
+): number | null {
+  if (expiresInMs === null) {
+    return null;
   }
 
-  const timerMs = Math.trunc(timer.timer_ms);
-  const signaledBeforeDeadline = await condition(signalReceived, timerMs);
+  if (!Number.isFinite(expiresInMs) || expiresInMs <= 0) {
+    throw new Error(`Invalid approval expiry duration: ${expiresInMs}`);
+  }
 
-  return signaledBeforeDeadline ? "signal_received" : "sla_breached";
+  return startMs + Math.trunc(expiresInMs);
+}
+
+/**
+ * Race the reviewer/escalation/close signals against the first-response SLA
+ * timer and the approval-expiry timer. The earliest pending deadline arms a
+ * single Temporal timer; deadlines already in the past fire immediately. On
+ * an SLA/expiry tie the SLA breach wins so its incident handling runs first.
+ */
+async function waitForApprovalOutcome(
+  slaDeadlineAtMs: number | null,
+  expiryDeadlineAtMs: number | null,
+  signalReceived: () => boolean,
+): Promise<"signal_received" | "sla_breached" | "approval_expired"> {
+  if (signalReceived()) {
+    return "signal_received";
+  }
+
+  const deadlines: {
+    readonly kind: "sla_breached" | "approval_expired";
+    readonly atMs: number;
+  }[] = [];
+
+  if (slaDeadlineAtMs !== null) {
+    deadlines.push({ kind: "sla_breached", atMs: slaDeadlineAtMs });
+  }
+  if (expiryDeadlineAtMs !== null) {
+    deadlines.push({ kind: "approval_expired", atMs: expiryDeadlineAtMs });
+  }
+
+  if (deadlines.length === 0) {
+    await condition(signalReceived);
+    return "signal_received";
+  }
+
+  deadlines.sort((left, right) => left.atMs - right.atMs);
+  const next = deadlines[0]!;
+  const remainingMs = next.atMs - Date.now();
+
+  if (remainingMs <= 0) {
+    return next.kind;
+  }
+
+  const signaledBeforeDeadline = await condition(signalReceived, remainingMs);
+
+  return signaledBeforeDeadline ? "signal_received" : next.kind;
+}
+
+/**
+ * Emit `support.ai_run.completed.v1` (and one
+ * `support.tool_call.completed.v1` per executed tool call) after the AI
+ * graph activity returns. Failed runs are emitted too — their persisted run
+ * id is backfilled deterministically by `createPersistedRunAiGraph`; a null
+ * id means nothing was persisted, so there is nothing to reference.
+ */
+async function emitAiGraphCompletionEvents(
+  input: TicketLifecycleWorkflowInput,
+  aiGraphResult: RunAiGraphActivityResult,
+): Promise<void> {
+  const aiRunId = aiGraphResult.ai_run_id;
+
+  if (aiRunId === null) {
+    return;
+  }
+
+  await emitDomainEvent({
+    event_type: "ai_run_completed",
+    event_id: buildWorkflowEventId(input, "ai-run-completed"),
+    tenant_id: input.tenant_id,
+    correlation_id: input.correlation_id,
+    causation_id: input.initial_message_id,
+    actor: workflowActor(),
+    ai_run_id: aiRunId,
+    ticket_id: input.ticket_id,
+    status: aiGraphResult.status,
+    metadata:
+      aiGraphResult.status === "succeeded"
+        ? {
+            trace_id: aiGraphResult.trace_id,
+            automation_mode: aiGraphResult.final_recommendation.automation_mode,
+            risk_level: aiGraphResult.final_recommendation.risk_level,
+            confidence: aiGraphResult.final_recommendation.confidence,
+          }
+        : {
+            trace_id: aiGraphResult.trace_id,
+            error_code: aiGraphResult.error_code,
+            retryable: aiGraphResult.retryable,
+          },
+  });
+
+  if (aiGraphResult.status !== "succeeded") {
+    return;
+  }
+
+  for (const [index, toolCall] of aiGraphResult.tool_calls.entries()) {
+    const summary = summarizeToolCall(toolCall, index);
+    await emitDomainEvent({
+      event_type: "tool_call_completed",
+      event_id: buildWorkflowEventId(input, `tool-call-${summary.toolCallId}`),
+      tenant_id: input.tenant_id,
+      correlation_id: input.correlation_id,
+      causation_id: aiRunId,
+      actor: workflowActor(),
+      tool_call_id: summary.toolCallId,
+      ticket_id: input.ticket_id,
+      tool_name: summary.toolName,
+      status: summary.status,
+      metadata: { ai_run_id: aiRunId },
+    });
+  }
+}
+
+/**
+ * The AI graph reports tool calls as loosely-typed records (the Milestone 8
+ * envelope). Read the identifying fields defensively so a malformed entry
+ * degrades to a labeled placeholder instead of failing the emission.
+ */
+function summarizeToolCall(
+  toolCall: Record<string, unknown>,
+  index: number,
+): { toolCallId: string; toolName: string; status: string } {
+  const readString = (key: string): string | null => {
+    const value = toolCall[key];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  };
+
+  return {
+    toolCallId: readString("tool_call_id") ?? `index-${index}`,
+    toolName: readString("tool_name") ?? readString("name") ?? "unknown",
+    status: readString("status") ?? "unknown",
+  };
 }
 
 function approvalReasonCode(

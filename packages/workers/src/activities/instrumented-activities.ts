@@ -123,6 +123,8 @@ export function instrumentTicketLifecycleActivities(
     createApproval: wrap("createApproval"),
     sendOutboundMessage: wrap("sendOutboundMessage"),
     recordInboundMessage: wrap("recordInboundMessage"),
+    applyTicketStateTransition: wrap("applyTicketStateTransition"),
+    expireApproval: wrap("expireApproval"),
     recordAuditEvent: wrap("recordAuditEvent"),
     emitDomainEvent: wrap("emitDomainEvent"),
   };

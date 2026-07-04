@@ -1,6 +1,7 @@
 import {
   DomainEventEnvelopeSchema,
   TicketStateTransitionEventNameSchema,
+  type AiRunCompletedEventPayload,
   type DomainEventActor,
   type DomainEventEnvelope,
   type DomainEventName,
@@ -11,6 +12,7 @@ import {
   type TicketSlaBreachedEventPayload,
   type TicketStateTransitionEventName,
   type TicketStateTransitionEventPayload,
+  type ToolCallCompletedEventPayload,
 } from "@support/shared-schemas";
 import type {
   DomainEventPublishReceipt,
@@ -49,6 +51,14 @@ export interface MessageSentEventInput extends DomainEventEmissionMetadata {
 
 export interface QaReviewCreatedEventInput extends DomainEventEmissionMetadata {
   readonly payload: QaReviewCreatedEventPayload;
+}
+
+export interface AiRunCompletedEventInput extends DomainEventEmissionMetadata {
+  readonly payload: AiRunCompletedEventPayload;
+}
+
+export interface ToolCallCompletedEventInput extends DomainEventEmissionMetadata {
+  readonly payload: ToolCallCompletedEventPayload;
 }
 
 export function buildMessageReceivedEvent(
@@ -91,6 +101,18 @@ export function buildQaReviewCreatedEvent(
   return buildDomainEventEnvelope("support.qa.review_created.v1", input);
 }
 
+export function buildAiRunCompletedEvent(
+  input: AiRunCompletedEventInput,
+): DomainEventEnvelope {
+  return buildDomainEventEnvelope("support.ai_run.completed.v1", input);
+}
+
+export function buildToolCallCompletedEvent(
+  input: ToolCallCompletedEventInput,
+): DomainEventEnvelope {
+  return buildDomainEventEnvelope("support.tool_call.completed.v1", input);
+}
+
 export async function emitMessageReceivedEvent(
   publisher: DomainEventPublisher,
   input: MessageReceivedEventInput,
@@ -131,6 +153,20 @@ export async function emitQaReviewCreatedEvent(
   input: QaReviewCreatedEventInput,
 ): Promise<DomainEventPublishReceipt> {
   return publisher.publish(buildQaReviewCreatedEvent(input));
+}
+
+export async function emitAiRunCompletedEvent(
+  publisher: DomainEventPublisher,
+  input: AiRunCompletedEventInput,
+): Promise<DomainEventPublishReceipt> {
+  return publisher.publish(buildAiRunCompletedEvent(input));
+}
+
+export async function emitToolCallCompletedEvent(
+  publisher: DomainEventPublisher,
+  input: ToolCallCompletedEventInput,
+): Promise<DomainEventPublishReceipt> {
+  return publisher.publish(buildToolCallCompletedEvent(input));
 }
 
 function buildDomainEventEnvelope(

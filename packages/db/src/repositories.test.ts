@@ -4,6 +4,11 @@ import { createDatabase, type PostgresClient } from "./client.js";
 import {
   activeAutomationPolicyVersionQuery,
   activeKbChunksForDocumentQuery,
+  activeSlaPolicyForTenantQuery,
+  createTicketEventQuery,
+  createTicketIfAbsentQuery,
+  linkMessageToTicketByIdQuery,
+  ticketEventsForTicketQuery,
   aiDraftedTicketsCountQuery,
   aiRunByIdQuery,
   aiRunStatusCountsQuery,
@@ -259,6 +264,100 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain('"tickets"."tenant_id" = $2');
     expect(compiled.sql).toContain('"tickets"."ticket_id" = $3');
     expect(compiled.params).toEqual(["p1", "ten_a", "tic_a"]);
+  });
+
+  it("creates tickets conflict-safely for deterministic workflow ids", () => {
+    const query = createTicketIfAbsentQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        ticketId: "tkt_cnv_a",
+        conversationId: "cnv_a",
+        customerId: "cus_a",
+        openedAt: new Date("2026-07-04T00:00:00.000Z"),
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "tickets"');
+    expect(compiled.sql).toContain("on conflict do nothing");
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("tkt_cnv_a");
+  });
+
+  it("selects the tenant's active sla policy oldest-first", () => {
+    const query = activeSlaPolicyForTenantQuery(makeDb(), {
+      tenantId: "ten_a",
+    });
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"sla_policies"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"sla_policies"."status" = $2');
+    expect(compiled.sql).toContain("order by");
+    expect(compiled.params).toEqual(["ten_a", "active", 1]);
+  });
+
+  it("appends ticket events with conflict-safe deterministic ids", () => {
+    const query = createTicketEventQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        ticketEventId: "tev_a",
+        ticketId: "tkt_cnv_a",
+        eventType: "ticket_state_transition",
+        fromStatus: "new",
+        toStatus: "triaged",
+        actorType: "system",
+        actorId: "workflow",
+        reasonCode: "triage",
+        metadata: {},
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "ticket_events"');
+    expect(compiled.sql).toContain("on conflict do nothing");
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("tev_a");
+    expect(compiled.params).toContain("triaged");
+  });
+
+  it("lists ticket events for a ticket scoped by tenant", () => {
+    const query = ticketEventsForTicketQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "tkt_cnv_a",
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"ticket_events"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"ticket_events"."ticket_id" = $2');
+    expect(compiled.sql).toContain("order by");
+    expect(compiled.params).toEqual(["ten_a", "tkt_cnv_a"]);
+  });
+
+  it("links messages to tickets only when unlinked or replaying", () => {
+    const query = linkMessageToTicketByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "msg_a",
+      "tkt_cnv_a",
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "messages"');
+    expect(compiled.sql).toContain('"messages"."tenant_id" = $2');
+    expect(compiled.sql).toContain('"messages"."message_id" = $3');
+    expect(compiled.sql).toContain('"messages"."ticket_id" is null');
+    expect(compiled.sql).toContain('"messages"."ticket_id" = $4');
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toEqual([
+      "tkt_cnv_a",
+      "ten_a",
+      "msg_a",
+      "tkt_cnv_a",
+    ]);
   });
 
   it("scopes policy reads by tenant", () => {
