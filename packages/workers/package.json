@@ -6,8 +6,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx src/main.ts",
     "test": "vitest run",
     "test:integration": "RUN_WORKER_INTEGRATION_TESTS=true vitest run src/event-bus.integration.test.ts src/activities/ticket-lifecycle-persistence.integration.test.ts",
+    "test:e2e": "RUN_E2E_TICKET_LIFECYCLE_TESTS=true vitest run src/e2e-ticket-lifecycle.integration.test.ts",
     "test:workflow": "RUN_TEMPORAL_WORKFLOW_TESTS=true vitest run src/ticket-lifecycle-workflow.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -23,6 +25,7 @@
     "@temporalio/workflow": "^1.18.1"
   },
   "devDependencies": {
+    "@support/api": "workspace:*",
     "@temporalio/testing": "^1.18.1"
   }
 }

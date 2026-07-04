@@ -79,6 +79,7 @@ export type TicketLifecycleWorkflowPhase =
   | "sending_response"
   | "responded"
   | "manual_escalated"
+  | "approval_expired"
   | "closed"
   | "completed";
 
@@ -224,6 +225,13 @@ export interface CreateApprovalActivityInput {
 export interface CreateApprovalActivityResult {
   readonly approval_id: string;
   readonly status: "pending";
+  /**
+   * How long the workflow should wait for a reviewer decision before the
+   * approval expires (BACKEND_SPEC section 12). Resolved activity-side from
+   * worker configuration so the value is recorded in workflow history and
+   * replays deterministically. `null` disables the expiry timer.
+   */
+  readonly expires_in_ms: number | null;
 }
 
 export type TicketLifecycleOutboundApprovalStatus = "approved" | "edited";
@@ -251,6 +259,51 @@ export interface RecordInboundMessageActivityInput extends TicketLifecycleWorkfl
   readonly message: TicketLifecycleMessageReceivedSignal;
 }
 
+/**
+ * Persist one workflow-owned ticket status transition (BACKEND_SPEC section
+ * 6.2). The store reads the current status as `from_status` (the workflow
+ * owns sequencing, the row owns truth), writes the ticket event and audit
+ * event, and no-ops when the ticket is already in `to_status` so Temporal
+ * retries replay instead of duplicating.
+ */
+export interface ApplyTicketStateTransitionActivityInput {
+  readonly tenant_id: string;
+  readonly ticket_id: string;
+  readonly correlation_id: string;
+  readonly to_status: TicketStatus;
+  readonly reason_code: string | null;
+  readonly metadata: Record<string, unknown>;
+  readonly actor: DomainEventActor;
+  /**
+   * Stable per-transition-point key (e.g. "approval-requested"). Scopes the
+   * deterministic ticket event / audit event ids so distinct transitions in
+   * one workflow never collide while activity retries dedup.
+   */
+  readonly transition_key: string;
+}
+
+export interface ApplyTicketStateTransitionActivityResult {
+  readonly applied: boolean;
+  readonly from_status: TicketStatus;
+  readonly to_status: TicketStatus;
+}
+
+export interface ExpireApprovalActivityInput {
+  readonly tenant_id: string;
+  readonly ticket_id: string;
+  readonly correlation_id: string;
+  readonly approval_id: string;
+}
+
+export interface ExpireApprovalActivityResult {
+  /**
+   * False when a reviewer decision won the race: the approval was no longer
+   * pending, nothing changed, and `status` carries the decision that landed.
+   */
+  readonly expired: boolean;
+  readonly status: string;
+}
+
 export interface RecordAuditEventActivityInput {
   readonly tenant_id: string;
   readonly ticket_id: string;
@@ -268,7 +321,9 @@ export type EmitTicketLifecycleDomainEventActivityInput =
   | EmitTicketCreatedDomainEventInput
   | EmitTicketStateTransitionDomainEventInput
   | EmitTicketSlaBreachedDomainEventInput
-  | EmitMessageSentDomainEventInput;
+  | EmitMessageSentDomainEventInput
+  | EmitAiRunCompletedDomainEventInput
+  | EmitToolCallCompletedDomainEventInput;
 
 export interface EmitTicketCreatedDomainEventInput {
   readonly event_type: "ticket_created";
@@ -320,6 +375,33 @@ export interface EmitMessageSentDomainEventInput {
   readonly ticket_id: string;
   readonly channel_id: string;
   readonly sent_at: string;
+}
+
+export interface EmitAiRunCompletedDomainEventInput {
+  readonly event_type: "ai_run_completed";
+  readonly event_id: string;
+  readonly tenant_id: string;
+  readonly correlation_id: string;
+  readonly causation_id: string;
+  readonly actor: DomainEventActor;
+  readonly ai_run_id: string;
+  readonly ticket_id: string;
+  readonly status: string;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface EmitToolCallCompletedDomainEventInput {
+  readonly event_type: "tool_call_completed";
+  readonly event_id: string;
+  readonly tenant_id: string;
+  readonly correlation_id: string;
+  readonly causation_id: string;
+  readonly actor: DomainEventActor;
+  readonly tool_call_id: string;
+  readonly ticket_id: string;
+  readonly tool_name: string;
+  readonly status: string;
+  readonly metadata: Record<string, unknown>;
 }
 
 export interface TicketLifecycleWorkflowResult {

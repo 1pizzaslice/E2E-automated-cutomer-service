@@ -61,6 +61,20 @@ Non-responsibilities:
 - Direct nondeterministic operations in workflow definitions.
 - Tenant policy hardcoding.
 
+Implementation note (Milestone 13): the production worker entrypoint is
+`packages/workers/src/main.ts` (`pnpm worker:start` /
+`pnpm --filter @support/workers start`). It starts telemetry first, validates
+configuration fail-fast (`loadTicketLifecycleWorkerRuntimeConfig`: required
+`DATABASE_URL`, Temporal connection overrides, `APPROVAL_EXPIRY_MS`), then
+`startTicketLifecycleWorkerRuntime` composes the database persistence store,
+the production ticket/approval/outbound/audit activities, the deterministic
+in-process AI graph behind `createPersistedRunAiGraph` (the Milestone 14
+sidecar replaces the inner implementation only), the HTTP outbound sender,
+NATS JetStream domain event emission (idempotent stream provisioning), and
+`instrumentTicketLifecycleActivities` into `createTicketLifecycleWorker` on
+the `support-ticket-lifecycle` task queue, with graceful SIGINT/SIGTERM
+drain-and-close shutdown.
+
 ### 2.3 AI Runtime Service
 
 Responsibilities:
@@ -345,6 +359,14 @@ Rules:
 - Messages are append-only except redaction metadata.
 - Internal notes must never be sent to customers.
 
+Implementation note (Milestone 13): `messages.send_status`
+(`queued | sent | failed | canceled`) and `messages.sent_by_type`
+(`human | ai_auto | system`) are PostgreSQL enums (migration
+`0005_message_send_status_enums`), closing the Milestone 10 free-text
+follow-up; the value sets mirror the shared-schemas
+`OutboundSendStatusSchema`/`OutboundSentByTypeSchema` contracts that have
+governed every write since Milestone 10.
+
 ## 6. Ticket Model
 
 ### 6.1 Ticket
@@ -426,6 +448,27 @@ Fields:
 - `metadata`
 - `created_at`
 
+Implementation note (Milestone 13): ticket state is workflow-owned and
+persisted through the production ticket lifecycle activities in
+`packages/workers`. `createOrUpdateTicket` creates-or-loads the deterministic
+`tkt_{conversation_id}` row under RLS (linking the intake-persisted initial
+message and stamping SLA due dates from the tenant's active SLA policy),
+`runInitialTriage` persists first-pass topic/subtopic/priority/language and
+moves `new -> triaged` (hard-sensitive keyword hits route to manual
+escalation), `recordInboundMessage` reconciles workflow-signaled inbound
+messages onto the ticket with no duplicate rows (a customer reply moves
+`waiting_customer -> waiting_human`), and the explicit
+`applyTicketStateTransition` activity applies every other workflow-owned
+transition (`waiting_ai` before the AI graph, `waiting_human` on approval
+request, `waiting_customer` after the outbound send, `closed` on close
+request). Every applied transition writes one append-only `ticket_events` row
+(deterministic `tev_` ids so Temporal activity retries replay instead of
+duplicating) plus a canonical audit event (`ticket.created`, `ticket.updated`,
+or `ticket.closed`), and the triaged/resolved/closed transitions additionally
+emit their `support.ticket.*.v1` domain events. Transitions are visible
+through the existing read APIs (`GET /v1/tickets/{id}`,
+`GET /v1/tickets/{id}/audit-events`).
+
 ## 7. SLA Model
 
 ### 7.1 SLA Policy
@@ -451,6 +494,14 @@ Rules:
 - SLA timers are managed by Temporal.
 - SLA deadlines are stored on the ticket for query/reporting.
 - SLA breach emits event and audit.
+
+Implementation note (Milestone 13): `createOrUpdateTicket` resolves the
+tenant's active SLA policy at ticket creation, stamps
+`first_response_due_at`/`next_response_due_at`/`resolution_due_at` onto the
+ticket row, and returns activity-clock-relative timers to the workflow; the
+first-response timer races the approval wait exactly as before (v1 arms only
+the first-response deadline). Tenants without an active policy get no due
+dates and no timer.
 
 ## 8. Policy Model
 
@@ -653,6 +704,19 @@ Rules:
 - Edited approvals preserve original AI draft and human edit.
 - Expired approvals return ticket to human queue.
 
+Implementation note (Milestone 13): approval expiry is timer-driven inside
+the ticket lifecycle workflow. `createApproval` returns the configured
+reviewer-decision window (`expires_in_ms`, from the worker's
+`APPROVAL_EXPIRY_MS`, default 24h, non-positive disables) so the value is
+recorded in workflow history and replays deterministically; the approval wait
+races the decision signals against the first-response SLA timer and the
+expiry deadline. On expiry the `expireApproval` activity resolves the
+approval `pending -> expired` behind the same pending-status guard the API
+decide path uses (a reviewer decision that wins the race is honored and the
+workflow keeps waiting for its signal), audits `approval.expired`, and the
+workflow ends in the `approval_expired` phase with the ticket remaining in
+`waiting_human` — the human queue.
+
 ## 13. Audit Event Model
 
 Fields:
@@ -681,10 +745,13 @@ typed to it at compile time and the API's approval-decision audit write
 validates against it at runtime. Live producers: the ticket lifecycle
 workflow (`ticket.manual_escalated`, `ai_graph.failed`, `ticket.sla_breached`,
 `ticket.close_requested`, `approval.completed`, `message.sent`), the
-persistence activities (`approval.requested`, `message.send_failed`), the API
-decide service (`approval.approved|edited|rejected|escalated`), and the
-retention job (`retention.applied`). Tool calls are audited in the
-`tool_calls` table (§10.2), not in `audit_events`. The taxonomy reserves
+persistence activities (`ticket.created` on workflow ticket creation,
+`ticket.updated`/`ticket.closed` on persisted state transitions,
+`approval.requested`, `approval.expired`, `message.send_failed` — Milestone
+13 added the ticket-transition and expiry producers), the API decide service
+(`approval.approved|edited|rejected|escalated`), and the retention job
+(`retention.applied`). Tool calls are audited in the `tool_calls` table
+(§10.2), not in `audit_events`. The taxonomy reserves
 `policy.created|activated|archived`, `integration.credential_changed`, and
 `permission.granted|revoked` for the corresponding write paths when they
 land; an audit-completeness test drives every live producer and asserts all

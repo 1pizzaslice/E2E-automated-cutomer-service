@@ -1,16 +1,22 @@
 import {
+  emitAiRunCompletedEvent,
   emitMessageSentEvent,
   emitTicketCreatedEvent,
   emitTicketSlaBreachedEvent,
   emitTicketStateTransitionEvent,
+  emitToolCallCompletedEvent,
 } from "../domain-events.js";
 import type { DomainEventPublisher } from "../event-publisher.js";
 import type {
+  ApplyTicketStateTransitionActivityInput,
+  ApplyTicketStateTransitionActivityResult,
   CreateApprovalActivityInput,
   CreateApprovalActivityResult,
   CreateOrUpdateTicketActivityInput,
   CreateOrUpdateTicketActivityResult,
   EmitTicketLifecycleDomainEventActivityInput,
+  ExpireApprovalActivityInput,
+  ExpireApprovalActivityResult,
   RecordAuditEventActivityInput,
   RecordInboundMessageActivityInput,
   RunAiGraphActivityInput,
@@ -36,6 +42,12 @@ export interface TicketLifecycleActivities {
     input: SendOutboundMessageActivityInput,
   ): Promise<SendOutboundMessageActivityResult>;
   recordInboundMessage(input: RecordInboundMessageActivityInput): Promise<void>;
+  applyTicketStateTransition(
+    input: ApplyTicketStateTransitionActivityInput,
+  ): Promise<ApplyTicketStateTransitionActivityResult>;
+  expireApproval(
+    input: ExpireApprovalActivityInput,
+  ): Promise<ExpireApprovalActivityResult>;
   recordAuditEvent(input: RecordAuditEventActivityInput): Promise<void>;
   emitDomainEvent(
     input: EmitTicketLifecycleDomainEventActivityInput,
@@ -113,6 +125,43 @@ export function createTicketLifecycleActivities(
             ticket_id: input.ticket_id,
             channel_id: input.channel_id,
             sent_at: input.sent_at,
+          },
+        });
+        return;
+      }
+
+      if (input.event_type === "ai_run_completed") {
+        await emitAiRunCompletedEvent(dependencies.domainEventPublisher, {
+          event_id: input.event_id,
+          tenant_id: input.tenant_id,
+          correlation_id: input.correlation_id,
+          causation_id: input.causation_id,
+          occurred_at: occurredAt,
+          actor: input.actor,
+          payload: {
+            ai_run_id: input.ai_run_id,
+            ticket_id: input.ticket_id,
+            status: input.status,
+            metadata: input.metadata,
+          },
+        });
+        return;
+      }
+
+      if (input.event_type === "tool_call_completed") {
+        await emitToolCallCompletedEvent(dependencies.domainEventPublisher, {
+          event_id: input.event_id,
+          tenant_id: input.tenant_id,
+          correlation_id: input.correlation_id,
+          causation_id: input.causation_id,
+          occurred_at: occurredAt,
+          actor: input.actor,
+          payload: {
+            tool_call_id: input.tool_call_id,
+            ticket_id: input.ticket_id,
+            tool_name: input.tool_name,
+            status: input.status,
+            metadata: input.metadata,
           },
         });
         return;

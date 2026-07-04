@@ -36,9 +36,11 @@ pnpm test
 pnpm --filter @support/workers test:workflow
 pnpm build
 pnpm test:integration
+pnpm test:e2e
 pnpm db:migrate
 pnpm db:seed:pilot
 pnpm dev
+pnpm worker:start
 pnpm infra:up
 pnpm infra:down
 pnpm test:py
@@ -85,6 +87,20 @@ The live Temporal workflow test is explicit because it requires a running Tempor
 
 ```bash
 TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow
+```
+
+The production worker entrypoint (Milestone 13) composes the persistence activities, the deterministic AI graph, outbound sending, domain event emission, and telemetry into one restart-safe process on the `support-ticket-lifecycle` task queue:
+
+```bash
+DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://127.0.0.1:4222 pnpm worker:start
+```
+
+Configuration is validated fail-fast on boot. `APPROVAL_EXPIRY_MS` sets the reviewer-decision window before pending approvals expire (default 24h; `0` disables expiry); `TEMPORAL_ADDRESS`/`TEMPORAL_NAMESPACE`/`TEMPORAL_TASK_QUEUE` override the Temporal connection.
+
+The committed live end-to-end test drives a signed webhook through the API intake, the running worker entrypoint, an API approval decision, and the outbound send (stubbed provider fetch), asserting the persisted ticket, triage fields, deterministic AI run, ticket events, audit trail, JetStream domain events, and send-once behavior across a worker restart:
+
+```bash
+DATABASE_URL=postgres://support:support@localhost:5432/support NATS_URL=nats://127.0.0.1:4222 pnpm test:e2e
 ```
 
 Services:

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  activeSlaPolicyForTenantQuery,
   aiRunByIdQuery,
   approvalByIdQuery,
   channelByIdQuery,
@@ -9,15 +10,23 @@ import {
   createAuditEventQuery,
   createDatabaseFromEnv,
   createOutboundMessageQuery,
+  createTicketEventQuery,
+  createTicketIfAbsentQuery,
   customerIdentityForCustomerQuery,
+  linkMessageToTicketByIdQuery,
+  messageByIdQuery,
   messageByIdempotencyKeyQuery,
+  resolvePendingApprovalByIdQuery,
   ticketByIdQuery,
   updateMessageSendResultByIdQuery,
+  updateTicketByIdQuery,
   withTenantTransaction,
   type AiRun,
   type Approval,
   type JsonObject,
   type Message,
+  type NewTicket,
+  type Ticket,
 } from "@support/db";
 import {
   createEnvSecretResolver,
@@ -33,25 +42,39 @@ import {
   type NormalizedOutboundMessage,
   type SupportAuditAction,
 } from "@support/shared-schemas";
+import { classifyInitialTriage, escalatePriority } from "../triage.js";
 import type {
+  ApplyTicketStateTransitionActivityInput,
+  ApplyTicketStateTransitionActivityResult,
   CreateApprovalActivityInput,
   CreateApprovalActivityResult,
+  CreateOrUpdateTicketActivityInput,
+  CreateOrUpdateTicketActivityResult,
+  ExpireApprovalActivityInput,
+  ExpireApprovalActivityResult,
   RecordAuditEventActivityInput,
+  RecordInboundMessageActivityInput,
   RunAiGraphActivityInput,
   RunAiGraphActivityResult,
+  RunInitialTriageActivityInput,
+  RunInitialTriageActivityResult,
   SendOutboundMessageActivityInput,
   SendOutboundMessageActivityResult,
+  TicketLifecycleSlaTimer,
+  TicketLifecycleTicketSnapshot,
 } from "../workflows/ticket-lifecycle-types.js";
 
 /**
  * Production implementations for the ticket lifecycle persistence activities:
- * `createApproval`, `sendOutboundMessage`, and `recordAuditEvent`. They sit
- * behind the same activity contracts the workflow already calls, so wiring
- * them into a worker is composing this factory's result into
- * `createTicketLifecycleActivities({ implementations })`. The remaining
- * activity placeholders (`createOrUpdateTicket`, `runInitialTriage`,
- * `runAiGraph`, `recordInboundMessage`) stay caller-supplied until their
- * milestones land.
+ * `createOrUpdateTicket`, `runInitialTriage`, `recordInboundMessage`,
+ * `applyTicketStateTransition`, `expireApproval`, `createApproval`,
+ * `sendOutboundMessage`, and `recordAuditEvent`. They sit behind the same
+ * activity contracts the workflow already calls, so wiring them into a worker
+ * is composing this factory's result into
+ * `createTicketLifecycleActivities({ implementations })`. The one remaining
+ * caller-supplied activity is `runAiGraph` (the deterministic in-process
+ * stand-in lives in `deterministic-ai-graph.ts` until the Milestone 14
+ * sidecar bridge lands).
  */
 
 /**
@@ -183,6 +206,115 @@ export interface OutboundSendContext {
   readonly approval: TicketLifecycleApprovalRecord | null;
 }
 
+export interface TicketLifecycleTicketRecord {
+  readonly ticketId: string;
+  readonly conversationId: string;
+  readonly customerId: string;
+  readonly status: Ticket["status"];
+  readonly priority: Ticket["priority"];
+  readonly automationMode: Ticket["automationMode"];
+  readonly assignedQueue: string | null;
+  readonly assignedUserId: string | null;
+  readonly slaPolicyId: string | null;
+  readonly topic: string | null;
+  readonly subtopic: string | null;
+  readonly language: string | null;
+  readonly openedAt: Date;
+  readonly firstResponseDueAt: Date | null;
+  readonly nextResponseDueAt: Date | null;
+  readonly resolutionDueAt: Date | null;
+  readonly resolvedAt: Date | null;
+  readonly closedAt: Date | null;
+}
+
+export interface CreateOrLoadTicketRecordInput {
+  readonly tenantId: string;
+  readonly ticketId: string;
+  readonly conversationId: string;
+  readonly initialMessageId: string;
+  readonly correlationId: string;
+  readonly openedAt: Date;
+}
+
+export interface CreateOrLoadTicketRecordOutcome {
+  readonly ticket: TicketLifecycleTicketRecord;
+  /** False when the deterministic ticket row already existed (retry/reopen). */
+  readonly created: boolean;
+}
+
+export interface RecordInboundMessageRecordInput {
+  readonly tenantId: string;
+  readonly ticketId: string;
+  readonly conversationId: string;
+  readonly messageId: string;
+  readonly correlationId: string;
+  readonly receivedAt: string;
+}
+
+export interface RecordInboundMessageRecordOutcome {
+  /** True when this call linked the intake-persisted row to the ticket. */
+  readonly linked: boolean;
+  /** Null when the ticket row does not exist yet (link deferred to create). */
+  readonly ticketStatus: Ticket["status"] | null;
+  readonly transition: {
+    readonly fromStatus: Ticket["status"];
+    readonly toStatus: Ticket["status"];
+  } | null;
+}
+
+export interface InboundMessageForTriage {
+  readonly messageId: string;
+  readonly bodyText: string | null;
+}
+
+export interface ApplyInitialTriageRecordInput {
+  readonly tenantId: string;
+  readonly ticketId: string;
+  readonly correlationId: string;
+  readonly priority: Ticket["priority"];
+  readonly topic: string | null;
+  readonly subtopic: string | null;
+  readonly language: string | null;
+  readonly reasonCode: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface ApplyInitialTriageRecordOutcome {
+  readonly ticket: TicketLifecycleTicketRecord;
+  readonly fromStatus: Ticket["status"];
+}
+
+export interface ApplyTicketStateTransitionRecordInput {
+  readonly tenantId: string;
+  readonly ticketId: string;
+  readonly correlationId: string;
+  readonly toStatus: Ticket["status"];
+  readonly reasonCode: string | null;
+  readonly metadata: Record<string, unknown>;
+  readonly actorType: DomainEventActorType;
+  readonly actorId: string | null;
+  readonly transitionKey: string;
+}
+
+export interface ApplyTicketStateTransitionRecordOutcome {
+  readonly applied: boolean;
+  readonly fromStatus: Ticket["status"];
+  readonly toStatus: Ticket["status"];
+}
+
+export interface ExpireApprovalRecordInput {
+  readonly tenantId: string;
+  readonly ticketId: string;
+  readonly approvalId: string;
+  readonly correlationId: string;
+  readonly expiredAt: Date;
+}
+
+export interface ExpireApprovalRecordOutcome {
+  readonly expired: boolean;
+  readonly status: Approval["status"];
+}
+
 /**
  * Persistence boundary for the ticket lifecycle activities. The database
  * implementation runs every tenant-scoped statement under
@@ -190,6 +322,26 @@ export interface OutboundSendContext {
  * dedup semantics for offline activity tests.
  */
 export interface TicketLifecyclePersistenceStore {
+  createOrLoadTicket(
+    input: CreateOrLoadTicketRecordInput,
+  ): Promise<CreateOrLoadTicketRecordOutcome>;
+  recordInboundMessage(
+    input: RecordInboundMessageRecordInput,
+  ): Promise<RecordInboundMessageRecordOutcome>;
+  getInboundMessageForTriage(params: {
+    readonly tenantId: string;
+    readonly conversationId: string;
+    readonly messageId: string;
+  }): Promise<InboundMessageForTriage | null>;
+  applyInitialTriage(
+    input: ApplyInitialTriageRecordInput,
+  ): Promise<ApplyInitialTriageRecordOutcome>;
+  applyTicketStateTransition(
+    input: ApplyTicketStateTransitionRecordInput,
+  ): Promise<ApplyTicketStateTransitionRecordOutcome>;
+  expireApproval(
+    input: ExpireApprovalRecordInput,
+  ): Promise<ExpireApprovalRecordOutcome>;
   createApproval(
     input: CreateApprovalRecordInput,
   ): Promise<{ approval: TicketLifecycleApprovalRecord; created: boolean }>;
@@ -234,6 +386,19 @@ export function createEnvOutboundCredentialResolver(
 }
 
 export interface TicketLifecyclePersistenceActivities {
+  createOrUpdateTicket(
+    input: CreateOrUpdateTicketActivityInput,
+  ): Promise<CreateOrUpdateTicketActivityResult>;
+  runInitialTriage(
+    input: RunInitialTriageActivityInput,
+  ): Promise<RunInitialTriageActivityResult>;
+  recordInboundMessage(input: RecordInboundMessageActivityInput): Promise<void>;
+  applyTicketStateTransition(
+    input: ApplyTicketStateTransitionActivityInput,
+  ): Promise<ApplyTicketStateTransitionActivityResult>;
+  expireApproval(
+    input: ExpireApprovalActivityInput,
+  ): Promise<ExpireApprovalActivityResult>;
   createApproval(
     input: CreateApprovalActivityInput,
   ): Promise<CreateApprovalActivityResult>;
@@ -248,6 +413,13 @@ export interface TicketLifecyclePersistenceActivityDependencies {
   readonly outboundSender: OutboundChannelSender;
   readonly credentialResolver?: OutboundCredentialResolver;
   readonly now?: () => Date;
+  /**
+   * Reviewer-decision window before a pending approval expires (BACKEND_SPEC
+   * section 12). Returned on every `createApproval` result so the workflow
+   * arms the expiry timer from history-recorded data. `null`/omitted disables
+   * expiry.
+   */
+  readonly approvalExpiresInMs?: number | null;
 }
 
 /**
@@ -404,8 +576,122 @@ export function createTicketLifecyclePersistenceActivities(
   const now = dependencies.now ?? (() => new Date());
   const credentialResolver =
     dependencies.credentialResolver ?? createEnvOutboundCredentialResolver();
+  const approvalExpiresInMs = dependencies.approvalExpiresInMs ?? null;
 
   return {
+    async createOrUpdateTicket(input) {
+      const conversationId = conversationIdFromTicketId(input.ticket_id);
+      const { ticket, created } = await dependencies.store.createOrLoadTicket({
+        tenantId: input.tenant_id,
+        ticketId: input.ticket_id,
+        conversationId,
+        initialMessageId: input.initial_message_id,
+        correlationId: input.correlation_id,
+        openedAt: now(),
+      });
+
+      return {
+        ticket: ticketSnapshotFromRecord(ticket),
+        created,
+        previous_status: created ? null : ticket.status,
+        sla_timers: buildSlaTimers(ticket, now()),
+      };
+    },
+
+    async runInitialTriage(input) {
+      const message = await dependencies.store.getInboundMessageForTriage({
+        tenantId: input.tenant_id,
+        conversationId: input.ticket.conversation_id,
+        messageId: input.initial_message_id,
+      });
+
+      if (!message) {
+        // Intake commits the message row before signaling the workflow, so a
+        // missing row is transient read skew at worst: let Temporal retry.
+        throw new Error(
+          `Inbound message ${input.initial_message_id} was not found for triage.`,
+        );
+      }
+
+      const classification = classifyInitialTriage(message.bodyText);
+      const priority = escalatePriority(
+        input.ticket.priority,
+        classification.priority,
+      );
+      const { fromStatus } = await dependencies.store.applyInitialTriage({
+        tenantId: input.tenant_id,
+        ticketId: input.ticket_id,
+        correlationId: input.correlation_id,
+        priority,
+        topic: classification.topic,
+        subtopic: classification.subtopic,
+        language: classification.language,
+        reasonCode: classification.reasonCode,
+        metadata: {
+          route: classification.route,
+          sensitive_flags: classification.sensitiveFlags,
+          initial_message_id: input.initial_message_id,
+        },
+      });
+
+      return {
+        status: "triaged",
+        route: classification.route,
+        reason_code: classification.reasonCode,
+        metadata: {
+          topic: classification.topic,
+          subtopic: classification.subtopic,
+          language: classification.language,
+          priority,
+          sensitive_flags: classification.sensitiveFlags,
+          from_status: fromStatus,
+        },
+      };
+    },
+
+    async recordInboundMessage(input) {
+      await dependencies.store.recordInboundMessage({
+        tenantId: input.tenant_id,
+        ticketId: input.ticket_id,
+        conversationId: input.message.conversation_id,
+        messageId: input.message.message_id,
+        correlationId: input.correlation_id,
+        receivedAt: input.message.received_at,
+      });
+    },
+
+    async applyTicketStateTransition(input) {
+      const outcome = await dependencies.store.applyTicketStateTransition({
+        tenantId: input.tenant_id,
+        ticketId: input.ticket_id,
+        correlationId: input.correlation_id,
+        toStatus: input.to_status,
+        reasonCode: input.reason_code,
+        metadata: input.metadata,
+        actorType: input.actor.type,
+        actorId: input.actor.id,
+        transitionKey: input.transition_key,
+      });
+
+      return {
+        applied: outcome.applied,
+        from_status: outcome.fromStatus,
+        to_status: outcome.toStatus,
+      };
+    },
+
+    async expireApproval(input) {
+      const outcome = await dependencies.store.expireApproval({
+        tenantId: input.tenant_id,
+        ticketId: input.ticket_id,
+        approvalId: input.approval_id,
+        correlationId: input.correlation_id,
+        expiredAt: now(),
+      });
+
+      return { expired: outcome.expired, status: outcome.status };
+    },
+
     async createApproval(input) {
       const approvalId = deterministicApprovalId(
         input.tenant_id,
@@ -447,7 +733,11 @@ export function createTicketLifecyclePersistenceActivities(
         });
       }
 
-      return { approval_id: approvalId, status: "pending" };
+      return {
+        approval_id: approvalId,
+        status: "pending",
+        expires_in_ms: approvalExpiresInMs,
+      };
     },
 
     async sendOutboundMessage(input) {
@@ -657,8 +947,11 @@ export function createTicketLifecyclePersistenceActivities(
  * so workers that never run these activities open no connection; every
  * tenant-scoped statement runs under `withTenantTransaction`/RLS.
  */
-export function createDatabaseTicketLifecyclePersistenceStore(): TicketLifecyclePersistenceStore {
+export function createDatabaseTicketLifecyclePersistenceStore(
+  options: { readonly now?: () => Date } = {},
+): TicketLifecyclePersistenceStore {
   let database: ReturnType<typeof createDatabaseFromEnv> | undefined;
+  const now = options.now ?? (() => new Date());
 
   function getDatabase() {
     database ??= createDatabaseFromEnv();
@@ -666,6 +959,444 @@ export function createDatabaseTicketLifecyclePersistenceStore(): TicketLifecycle
   }
 
   return {
+    async createOrLoadTicket(input) {
+      const scope = { tenantId: input.tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        const existingRows = await ticketByIdQuery(db, scope, input.ticketId);
+
+        if (existingRows[0]) {
+          await linkMessageToTicketByIdQuery(
+            db,
+            scope,
+            input.initialMessageId,
+            input.ticketId,
+          );
+          return { ticket: mapTicketRow(existingRows[0]), created: false };
+        }
+
+        const conversationRows = await conversationByIdQuery(
+          db,
+          scope,
+          input.conversationId,
+        );
+        const conversation = conversationRows[0];
+
+        if (!conversation) {
+          throw new NonRetryableActivityError(
+            `Conversation ${input.conversationId} was not found for ticket creation.`,
+          );
+        }
+
+        const slaRows = await activeSlaPolicyForTenantQuery(db, scope);
+        const slaPolicy = slaRows[0] ?? null;
+        const values: Omit<NewTicket, "tenantId"> = {
+          ticketId: input.ticketId,
+          conversationId: input.conversationId,
+          customerId: conversation.customerId,
+          status: "new",
+          priority: slaPolicy?.priority ?? "p2",
+          automationMode: "human_approve",
+          slaPolicyId: slaPolicy?.slaPolicyId ?? null,
+          openedAt: input.openedAt,
+          firstResponseDueAt: slaPolicy
+            ? addMinutes(input.openedAt, slaPolicy.firstResponseMinutes)
+            : null,
+          nextResponseDueAt: slaPolicy
+            ? addMinutes(input.openedAt, slaPolicy.nextResponseMinutes)
+            : null,
+          resolutionDueAt: slaPolicy
+            ? addMinutes(input.openedAt, slaPolicy.resolutionMinutes)
+            : null,
+        };
+        const inserted = await createTicketIfAbsentQuery(db, scope, values);
+        let row = inserted[0];
+        const created = row !== undefined;
+
+        if (!row) {
+          const reread = await ticketByIdQuery(db, scope, input.ticketId);
+
+          if (!reread[0]) {
+            throw new Error(
+              `Ticket ${input.ticketId} conflicted on insert but could not be read back.`,
+            );
+          }
+
+          row = reread[0];
+        }
+
+        await linkMessageToTicketByIdQuery(
+          db,
+          scope,
+          input.initialMessageId,
+          input.ticketId,
+        );
+
+        if (created) {
+          await createTicketEventQuery(db, scope, {
+            ticketEventId: `tev_${sha24([
+              input.tenantId,
+              input.ticketId,
+              "ticket-created",
+            ])}`,
+            ticketId: input.ticketId,
+            eventType: "ticket_created",
+            fromStatus: null,
+            toStatus: "new",
+            actorType: "system",
+            actorId: "workflow",
+            reasonCode: null,
+            metadata: {
+              conversation_id: input.conversationId,
+              initial_message_id: input.initialMessageId,
+            },
+          });
+          await createAuditEventQuery(db, scope, {
+            auditEventId: `aud_${sha24([
+              input.tenantId,
+              "ticket.created",
+              input.ticketId,
+            ])}`,
+            actorType: "system",
+            actorId: "workflow",
+            entityType: "ticket",
+            entityId: input.ticketId,
+            action: "ticket.created",
+            metadata: {
+              conversation_id: input.conversationId,
+              customer_id: conversation.customerId,
+              initial_message_id: input.initialMessageId,
+              sla_policy_id: slaPolicy?.slaPolicyId ?? null,
+            },
+            correlationId: input.correlationId,
+          });
+        }
+
+        return { ticket: mapTicketRow(row), created };
+      });
+    },
+
+    async recordInboundMessage(input) {
+      const scope = { tenantId: input.tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        const messageRows = await messageByIdQuery(
+          db,
+          scope,
+          input.conversationId,
+          input.messageId,
+        );
+        const message = messageRows[0];
+
+        if (!message) {
+          // Intake commits before signaling; treat a missing row as transient
+          // and let the Temporal retry policy re-read.
+          throw new Error(
+            `Inbound message ${input.messageId} was not found for reconciliation.`,
+          );
+        }
+
+        if (message.ticketId !== null && message.ticketId !== input.ticketId) {
+          throw new NonRetryableActivityError(
+            `Message ${input.messageId} is already linked to ticket ${message.ticketId}, not ${input.ticketId}.`,
+          );
+        }
+
+        const ticketRows = await ticketByIdQuery(db, scope, input.ticketId);
+        const ticket = ticketRows[0];
+
+        if (!ticket) {
+          // The signal can outrun `createOrUpdateTicket`; the initial-message
+          // link is that activity's job, so skip instead of FK-failing.
+          return { linked: false, ticketStatus: null, transition: null };
+        }
+
+        let linked = false;
+
+        if (message.ticketId === null) {
+          const linkedRows = await linkMessageToTicketByIdQuery(
+            db,
+            scope,
+            input.messageId,
+            input.ticketId,
+          );
+          linked = linkedRows[0] !== undefined;
+        }
+
+        if (ticket.status !== "waiting_customer") {
+          return { linked, ticketStatus: ticket.status, transition: null };
+        }
+
+        await updateTicketByIdQuery(db, scope, input.ticketId, {
+          status: "waiting_human",
+          updatedAt: now(),
+        });
+        await createTicketEventQuery(db, scope, {
+          ticketEventId: `tev_${sha24([
+            input.tenantId,
+            input.ticketId,
+            "customer-replied",
+            input.messageId,
+          ])}`,
+          ticketId: input.ticketId,
+          eventType: "ticket_state_transition",
+          fromStatus: "waiting_customer",
+          toStatus: "waiting_human",
+          actorType: "system",
+          actorId: "workflow",
+          reasonCode: "customer_replied",
+          metadata: {
+            message_id: input.messageId,
+            received_at: input.receivedAt,
+          },
+        });
+        await createAuditEventQuery(db, scope, {
+          auditEventId: `aud_${sha24([
+            input.tenantId,
+            input.ticketId,
+            "ticket.updated",
+            "customer-replied",
+            input.messageId,
+          ])}`,
+          actorType: "system",
+          actorId: "workflow",
+          entityType: "ticket",
+          entityId: input.ticketId,
+          action: "ticket.updated",
+          metadata: {
+            from_status: "waiting_customer",
+            to_status: "waiting_human",
+            reason_code: "customer_replied",
+            message_id: input.messageId,
+            received_at: input.receivedAt,
+          },
+          correlationId: input.correlationId,
+        });
+
+        return {
+          linked,
+          ticketStatus: "waiting_human",
+          transition: {
+            fromStatus: "waiting_customer",
+            toStatus: "waiting_human",
+          },
+        };
+      });
+    },
+
+    async getInboundMessageForTriage(params) {
+      const scope = { tenantId: params.tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        const rows = await messageByIdQuery(
+          db,
+          scope,
+          params.conversationId,
+          params.messageId,
+        );
+
+        return rows[0]
+          ? { messageId: rows[0].messageId, bodyText: rows[0].bodyText }
+          : null;
+      });
+    },
+
+    async applyInitialTriage(input) {
+      const scope = { tenantId: input.tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        const ticketRows = await ticketByIdQuery(db, scope, input.ticketId);
+        const ticket = ticketRows[0];
+
+        if (!ticket) {
+          throw new NonRetryableActivityError(
+            `Ticket ${input.ticketId} was not found for triage.`,
+          );
+        }
+
+        const fromStatus = ticket.status;
+        const updatedRows = await updateTicketByIdQuery(
+          db,
+          scope,
+          input.ticketId,
+          {
+            status: "triaged",
+            priority: input.priority,
+            topic: input.topic,
+            subtopic: input.subtopic,
+            language: input.language,
+            updatedAt: now(),
+          },
+        );
+        const updated = updatedRows[0];
+
+        if (!updated) {
+          throw new Error(
+            `Ticket ${input.ticketId} disappeared while applying triage.`,
+          );
+        }
+
+        if (fromStatus !== "triaged") {
+          await createTicketEventQuery(db, scope, {
+            ticketEventId: `tev_${sha24([
+              input.tenantId,
+              input.ticketId,
+              "initial-triage",
+            ])}`,
+            ticketId: input.ticketId,
+            eventType: "ticket_state_transition",
+            fromStatus,
+            toStatus: "triaged",
+            actorType: "system",
+            actorId: "workflow",
+            reasonCode: input.reasonCode,
+            metadata: input.metadata,
+          });
+          await createAuditEventQuery(db, scope, {
+            auditEventId: `aud_${sha24([
+              input.tenantId,
+              input.ticketId,
+              "ticket.updated",
+              "initial-triage",
+            ])}`,
+            actorType: "system",
+            actorId: "workflow",
+            entityType: "ticket",
+            entityId: input.ticketId,
+            action: "ticket.updated",
+            metadata: {
+              from_status: fromStatus,
+              to_status: "triaged",
+              reason_code: input.reasonCode,
+              priority: input.priority,
+              topic: input.topic,
+              subtopic: input.subtopic,
+              language: input.language,
+            },
+            correlationId: input.correlationId,
+          });
+        }
+
+        return { ticket: mapTicketRow(updated), fromStatus };
+      });
+    },
+
+    async applyTicketStateTransition(input) {
+      const scope = { tenantId: input.tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        const ticketRows = await ticketByIdQuery(db, scope, input.ticketId);
+        const ticket = ticketRows[0];
+
+        if (!ticket) {
+          throw new NonRetryableActivityError(
+            `Ticket ${input.ticketId} was not found for the ${input.toStatus} transition.`,
+          );
+        }
+
+        const fromStatus = ticket.status;
+
+        if (fromStatus === input.toStatus) {
+          return { applied: false, fromStatus, toStatus: input.toStatus };
+        }
+
+        const patch: Partial<NewTicket> = {
+          status: input.toStatus,
+          updatedAt: now(),
+        };
+
+        if (input.toStatus === "resolved") {
+          patch.resolvedAt = now();
+        }
+        if (input.toStatus === "closed") {
+          patch.closedAt = now();
+        }
+
+        await updateTicketByIdQuery(db, scope, input.ticketId, patch);
+        await createTicketEventQuery(db, scope, {
+          ticketEventId: `tev_${sha24([
+            input.tenantId,
+            input.ticketId,
+            input.transitionKey,
+          ])}`,
+          ticketId: input.ticketId,
+          eventType: "ticket_state_transition",
+          fromStatus,
+          toStatus: input.toStatus,
+          actorType: input.actorType,
+          actorId: input.actorId,
+          reasonCode: input.reasonCode,
+          metadata: input.metadata,
+        });
+
+        const action =
+          input.toStatus === "closed" ? "ticket.closed" : "ticket.updated";
+        await createAuditEventQuery(db, scope, {
+          auditEventId: `aud_${sha24([
+            input.tenantId,
+            input.ticketId,
+            action,
+            input.transitionKey,
+          ])}`,
+          actorType: input.actorType,
+          actorId: input.actorId,
+          entityType: "ticket",
+          entityId: input.ticketId,
+          action,
+          metadata: {
+            from_status: fromStatus,
+            to_status: input.toStatus,
+            reason_code: input.reasonCode,
+            transition_key: input.transitionKey,
+            ...input.metadata,
+          },
+          correlationId: input.correlationId,
+        });
+
+        return { applied: true, fromStatus, toStatus: input.toStatus };
+      });
+    },
+
+    async expireApproval(input) {
+      const scope = { tenantId: input.tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        const resolved = await resolvePendingApprovalByIdQuery(
+          db,
+          scope,
+          input.approvalId,
+          { status: "expired", resolvedAt: input.expiredAt },
+        );
+
+        if (resolved[0]) {
+          await appendApprovalExpiredAudit(db, scope, input);
+          return { expired: true, status: "expired" as const };
+        }
+
+        const existingRows = await approvalByIdQuery(
+          db,
+          scope,
+          input.approvalId,
+        );
+        const existing = existingRows[0];
+
+        if (!existing) {
+          throw new NonRetryableActivityError(
+            `Approval ${input.approvalId} was not found while expiring.`,
+          );
+        }
+
+        if (existing.status === "expired") {
+          // Activity retry replay: the expiry landed on a previous attempt.
+          // The audit id is deterministic, so re-appending is a no-op.
+          await appendApprovalExpiredAudit(db, scope, input);
+          return { expired: true, status: "expired" as const };
+        }
+
+        return { expired: false, status: existing.status };
+      });
+    },
+
     async createApproval(input) {
       const scope = { tenantId: input.tenantId };
 
@@ -939,6 +1670,46 @@ export interface InMemoryTicketLifecyclePersistenceFixtures {
   readonly approvals?: readonly ({
     readonly tenantId: string;
   } & TicketLifecycleApprovalRecord)[];
+  readonly slaPolicies?: readonly {
+    readonly tenantId: string;
+    readonly slaPolicyId: string;
+    readonly priority: Ticket["priority"];
+    readonly firstResponseMinutes: number;
+    readonly nextResponseMinutes: number;
+    readonly resolutionMinutes: number;
+    readonly status: "draft" | "active" | "archived";
+  }[];
+  readonly inboundMessages?: readonly {
+    readonly tenantId: string;
+    readonly messageId: string;
+    readonly conversationId: string;
+    readonly bodyText: string | null;
+    readonly ticketId?: string | null;
+  }[];
+  readonly tickets?: readonly ({
+    readonly tenantId: string;
+  } & TicketLifecycleTicketRecord)[];
+}
+
+export interface InMemoryInboundMessageRecord {
+  readonly tenantId: string;
+  readonly messageId: string;
+  readonly conversationId: string;
+  readonly bodyText: string | null;
+  readonly ticketId: string | null;
+}
+
+export interface InMemoryTicketEventRecord {
+  readonly tenantId: string;
+  readonly ticketEventId: string;
+  readonly ticketId: string;
+  readonly eventType: string;
+  readonly fromStatus: Ticket["status"] | null;
+  readonly toStatus: Ticket["status"] | null;
+  readonly actorType: DomainEventActorType;
+  readonly actorId: string | null;
+  readonly reasonCode: string | null;
+  readonly metadata: Record<string, unknown>;
 }
 
 export interface InMemoryTicketLifecyclePersistenceStore extends TicketLifecyclePersistenceStore {
@@ -954,6 +1725,11 @@ export interface InMemoryTicketLifecyclePersistenceStore extends TicketLifecycle
   } & OutboundMessageRecord)[];
   listAuditEvents(): readonly AppendAuditEventInput[];
   listAiRuns(): readonly RecordAiRunResultInput[];
+  listTickets(): readonly ({
+    tenantId: string;
+  } & TicketLifecycleTicketRecord)[];
+  listTicketEvents(): readonly InMemoryTicketEventRecord[];
+  listInboundMessages(): readonly InMemoryInboundMessageRecord[];
   setApprovalDecision(params: {
     readonly tenantId: string;
     readonly approvalId: string;
@@ -971,7 +1747,9 @@ export interface InMemoryTicketLifecyclePersistenceStore extends TicketLifecycle
  */
 export function createInMemoryTicketLifecyclePersistenceStore(
   fixtures: InMemoryTicketLifecyclePersistenceFixtures = {},
+  options: { readonly now?: () => Date } = {},
 ): InMemoryTicketLifecyclePersistenceStore {
+  const now = options.now ?? (() => new Date());
   const approvals = new Map<
     string,
     { tenantId: string } & TicketLifecycleApprovalRecord
@@ -988,13 +1766,34 @@ export function createInMemoryTicketLifecyclePersistenceStore(
   >();
   const auditEvents = new Map<string, AppendAuditEventInput>();
   const aiRuns = new Map<string, RecordAiRunResultInput>();
+  const tickets = new Map<
+    string,
+    { tenantId: string } & TicketLifecycleTicketRecord
+  >();
+  const ticketEvents = new Map<string, InMemoryTicketEventRecord>();
+  const inboundMessages = new Map<string, InMemoryInboundMessageRecord>();
   const conversations = [...(fixtures.conversations ?? [])];
   const channels = [...(fixtures.channels ?? [])];
   const identities = [...(fixtures.identities ?? [])];
+  const slaPolicies = [...(fixtures.slaPolicies ?? [])];
 
   for (const approval of fixtures.approvals ?? []) {
     approvals.set(`${approval.tenantId}:${approval.approvalId}`, {
       ...approval,
+    });
+  }
+
+  for (const ticket of fixtures.tickets ?? []) {
+    tickets.set(`${ticket.tenantId}:${ticket.ticketId}`, { ...ticket });
+  }
+
+  for (const message of fixtures.inboundMessages ?? []) {
+    inboundMessages.set(`${message.tenantId}:${message.messageId}`, {
+      tenantId: message.tenantId,
+      messageId: message.messageId,
+      conversationId: message.conversationId,
+      bodyText: message.bodyText,
+      ticketId: message.ticketId ?? null,
     });
   }
 
@@ -1011,7 +1810,419 @@ export function createInMemoryTicketLifecyclePersistenceStore(
     return null;
   }
 
+  function appendTicketEvent(event: InMemoryTicketEventRecord) {
+    const key = `${event.tenantId}:${event.ticketEventId}`;
+
+    if (!ticketEvents.has(key)) {
+      ticketEvents.set(key, event);
+    }
+  }
+
+  function appendAudit(input: AppendAuditEventInput) {
+    const key = `${input.tenantId}:${input.auditEventId}`;
+
+    if (!auditEvents.has(key)) {
+      auditEvents.set(key, input);
+    }
+  }
+
+  function linkInboundMessage(
+    tenantId: string,
+    messageId: string,
+    ticketId: string,
+  ): boolean {
+    const key = `${tenantId}:${messageId}`;
+    const record = inboundMessages.get(key);
+
+    if (!record || record.ticketId === ticketId) {
+      return false;
+    }
+
+    if (record.ticketId !== null) {
+      throw new NonRetryableActivityError(
+        `Message ${messageId} is already linked to ticket ${record.ticketId}, not ${ticketId}.`,
+      );
+    }
+
+    inboundMessages.set(key, { ...record, ticketId });
+    return true;
+  }
+
   return {
+    async createOrLoadTicket(input) {
+      const key = `${input.tenantId}:${input.ticketId}`;
+      const existing = tickets.get(key);
+
+      if (existing) {
+        linkInboundMessage(
+          input.tenantId,
+          input.initialMessageId,
+          input.ticketId,
+        );
+        return { ticket: { ...existing }, created: false };
+      }
+
+      const conversation = conversations.find(
+        (candidate) =>
+          candidate.tenantId === input.tenantId &&
+          candidate.conversationId === input.conversationId,
+      );
+
+      if (!conversation) {
+        throw new NonRetryableActivityError(
+          `Conversation ${input.conversationId} was not found for ticket creation.`,
+        );
+      }
+
+      const slaPolicy =
+        slaPolicies.find(
+          (candidate) =>
+            candidate.tenantId === input.tenantId &&
+            candidate.status === "active",
+        ) ?? null;
+      const ticket: { tenantId: string } & TicketLifecycleTicketRecord = {
+        tenantId: input.tenantId,
+        ticketId: input.ticketId,
+        conversationId: input.conversationId,
+        customerId: conversation.customerId,
+        status: "new",
+        priority: slaPolicy?.priority ?? "p2",
+        automationMode: "human_approve",
+        assignedQueue: null,
+        assignedUserId: null,
+        slaPolicyId: slaPolicy?.slaPolicyId ?? null,
+        topic: null,
+        subtopic: null,
+        language: null,
+        openedAt: input.openedAt,
+        firstResponseDueAt: slaPolicy
+          ? addMinutes(input.openedAt, slaPolicy.firstResponseMinutes)
+          : null,
+        nextResponseDueAt: slaPolicy
+          ? addMinutes(input.openedAt, slaPolicy.nextResponseMinutes)
+          : null,
+        resolutionDueAt: slaPolicy
+          ? addMinutes(input.openedAt, slaPolicy.resolutionMinutes)
+          : null,
+        resolvedAt: null,
+        closedAt: null,
+      };
+      tickets.set(key, ticket);
+      linkInboundMessage(
+        input.tenantId,
+        input.initialMessageId,
+        input.ticketId,
+      );
+      appendTicketEvent({
+        tenantId: input.tenantId,
+        ticketEventId: `tev_${sha24([
+          input.tenantId,
+          input.ticketId,
+          "ticket-created",
+        ])}`,
+        ticketId: input.ticketId,
+        eventType: "ticket_created",
+        fromStatus: null,
+        toStatus: "new",
+        actorType: "system",
+        actorId: "workflow",
+        reasonCode: null,
+        metadata: {
+          conversation_id: input.conversationId,
+          initial_message_id: input.initialMessageId,
+        },
+      });
+      appendAudit({
+        tenantId: input.tenantId,
+        auditEventId: `aud_${sha24([
+          input.tenantId,
+          "ticket.created",
+          input.ticketId,
+        ])}`,
+        actorType: "system",
+        actorId: "workflow",
+        entityType: "ticket",
+        entityId: input.ticketId,
+        action: "ticket.created",
+        metadata: {
+          conversation_id: input.conversationId,
+          customer_id: conversation.customerId,
+          initial_message_id: input.initialMessageId,
+          sla_policy_id: slaPolicy?.slaPolicyId ?? null,
+        },
+        correlationId: input.correlationId,
+      });
+
+      return { ticket: { ...ticket }, created: true };
+    },
+
+    async recordInboundMessage(input) {
+      const messageKey = `${input.tenantId}:${input.messageId}`;
+      const message = inboundMessages.get(messageKey);
+
+      if (!message) {
+        throw new Error(
+          `Inbound message ${input.messageId} was not found for reconciliation.`,
+        );
+      }
+
+      if (message.ticketId !== null && message.ticketId !== input.ticketId) {
+        throw new NonRetryableActivityError(
+          `Message ${input.messageId} is already linked to ticket ${message.ticketId}, not ${input.ticketId}.`,
+        );
+      }
+
+      const ticketKey = `${input.tenantId}:${input.ticketId}`;
+      const ticket = tickets.get(ticketKey);
+
+      if (!ticket) {
+        return { linked: false, ticketStatus: null, transition: null };
+      }
+
+      const linked =
+        message.ticketId === null &&
+        linkInboundMessage(input.tenantId, input.messageId, input.ticketId);
+
+      if (ticket.status !== "waiting_customer") {
+        return { linked, ticketStatus: ticket.status, transition: null };
+      }
+
+      tickets.set(ticketKey, { ...ticket, status: "waiting_human" });
+      appendTicketEvent({
+        tenantId: input.tenantId,
+        ticketEventId: `tev_${sha24([
+          input.tenantId,
+          input.ticketId,
+          "customer-replied",
+          input.messageId,
+        ])}`,
+        ticketId: input.ticketId,
+        eventType: "ticket_state_transition",
+        fromStatus: "waiting_customer",
+        toStatus: "waiting_human",
+        actorType: "system",
+        actorId: "workflow",
+        reasonCode: "customer_replied",
+        metadata: {
+          message_id: input.messageId,
+          received_at: input.receivedAt,
+        },
+      });
+      appendAudit({
+        tenantId: input.tenantId,
+        auditEventId: `aud_${sha24([
+          input.tenantId,
+          input.ticketId,
+          "ticket.updated",
+          "customer-replied",
+          input.messageId,
+        ])}`,
+        actorType: "system",
+        actorId: "workflow",
+        entityType: "ticket",
+        entityId: input.ticketId,
+        action: "ticket.updated",
+        metadata: {
+          from_status: "waiting_customer",
+          to_status: "waiting_human",
+          reason_code: "customer_replied",
+          message_id: input.messageId,
+          received_at: input.receivedAt,
+        },
+        correlationId: input.correlationId,
+      });
+
+      return {
+        linked,
+        ticketStatus: "waiting_human",
+        transition: {
+          fromStatus: "waiting_customer",
+          toStatus: "waiting_human",
+        },
+      };
+    },
+
+    async getInboundMessageForTriage(params) {
+      const record = inboundMessages.get(
+        `${params.tenantId}:${params.messageId}`,
+      );
+
+      return record
+        ? { messageId: record.messageId, bodyText: record.bodyText }
+        : null;
+    },
+
+    async applyInitialTriage(input) {
+      const key = `${input.tenantId}:${input.ticketId}`;
+      const ticket = tickets.get(key);
+
+      if (!ticket) {
+        throw new NonRetryableActivityError(
+          `Ticket ${input.ticketId} was not found for triage.`,
+        );
+      }
+
+      const fromStatus = ticket.status;
+      const updated = {
+        ...ticket,
+        status: "triaged" as const,
+        priority: input.priority,
+        topic: input.topic,
+        subtopic: input.subtopic,
+        language: input.language,
+      };
+      tickets.set(key, updated);
+
+      if (fromStatus !== "triaged") {
+        appendTicketEvent({
+          tenantId: input.tenantId,
+          ticketEventId: `tev_${sha24([
+            input.tenantId,
+            input.ticketId,
+            "initial-triage",
+          ])}`,
+          ticketId: input.ticketId,
+          eventType: "ticket_state_transition",
+          fromStatus,
+          toStatus: "triaged",
+          actorType: "system",
+          actorId: "workflow",
+          reasonCode: input.reasonCode,
+          metadata: input.metadata,
+        });
+        appendAudit({
+          tenantId: input.tenantId,
+          auditEventId: `aud_${sha24([
+            input.tenantId,
+            input.ticketId,
+            "ticket.updated",
+            "initial-triage",
+          ])}`,
+          actorType: "system",
+          actorId: "workflow",
+          entityType: "ticket",
+          entityId: input.ticketId,
+          action: "ticket.updated",
+          metadata: {
+            from_status: fromStatus,
+            to_status: "triaged",
+            reason_code: input.reasonCode,
+            priority: input.priority,
+            topic: input.topic,
+            subtopic: input.subtopic,
+            language: input.language,
+          },
+          correlationId: input.correlationId,
+        });
+      }
+
+      return { ticket: { ...updated }, fromStatus };
+    },
+
+    async applyTicketStateTransition(input) {
+      const key = `${input.tenantId}:${input.ticketId}`;
+      const ticket = tickets.get(key);
+
+      if (!ticket) {
+        throw new NonRetryableActivityError(
+          `Ticket ${input.ticketId} was not found for the ${input.toStatus} transition.`,
+        );
+      }
+
+      const fromStatus = ticket.status;
+
+      if (fromStatus === input.toStatus) {
+        return { applied: false, fromStatus, toStatus: input.toStatus };
+      }
+
+      tickets.set(key, {
+        ...ticket,
+        status: input.toStatus,
+        resolvedAt: input.toStatus === "resolved" ? now() : ticket.resolvedAt,
+        closedAt: input.toStatus === "closed" ? now() : ticket.closedAt,
+      });
+      appendTicketEvent({
+        tenantId: input.tenantId,
+        ticketEventId: `tev_${sha24([
+          input.tenantId,
+          input.ticketId,
+          input.transitionKey,
+        ])}`,
+        ticketId: input.ticketId,
+        eventType: "ticket_state_transition",
+        fromStatus,
+        toStatus: input.toStatus,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        reasonCode: input.reasonCode,
+        metadata: input.metadata,
+      });
+
+      const action =
+        input.toStatus === "closed" ? "ticket.closed" : "ticket.updated";
+      appendAudit({
+        tenantId: input.tenantId,
+        auditEventId: `aud_${sha24([
+          input.tenantId,
+          input.ticketId,
+          action,
+          input.transitionKey,
+        ])}`,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        entityType: "ticket",
+        entityId: input.ticketId,
+        action,
+        metadata: {
+          from_status: fromStatus,
+          to_status: input.toStatus,
+          reason_code: input.reasonCode,
+          transition_key: input.transitionKey,
+          ...input.metadata,
+        },
+        correlationId: input.correlationId,
+      });
+
+      return { applied: true, fromStatus, toStatus: input.toStatus };
+    },
+
+    async expireApproval(input) {
+      const key = `${input.tenantId}:${input.approvalId}`;
+      const approval = approvals.get(key);
+
+      if (!approval) {
+        throw new NonRetryableActivityError(
+          `Approval ${input.approvalId} was not found while expiring.`,
+        );
+      }
+
+      if (approval.status !== "pending" && approval.status !== "expired") {
+        return { expired: false, status: approval.status };
+      }
+
+      approvals.set(key, { ...approval, status: "expired" });
+      appendAudit({
+        tenantId: input.tenantId,
+        auditEventId: `aud_${sha24([
+          input.tenantId,
+          "approval.expired",
+          input.approvalId,
+        ])}`,
+        actorType: "system",
+        actorId: "workflow",
+        entityType: "approval",
+        entityId: input.approvalId,
+        action: "approval.expired",
+        metadata: {
+          ticket_id: input.ticketId,
+          expired_at: input.expiredAt.toISOString(),
+        },
+        correlationId: input.correlationId,
+      });
+
+      return { expired: true, status: "expired" };
+    },
+
     async createApproval(input) {
       const key = `${input.tenantId}:${input.approvalId}`;
       const existing = approvals.get(key);
@@ -1171,6 +2382,15 @@ export function createInMemoryTicketLifecyclePersistenceStore(
     listAiRuns() {
       return [...aiRuns.values()];
     },
+    listTickets() {
+      return [...tickets.values()];
+    },
+    listTicketEvents() {
+      return [...ticketEvents.values()];
+    },
+    listInboundMessages() {
+      return [...inboundMessages.values()];
+    },
     setApprovalDecision(params) {
       const key = `${params.tenantId}:${params.approvalId}`;
       const approval = approvals.get(key);
@@ -1224,6 +2444,122 @@ function mapMessageRow(row: Message): OutboundMessageRecord {
     providerMessageId: row.providerMessageId,
     sentAt: row.sentAt,
   };
+}
+
+function mapTicketRow(row: Ticket): TicketLifecycleTicketRecord {
+  return {
+    ticketId: row.ticketId,
+    conversationId: row.conversationId,
+    customerId: row.customerId,
+    status: row.status,
+    priority: row.priority,
+    automationMode: row.automationMode,
+    assignedQueue: row.assignedQueue,
+    assignedUserId: row.assignedUserId,
+    slaPolicyId: row.slaPolicyId,
+    topic: row.topic,
+    subtopic: row.subtopic,
+    language: row.language,
+    openedAt: row.openedAt,
+    firstResponseDueAt: row.firstResponseDueAt,
+    nextResponseDueAt: row.nextResponseDueAt,
+    resolutionDueAt: row.resolutionDueAt,
+    resolvedAt: row.resolvedAt,
+    closedAt: row.closedAt,
+  };
+}
+
+async function appendApprovalExpiredAudit(
+  db: Parameters<typeof createAuditEventQuery>[0],
+  scope: { readonly tenantId: string },
+  input: ExpireApprovalRecordInput,
+): Promise<void> {
+  await createAuditEventQuery(db, scope, {
+    auditEventId: `aud_${sha24([
+      input.tenantId,
+      "approval.expired",
+      input.approvalId,
+    ])}`,
+    actorType: "system",
+    actorId: "workflow",
+    entityType: "approval",
+    entityId: input.approvalId,
+    action: "approval.expired",
+    metadata: {
+      ticket_id: input.ticketId,
+      expired_at: input.expiredAt.toISOString(),
+    },
+    correlationId: input.correlationId,
+  });
+}
+
+/**
+ * The workflow's deterministic ticket id embeds its conversation
+ * (`tkt_{conversation_id}`, established by intake in
+ * `ticketIdForConversation`). Activities recover the conversation from it
+ * instead of widening the workflow input contract.
+ */
+export function conversationIdFromTicketId(ticketId: string): string {
+  if (!ticketId.startsWith("tkt_") || ticketId.length <= "tkt_".length) {
+    throw new NonRetryableActivityError(
+      `Ticket id "${ticketId}" does not follow the tkt_{conversation_id} convention.`,
+    );
+  }
+
+  return ticketId.slice("tkt_".length);
+}
+
+export function ticketSnapshotFromRecord(
+  record: TicketLifecycleTicketRecord,
+): TicketLifecycleTicketSnapshot {
+  return {
+    ticket_id: record.ticketId,
+    conversation_id: record.conversationId,
+    customer_id: record.customerId,
+    status: record.status,
+    priority: record.priority,
+    automation_mode: record.automationMode,
+    assigned_queue: record.assignedQueue,
+    assigned_user_id: record.assignedUserId,
+    sla_policy_id: record.slaPolicyId,
+    opened_at: record.openedAt.toISOString(),
+    first_response_due_at: record.firstResponseDueAt?.toISOString() ?? null,
+    next_response_due_at: record.nextResponseDueAt?.toISOString() ?? null,
+    resolution_due_at: record.resolutionDueAt?.toISOString() ?? null,
+  };
+}
+
+/**
+ * SLA timers for the workflow, measured against the activity clock. A due
+ * date already in the past yields a non-positive `timer_ms`, which the
+ * workflow treats as immediately breached.
+ */
+export function buildSlaTimers(
+  record: TicketLifecycleTicketRecord,
+  now: Date,
+): readonly TicketLifecycleSlaTimer[] {
+  const timers: TicketLifecycleSlaTimer[] = [];
+  const deadlines = [
+    ["first_response", record.firstResponseDueAt],
+    ["next_response", record.nextResponseDueAt],
+    ["resolution", record.resolutionDueAt],
+  ] as const;
+
+  for (const [deadlineType, dueAt] of deadlines) {
+    if (dueAt !== null) {
+      timers.push({
+        deadline_type: deadlineType,
+        due_at: dueAt.toISOString(),
+        timer_ms: dueAt.getTime() - now.getTime(),
+      });
+    }
+  }
+
+  return timers;
+}
+
+function addMinutes(date: Date, minutes: number): Date {
+  return new Date(date.getTime() + minutes * 60_000);
 }
 
 function readCredentialRef(config: JsonObject): string | null {

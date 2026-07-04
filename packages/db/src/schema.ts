@@ -90,6 +90,19 @@ export const messageCreatorTypeEnum = pgEnum("message_creator_type", [
   "integration",
 ]);
 
+export const messageSendStatusEnum = pgEnum("message_send_status", [
+  "queued",
+  "sent",
+  "failed",
+  "canceled",
+]);
+
+export const messageSentByTypeEnum = pgEnum("message_sent_by_type", [
+  "human",
+  "ai_auto",
+  "system",
+]);
+
 export const ticketStatusEnum = pgEnum("ticket_status", [
   "new",
   "triaged",
@@ -574,8 +587,8 @@ export const messages = pgTable(
       () => users.userId,
     ),
     providerMessageId: text("provider_message_id"),
-    sendStatus: text("send_status"),
-    sentByType: text("sent_by_type"),
+    sendStatus: messageSendStatusEnum("send_status"),
+    sentByType: messageSentByTypeEnum("sent_by_type"),
     aiRunId: nullableId("ai_run_id"),
     approvalId: nullableId("approval_id"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
@@ -910,6 +923,8 @@ export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 export type Ticket = typeof tickets.$inferSelect;
 export type NewTicket = typeof tickets.$inferInsert;
+export type TicketEvent = typeof ticketEvents.$inferSelect;
+export type NewTicketEvent = typeof ticketEvents.$inferInsert;
 export type TenantPolicy = typeof tenantPolicies.$inferSelect;
 export type NewTenantPolicy = typeof tenantPolicies.$inferInsert;
 export type PolicyVersion = typeof policyVersions.$inferSelect;

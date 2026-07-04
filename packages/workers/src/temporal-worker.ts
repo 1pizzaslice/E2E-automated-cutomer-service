@@ -1,4 +1,5 @@
 import { NativeConnection, Worker } from "@temporalio/worker";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { TicketLifecycleActivities } from "./activities/ticket-lifecycle-activities.js";
 import { TICKET_LIFECYCLE_TASK_QUEUE } from "./workflows/ticket-lifecycle-types.js";
@@ -66,8 +67,22 @@ export async function createTicketLifecycleWorker(
   };
 }
 
+/**
+ * Resolve the workflow bundle entry next to this module. Compiled output
+ * ships `.js`; when the worker runs from TypeScript source (tsx dev/start,
+ * vitest) only the `.ts` file exists and Temporal's bundler handles it
+ * directly.
+ */
 export function ticketLifecycleWorkflowsPath(): string {
-  return fileURLToPath(
+  const compiledPath = fileURLToPath(
     new URL("./workflows/ticket-lifecycle-workflow.js", import.meta.url),
+  );
+
+  if (existsSync(compiledPath)) {
+    return compiledPath;
+  }
+
+  return fileURLToPath(
+    new URL("./workflows/ticket-lifecycle-workflow.ts", import.meta.url),
   );
 }

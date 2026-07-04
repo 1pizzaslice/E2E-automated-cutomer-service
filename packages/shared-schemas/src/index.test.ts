@@ -1375,6 +1375,7 @@ describe("security and pilot readiness schemas", () => {
       "ai_graph.failed",
       "approval.requested",
       "approval.approved",
+      "approval.expired",
       "message.sent",
       "retention.applied",
       "policy.activated",

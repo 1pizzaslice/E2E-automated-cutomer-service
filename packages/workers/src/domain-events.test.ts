@@ -4,14 +4,18 @@ import {
 } from "@support/shared-schemas";
 import { describe, expect, it } from "vitest";
 import {
+  buildAiRunCompletedEvent,
   buildMessageReceivedEvent,
   buildTicketCreatedEvent,
   buildTicketSlaBreachedEvent,
   buildTicketStateTransitionEvent,
+  buildToolCallCompletedEvent,
+  emitAiRunCompletedEvent,
   emitMessageReceivedEvent,
   emitTicketCreatedEvent,
   emitTicketSlaBreachedEvent,
   emitTicketStateTransitionEvent,
+  emitToolCallCompletedEvent,
   type DomainEventEmissionMetadata,
 } from "./domain-events.js";
 import type {
@@ -73,6 +77,59 @@ describe("domain event emit helpers", () => {
     });
     expect(publisher.events).toHaveLength(1);
     expect(publisher.events[0]?.event_name).toBe("support.ticket.created.v1");
+  });
+
+  it("builds and emits ai run completed events", async () => {
+    const publisher = new FakeDomainEventPublisher();
+    const input = {
+      ...makeMetadata("evt_ai_run_completed"),
+      payload: {
+        ai_run_id: "air_test",
+        ticket_id: "ticket_test",
+        status: "succeeded",
+        metadata: { trace_id: "trace_test", risk_level: "low" },
+      },
+    };
+
+    const event = buildAiRunCompletedEvent(input);
+    expect(event).toMatchObject({
+      event_name: "support.ai_run.completed.v1",
+      payload: { ai_run_id: "air_test", status: "succeeded" },
+    });
+    expect(buildDomainEventSubject(event)).toBe(
+      "support.events.tenant.ten_test.ai_run.completed.v1",
+    );
+
+    await emitAiRunCompletedEvent(publisher, input);
+    expect(publisher.events[0]?.event_name).toBe("support.ai_run.completed.v1");
+  });
+
+  it("builds and emits tool call completed events", async () => {
+    const publisher = new FakeDomainEventPublisher();
+    const input = {
+      ...makeMetadata("evt_tool_call_completed"),
+      payload: {
+        tool_call_id: "tcl_test",
+        ticket_id: "ticket_test",
+        tool_name: "order_lookup",
+        status: "succeeded",
+        metadata: { ai_run_id: "air_test" },
+      },
+    };
+
+    const event = buildToolCallCompletedEvent(input);
+    expect(event).toMatchObject({
+      event_name: "support.tool_call.completed.v1",
+      payload: { tool_call_id: "tcl_test", tool_name: "order_lookup" },
+    });
+    expect(buildDomainEventSubject(event)).toBe(
+      "support.events.tenant.ten_test.tool_call.completed.v1",
+    );
+
+    await emitToolCallCompletedEvent(publisher, input);
+    expect(publisher.events[0]?.event_name).toBe(
+      "support.tool_call.completed.v1",
+    );
   });
 
   it("builds and emits ticket state transition events", async () => {

@@ -34,9 +34,11 @@ describe("temporal worker scaffold", () => {
     });
   });
 
-  it("points the runtime worker at the compiled workflow module", () => {
+  it("points the runtime worker at the workflow module next to the build", () => {
+    // Compiled deployments resolve the .js output; source runs (tsx start,
+    // vitest) fall back to the .ts module for Temporal's bundler.
     expect(ticketLifecycleWorkflowsPath()).toMatch(
-      /workflows\/ticket-lifecycle-workflow\.js$/,
+      /workflows\/ticket-lifecycle-workflow\.(js|ts)$/,
     );
   });
 

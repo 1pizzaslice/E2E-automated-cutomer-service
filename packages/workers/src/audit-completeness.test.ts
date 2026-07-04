@@ -86,6 +86,25 @@ function makeHarness(options?: {
         displayName: "Customer Name",
       },
     ],
+    slaPolicies: [
+      {
+        tenantId: TENANT,
+        slaPolicyId: "sla_audit",
+        priority: "p2",
+        firstResponseMinutes: 60,
+        nextResponseMinutes: 240,
+        resolutionMinutes: 1440,
+        status: "active",
+      },
+    ],
+    inboundMessages: [
+      {
+        tenantId: TENANT,
+        messageId: "msg_audit_inbound",
+        conversationId: CONVERSATION,
+        bodyText: "Where is my order? I need tracking please.",
+      },
+    ],
   });
   const activities = createTicketLifecyclePersistenceActivities({
     store,
@@ -116,13 +135,57 @@ describe("audit completeness", () => {
       ],
     });
 
-    // Approvals family: creating an approval audits approval.requested.
+    // Ticket family: creating the workflow-owned ticket audits
+    // ticket.created; triage and explicit transitions audit ticket.updated;
+    // the closed transition audits ticket.closed.
+    const ticketResult = await activities.createOrUpdateTicket({
+      tenant_id: TENANT,
+      ticket_id: TICKET,
+      initial_message_id: "msg_audit_inbound",
+      correlation_id: CORRELATION,
+    });
+    await activities.runInitialTriage({
+      tenant_id: TENANT,
+      ticket_id: TICKET,
+      initial_message_id: "msg_audit_inbound",
+      correlation_id: CORRELATION,
+      ticket: ticketResult.ticket,
+    });
+    await activities.applyTicketStateTransition({
+      tenant_id: TENANT,
+      ticket_id: TICKET,
+      correlation_id: CORRELATION,
+      to_status: "waiting_ai",
+      reason_code: "ai_drafting",
+      metadata: {},
+      actor: { type: "system", id: "workflow" },
+      transition_key: "ai-drafting",
+    });
+    await activities.applyTicketStateTransition({
+      tenant_id: TENANT,
+      ticket_id: TICKET,
+      correlation_id: CORRELATION,
+      to_status: "closed",
+      reason_code: "resolved_by_reviewer",
+      metadata: {},
+      actor: { type: "human", id: "usr_reviewer" },
+      transition_key: "close-requested",
+    });
+
+    // Approvals family: creating an approval audits approval.requested;
+    // a pending approval passing its decision window audits approval.expired.
     await activities.createApproval({
       tenant_id: TENANT,
       ticket_id: TICKET,
       correlation_id: CORRELATION,
       reason_code: "v1_default_human_approval",
       metadata: { draft: { draft_text: "Draft reply." } },
+    });
+    await activities.expireApproval({
+      tenant_id: TENANT,
+      ticket_id: TICKET,
+      correlation_id: CORRELATION,
+      approval_id: APPROVAL,
     });
 
     // Outbound send family: a permanent provider failure audits
@@ -162,7 +225,11 @@ describe("audit completeness", () => {
 
     const actions = store.listAuditEvents().map((event) => event.action);
 
+    expect(actions).toContain("ticket.created");
+    expect(actions).toContain("ticket.updated");
+    expect(actions).toContain("ticket.closed");
     expect(actions).toContain("approval.requested");
+    expect(actions).toContain("approval.expired");
     expect(actions).toContain("message.send_failed");
     for (const action of WORKFLOW_EMITTED_ACTIONS) {
       expect(actions).toContain(action);
