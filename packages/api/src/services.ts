@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
 import {
+  aiRunByIdQuery,
+  aiRunsListQuery,
   approvalByIdQuery,
   approvalsListQuery,
   auditEventByIdQuery,
   auditEventsListQuery,
+  completeQaReviewByIdQuery,
   conversationByIdQuery,
   conversationsListQuery,
   createAuditEventQuery,
   createCustomerQuery,
   createDatabaseFromEnv,
+  createQaReviewQuery,
   createTenantQuery,
   createTicketQuery,
   resolvePendingApprovalByIdQuery,
@@ -20,14 +24,18 @@ import {
   messagesListQuery,
   policiesListQuery,
   policyByIdQuery,
+  qaReviewByIdQuery,
+  qaReviewsListQuery,
   tenantsListQuery,
   tenantByIdQuery,
   ticketByIdQuery,
   ticketsListQuery,
+  toolCallsListQuery,
   updateCustomerByIdQuery,
   updateTenantByIdQuery,
   updateTicketByIdQuery,
   withTenantTransaction,
+  type AiRun,
   type Approval,
   type AuditEvent,
   type Conversation,
@@ -38,11 +46,21 @@ import {
   type NewTenant,
   type NewTicket,
   type PostgresClient,
+  type QaReview,
   type Tenant,
   type TenantPolicy,
   type Ticket,
+  type ToolCall,
 } from "@support/db";
+import {
+  createNoopSupportMetrics,
+  SUPPORT_ATTR,
+  withSpan,
+  type SupportMetrics,
+} from "@support/observability";
 import type {
+  AiRunListResponse,
+  AiRunResponse,
   ApprovalDecisionResponse,
   ApprovalDecisionStatus,
   ApprovalListResponse,
@@ -67,6 +85,11 @@ import type {
   MessageResponse,
   PolicyListResponse,
   PolicyResponse,
+  QaReviewCompleteRequest,
+  QaReviewCreateRequest,
+  QaReviewEvidenceResponse,
+  QaReviewListResponse,
+  QaReviewResponse,
   TenantCreateRequest,
   TenantListResponse,
   TenantResponse,
@@ -75,6 +98,7 @@ import type {
   TicketListResponse,
   TicketResponse,
   TicketUpdateRequest,
+  ToolCallResponse,
 } from "@support/shared-schemas";
 import {
   createTemporalApprovalWorkflowSignaler,
@@ -160,6 +184,28 @@ export interface AuditEventListOptions extends ListOptions {
   readonly action?: string;
   readonly correlation_id?: string;
 }
+
+export interface AiRunListOptions extends ListOptions {
+  readonly ticket_id?: string;
+  readonly status?: AiRun["status"];
+  readonly run_type?: AiRun["runType"];
+}
+
+export interface QaReviewListOptions extends ListOptions {
+  readonly ticket_id?: string;
+  readonly ai_run_id?: string;
+  readonly completed?: boolean;
+}
+
+export type QaReviewCreateOutcome =
+  | { readonly outcome: "created"; readonly review: QaReviewResponse }
+  | { readonly outcome: "ticket_not_found" }
+  | { readonly outcome: "ai_run_not_found" };
+
+export type QaReviewCompleteOutcome =
+  | { readonly outcome: "completed"; readonly review: QaReviewResponse }
+  | { readonly outcome: "not_found" }
+  | { readonly outcome: "conflict"; readonly review: QaReviewResponse };
 
 export interface ApiServices {
   readonly tenants: {
@@ -274,6 +320,39 @@ export interface ApiServices {
       decision: ApprovalDecisionInput,
     ): Promise<ApprovalDecisionOutcome>;
   };
+  readonly aiRuns: {
+    list(
+      context: TenantRequestContext,
+      options: AiRunListOptions,
+    ): Promise<AiRunListResponse>;
+    getById(
+      context: TenantRequestContext,
+      aiRunId: string,
+    ): Promise<AiRunResponse | null>;
+  };
+  readonly qaReviews: {
+    list(
+      context: TenantRequestContext,
+      options: QaReviewListOptions,
+    ): Promise<QaReviewListResponse>;
+    getById(
+      context: TenantRequestContext,
+      qaReviewId: string,
+    ): Promise<QaReviewResponse | null>;
+    create(
+      context: TenantRequestContext,
+      input: QaReviewCreateRequest,
+    ): Promise<QaReviewCreateOutcome>;
+    complete(
+      context: TenantRequestContext,
+      qaReviewId: string,
+      input: QaReviewCompleteRequest,
+    ): Promise<QaReviewCompleteOutcome>;
+    evidence(
+      context: TenantRequestContext,
+      qaReviewId: string,
+    ): Promise<QaReviewEvidenceResponse | null>;
+  };
   readonly auditEvents: {
     list(
       context: TenantRequestContext,
@@ -315,6 +394,7 @@ export interface DatabaseApiServicesDeps {
   readonly kbIngestion?: KbIngestionService;
   readonly kbRetrieval?: KbRetrievalService;
   readonly approvalSignaler?: ApprovalWorkflowSignaler;
+  readonly metrics?: SupportMetrics;
 }
 
 export function createDatabaseApiServices(
@@ -325,6 +405,7 @@ export function createDatabaseApiServices(
   const kbRetrieval = deps.kbRetrieval ?? createDatabaseKbRetrievalService();
   const approvalSignaler =
     deps.approvalSignaler ?? createTemporalApprovalWorkflowSignaler();
+  const metrics = deps.metrics ?? createNoopSupportMetrics();
 
   function getDatabase(): ReturnType<typeof createDatabaseFromEnv> {
     if (!database) {
@@ -757,142 +838,392 @@ export function createDatabaseApiServices(
         const scope = { tenantId };
         const decidedAt = new Date();
 
-        const resolution = await withTenantTransaction(
-          getClient(),
-          scope,
-          async (db) => {
-            const existingRows = await approvalByIdQuery(db, scope, approvalId);
-            const existing = existingRows[0];
-
-            if (!existing) {
-              return { kind: "not_found" as const };
-            }
-
-            if (existing.status !== "pending") {
-              return { kind: "conflict" as const, approval: existing };
-            }
-
-            // Approved decisions send the AI draft as-is, so the approved
-            // payload mirrors the request; edited decisions carry the human
-            // edit while `requested_payload` preserves the original AI draft
-            // (BACKEND_SPEC §12). Rejected/escalated decisions approve nothing.
-            const approvedPayload =
-              decision.status === "edited"
-                ? (decision.approved_payload ?? {})
-                : decision.status === "approved"
-                  ? existing.requestedPayload
-                  : null;
-
-            const updatedRows = await resolvePendingApprovalByIdQuery(
-              db,
+        return withSpan(
+          "approval.decide",
+          {
+            [SUPPORT_ATTR.tenantId]: tenantId,
+            [SUPPORT_ATTR.approvalId]: approvalId,
+            [SUPPORT_ATTR.correlationId]: context.correlationId,
+            [SUPPORT_ATTR.outcome]: decision.status,
+          },
+          async () => {
+            const resolution = await withTenantTransaction(
+              getClient(),
               scope,
-              approvalId,
-              {
-                status: decision.status,
-                approvedPayload,
-                reviewerUserId: context.actor.userId,
-                reviewNotes: decision.review_notes ?? null,
-                resolvedAt: decidedAt,
+              async (db) => {
+                const existingRows = await approvalByIdQuery(
+                  db,
+                  scope,
+                  approvalId,
+                );
+                const existing = existingRows[0];
+
+                if (!existing) {
+                  return { kind: "not_found" as const };
+                }
+
+                if (existing.status !== "pending") {
+                  return { kind: "conflict" as const, approval: existing };
+                }
+
+                // Approved decisions send the AI draft as-is, so the approved
+                // payload mirrors the request; edited decisions carry the human
+                // edit while `requested_payload` preserves the original AI draft
+                // (BACKEND_SPEC §12). Rejected/escalated decisions approve nothing.
+                const approvedPayload =
+                  decision.status === "edited"
+                    ? (decision.approved_payload ?? {})
+                    : decision.status === "approved"
+                      ? existing.requestedPayload
+                      : null;
+
+                const updatedRows = await resolvePendingApprovalByIdQuery(
+                  db,
+                  scope,
+                  approvalId,
+                  {
+                    status: decision.status,
+                    approvedPayload,
+                    reviewerUserId: context.actor.userId,
+                    reviewNotes: decision.review_notes ?? null,
+                    resolvedAt: decidedAt,
+                  },
+                );
+                const updated = updatedRows[0];
+
+                if (!updated) {
+                  return { kind: "conflict" as const, approval: existing };
+                }
+
+                await createAuditEventQuery(db, scope, {
+                  auditEventId: createId("aud"),
+                  actorType: "human",
+                  actorId: context.actor.userId,
+                  entityType: "approval",
+                  entityId: approvalId,
+                  action: `approval.${decision.status}`,
+                  metadata: {
+                    ticket_id: existing.ticketId,
+                    status: decision.status,
+                    review_notes: decision.review_notes ?? null,
+                    requested_payload: existing.requestedPayload,
+                    approved_payload: approvedPayload,
+                    decided_at: decidedAt.toISOString(),
+                  },
+                  correlationId: context.correlationId,
+                });
+
+                const ticketRows = await ticketByIdQuery(
+                  db,
+                  scope,
+                  existing.ticketId,
+                );
+
+                return {
+                  kind: "resolved" as const,
+                  approval: updated,
+                  conversationId: ticketRows[0]?.conversationId ?? null,
+                };
               },
             );
-            const updated = updatedRows[0];
 
-            if (!updated) {
-              return { kind: "conflict" as const, approval: existing };
+            if (resolution.kind === "not_found") {
+              return { outcome: "not_found" as const };
             }
 
-            await createAuditEventQuery(db, scope, {
-              auditEventId: createId("aud"),
-              actorType: "human",
-              actorId: context.actor.userId,
-              entityType: "approval",
-              entityId: approvalId,
-              action: `approval.${decision.status}`,
-              metadata: {
-                ticket_id: existing.ticketId,
-                status: decision.status,
-                review_notes: decision.review_notes ?? null,
-                requested_payload: existing.requestedPayload,
-                approved_payload: approvedPayload,
-                decided_at: decidedAt.toISOString(),
-              },
-              correlationId: context.correlationId,
+            if (resolution.kind === "conflict") {
+              return {
+                outcome: "conflict" as const,
+                approval: mapApproval(resolution.approval),
+              };
+            }
+
+            metrics.recordApprovalDecision({
+              decision: decision.status,
+              latencyMs: Math.max(
+                0,
+                decidedAt.getTime() - resolution.approval.createdAt.getTime(),
+              ),
             });
 
-            const ticketRows = await ticketByIdQuery(
-              db,
-              scope,
-              existing.ticketId,
-            );
+            let workflowSignal: ApprovalWorkflowSignalResult;
+
+            if (resolution.conversationId === null) {
+              workflowSignal = {
+                delivered: false,
+                workflow_id: null,
+                reason: "ticket_not_found",
+              };
+            } else {
+              try {
+                const signalResult =
+                  await approvalSignaler.signalApprovalCompleted({
+                    workflowId: `ticket-lifecycle:${tenantId}:${resolution.conversationId}`,
+                    signal: {
+                      approval_id: approvalId,
+                      status: decision.status,
+                      actor_id: context.actor.userId,
+                      decided_at: decidedAt.toISOString(),
+                      notes: decision.review_notes ?? null,
+                    },
+                  });
+                workflowSignal = {
+                  delivered: signalResult.delivered,
+                  workflow_id: signalResult.workflow_id,
+                  reason: signalResult.reason,
+                };
+              } catch (error) {
+                metrics.recordCriticalFailure("approval_signal_failed");
+                throw new HttpError(
+                  502,
+                  "WORKFLOW_ERROR",
+                  "The approval decision was recorded but the workflow signal failed; redeliver the signal before retrying.",
+                  [
+                    {
+                      message:
+                        error instanceof Error ? error.message : String(error),
+                    },
+                  ],
+                );
+              }
+            }
 
             return {
-              kind: "resolved" as const,
-              approval: updated,
-              conversationId: ticketRows[0]?.conversationId ?? null,
+              outcome: "resolved" as const,
+              decision: {
+                approval: mapApproval(resolution.approval),
+                workflow_signal: workflowSignal,
+              },
             };
           },
         );
-
-        if (resolution.kind === "not_found") {
-          return { outcome: "not_found" };
-        }
-
-        if (resolution.kind === "conflict") {
-          return {
-            outcome: "conflict",
-            approval: mapApproval(resolution.approval),
-          };
-        }
-
-        let workflowSignal: ApprovalWorkflowSignalResult;
-
-        if (resolution.conversationId === null) {
-          workflowSignal = {
-            delivered: false,
-            workflow_id: null,
-            reason: "ticket_not_found",
-          };
-        } else {
-          try {
-            const signalResult = await approvalSignaler.signalApprovalCompleted(
+      },
+    },
+    aiRuns: {
+      async list(context, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await aiRunsListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
               {
-                workflowId: `ticket-lifecycle:${tenantId}:${resolution.conversationId}`,
-                signal: {
-                  approval_id: approvalId,
-                  status: decision.status,
-                  actor_id: context.actor.userId,
-                  decided_at: decidedAt.toISOString(),
-                  notes: decision.review_notes ?? null,
-                },
+                limit: options.limit,
+                ticketId: options.ticket_id,
+                status: options.status,
+                runType: options.run_type,
               },
             );
-            workflowSignal = {
-              delivered: signalResult.delivered,
-              workflow_id: signalResult.workflow_id,
-              reason: signalResult.reason,
-            };
-          } catch (error) {
-            throw new HttpError(
-              502,
-              "WORKFLOW_ERROR",
-              "The approval decision was recorded but the workflow signal failed; redeliver the signal before retrying.",
-              [
-                {
-                  message:
-                    error instanceof Error ? error.message : String(error),
-                },
-              ],
-            );
-          }
-        }
 
-        return {
-          outcome: "resolved",
-          decision: {
-            approval: mapApproval(resolution.approval),
-            workflow_signal: workflowSignal,
+            return {
+              ai_runs: rows.map(mapAiRun),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
           },
-        };
+        );
+      },
+      async getById(context, aiRunId) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await aiRunByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              aiRunId,
+            );
+
+            return rows[0] ? mapAiRun(rows[0]) : null;
+          },
+        );
+      },
+    },
+    qaReviews: {
+      async list(context, options) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await qaReviewsListQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              {
+                limit: options.limit,
+                ticketId: options.ticket_id,
+                aiRunId: options.ai_run_id,
+                completed: options.completed,
+              },
+            );
+
+            return {
+              qa_reviews: rows.map(mapQaReview),
+              page: {
+                count: rows.length,
+                limit: options.limit,
+              },
+            };
+          },
+        );
+      },
+      async getById(context, qaReviewId) {
+        return withTenantTransaction(
+          getClient(),
+          { tenantId: context.tenant.tenantId },
+          async (db) => {
+            const rows = await qaReviewByIdQuery(
+              db,
+              { tenantId: context.tenant.tenantId },
+              qaReviewId,
+            );
+
+            return rows[0] ? mapQaReview(rows[0]) : null;
+          },
+        );
+      },
+      async create(context, input) {
+        const scope = { tenantId: context.tenant.tenantId };
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const [ticket] = await ticketByIdQuery(db, scope, input.ticket_id);
+
+          if (!ticket) {
+            return { outcome: "ticket_not_found" as const };
+          }
+
+          const aiRunId = input.ai_run_id ?? null;
+
+          if (aiRunId !== null) {
+            const [aiRun] = await aiRunByIdQuery(db, scope, aiRunId);
+
+            if (!aiRun) {
+              return { outcome: "ai_run_not_found" as const };
+            }
+          }
+
+          const rows = await createQaReviewQuery(db, scope, {
+            qaReviewId: createId("qa"),
+            ticketId: input.ticket_id,
+            aiRunId,
+            sampleReason: input.sample_reason,
+            notes: input.notes ?? null,
+          });
+
+          return {
+            outcome: "created" as const,
+            review: mapQaReview(rows[0]!),
+          };
+        });
+      },
+      async complete(context, qaReviewId, input) {
+        const scope = { tenantId: context.tenant.tenantId };
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const existingRows = await qaReviewByIdQuery(db, scope, qaReviewId);
+          const existing = existingRows[0];
+
+          if (!existing) {
+            return { outcome: "not_found" as const };
+          }
+
+          if (existing.completedAt !== null) {
+            return {
+              outcome: "conflict" as const,
+              review: mapQaReview(existing),
+            };
+          }
+
+          const updatedRows = await completeQaReviewByIdQuery(
+            db,
+            scope,
+            qaReviewId,
+            {
+              reviewerUserId: context.actor.userId,
+              scores: input.scores,
+              defects: input.defects.map((defect) => ({ ...defect })),
+              ...(input.notes !== undefined ? { notes: input.notes } : {}),
+              completedAt: new Date(),
+            },
+          );
+          const updated = updatedRows[0];
+
+          if (!updated) {
+            return {
+              outcome: "conflict" as const,
+              review: mapQaReview(existing),
+            };
+          }
+
+          return {
+            outcome: "completed" as const,
+            review: mapQaReview(updated),
+          };
+        });
+      },
+      async evidence(context, qaReviewId) {
+        const scope = { tenantId: context.tenant.tenantId };
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const [review] = await qaReviewByIdQuery(db, scope, qaReviewId);
+
+          if (!review) {
+            return null;
+          }
+
+          const [ticket] = await ticketByIdQuery(db, scope, review.ticketId);
+
+          if (!ticket) {
+            return null;
+          }
+
+          const [conversation] = await conversationByIdQuery(
+            db,
+            scope,
+            ticket.conversationId,
+          );
+
+          if (!conversation) {
+            return null;
+          }
+
+          const messages = await messagesListQuery(
+            db,
+            scope,
+            conversation.conversationId,
+            { limit: 100 },
+          );
+
+          let aiRun: AiRun | null = null;
+
+          if (review.aiRunId !== null) {
+            const aiRunRows = await aiRunByIdQuery(db, scope, review.aiRunId);
+            aiRun = aiRunRows[0] ?? null;
+          }
+
+          const toolCalls = await toolCallsListQuery(db, scope, {
+            limit: 100,
+            ...(aiRun
+              ? { aiRunId: aiRun.aiRunId }
+              : { ticketId: review.ticketId }),
+          });
+          const ticketApprovals = await approvalsListQuery(db, scope, {
+            limit: 50,
+            ticketId: review.ticketId,
+          });
+
+          return {
+            qa_review: mapQaReview(review),
+            ticket: mapTicket(ticket),
+            conversation: mapConversation(conversation),
+            messages: messages.map(mapMessage),
+            ai_run: aiRun ? mapAiRun(aiRun) : null,
+            tool_calls: toolCalls.map(mapToolCall),
+            approvals: ticketApprovals.map(mapApproval),
+          };
+        });
       },
     },
     auditEvents: {
@@ -1254,6 +1585,69 @@ function mapApproval(row: Approval): ApprovalResponse {
     review_notes: row.reviewNotes,
     created_at: toIsoString(row.createdAt),
     resolved_at: toNullableIsoString(row.resolvedAt),
+  };
+}
+
+function mapAiRun(row: AiRun): AiRunResponse {
+  return {
+    ai_run_id: row.aiRunId,
+    tenant_id: row.tenantId,
+    ticket_id: row.ticketId,
+    conversation_id: row.conversationId,
+    run_type: row.runType,
+    prompt_version: row.promptVersion,
+    model_provider: row.modelProvider,
+    model_id: row.modelId,
+    input_refs: row.inputRefs,
+    retrieved_context_refs: row.retrievedContextRefs,
+    structured_output: row.structuredOutput,
+    confidence: row.confidence,
+    risk_level: row.riskLevel,
+    automation_recommendation: row.automationRecommendation,
+    guardrail_results: row.guardrailResults,
+    status: row.status,
+    latency_ms: row.latencyMs,
+    input_tokens: row.inputTokens,
+    output_tokens: row.outputTokens,
+    cost_estimate: row.costEstimate,
+    trace_id: row.traceId,
+    created_at: toIsoString(row.createdAt),
+    completed_at: toNullableIsoString(row.completedAt),
+  };
+}
+
+function mapToolCall(row: ToolCall): ToolCallResponse {
+  return {
+    tool_call_id: row.toolCallId,
+    tenant_id: row.tenantId,
+    ticket_id: row.ticketId,
+    ai_run_id: row.aiRunId,
+    tool_definition_id: row.toolDefinitionId,
+    input: row.input,
+    output: row.output,
+    status: row.status,
+    side_effect_class: row.sideEffectClass,
+    idempotency_key: row.idempotencyKey,
+    started_at: toNullableIsoString(row.startedAt),
+    completed_at: toNullableIsoString(row.completedAt),
+    error_code: row.errorCode,
+    error_message: row.errorMessage,
+  };
+}
+
+function mapQaReview(row: QaReview): QaReviewResponse {
+  return {
+    qa_review_id: row.qaReviewId,
+    tenant_id: row.tenantId,
+    ticket_id: row.ticketId,
+    ai_run_id: row.aiRunId,
+    reviewer_user_id: row.reviewerUserId,
+    sample_reason: row.sampleReason,
+    scores: row.scores,
+    defects: row.defects,
+    notes: row.notes,
+    created_at: toIsoString(row.createdAt),
+    completed_at: toNullableIsoString(row.completedAt),
   };
 }
 

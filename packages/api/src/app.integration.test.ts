@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { createRecordingSupportMetrics } from "@support/observability";
 import {
+  AiRunListResponseSchema,
+  AiRunResourceResponseSchema,
   ApprovalDecisionResponseSchema,
   ApprovalListResponseSchema,
   ApprovalResourceResponseSchema,
@@ -17,6 +20,9 @@ import {
   MessageResourceResponseSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
+  QaReviewEvidenceResponseSchema,
+  QaReviewListResponseSchema,
+  QaReviewResourceResponseSchema,
   TenantListResponseSchema,
   TenantResourceResponseSchema,
   TicketListResponseSchema,
@@ -24,6 +30,7 @@ import {
   type RoleName,
 } from "@support/shared-schemas";
 import {
+  aiRuns,
   approvals,
   auditEvents,
   channels,
@@ -77,6 +84,8 @@ const ids = {
   ticketA: `${fixturePrefix}_tic_a`,
   ticketB: `${fixturePrefix}_tic_b`,
   ticketCreated: `${fixturePrefix}_tic_created`,
+  aiRunA: `${fixturePrefix}_air_a`,
+  aiRunB: `${fixturePrefix}_air_b`,
 };
 
 describeLive("live PostgreSQL-backed API resource reads", () => {
@@ -84,6 +93,7 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
   let client: PostgresClient | undefined;
   let db: ReturnType<typeof createDatabase>;
   const approvalSignaler = createRecordingApprovalWorkflowSignaler();
+  const metrics = createRecordingSupportMetrics();
 
   beforeAll(async () => {
     if (!process.env.DATABASE_URL) {
@@ -99,7 +109,8 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     await seedFixtures(db);
 
     app = buildApp({
-      services: createDatabaseApiServices({ approvalSignaler }),
+      services: createDatabaseApiServices({ approvalSignaler, metrics }),
+      metrics,
     });
   });
 
@@ -805,6 +816,199 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     expect(response.statusCode).toBe(403);
     expect(body.error.code).toBe("FORBIDDEN");
   });
+
+  it("lists and reads tenant-scoped AI runs with trace links, without crossing tenants", async () => {
+    const list = await app!.inject({
+      method: "GET",
+      url: `/v1/ai-runs?ticket_id=${ids.ticketA}&limit=10`,
+      headers: authHeaders("qa_reviewer"),
+    });
+    const listBody = AiRunListResponseSchema.parse(list.json());
+
+    expect(list.statusCode).toBe(200);
+    expect(listBody.ai_runs.map((run) => run.ai_run_id)).toEqual([ids.aiRunA]);
+    expect(listBody.ai_runs[0]?.trace_id).toBe(`${fixturePrefix}_trace_a`);
+
+    const read = await app!.inject({
+      method: "GET",
+      url: `/v1/ai-runs/${ids.aiRunA}`,
+      headers: authHeaders("qa_reviewer"),
+    });
+
+    expect(read.statusCode).toBe(200);
+    expect(AiRunResourceResponseSchema.parse(read.json()).ai_run.trace_id).toBe(
+      `${fixturePrefix}_trace_a`,
+    );
+
+    const crossTenant = await app!.inject({
+      method: "GET",
+      url: `/v1/ai-runs/${ids.aiRunB}`,
+      headers: authHeaders("qa_reviewer"),
+    });
+
+    expect(crossTenant.statusCode).toBe(404);
+  });
+
+  it("rejects AI run reads for roles without the ai_runs:read permission", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/v1/ai-runs",
+      headers: authHeaders("client_viewer"),
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("runs the QA review lifecycle: create, list, evidence, complete, conflict", async () => {
+    const created = await app!.inject({
+      method: "POST",
+      url: "/v1/qa-reviews",
+      headers: authHeaders("qa_reviewer"),
+      payload: {
+        ticket_id: ids.ticketA,
+        ai_run_id: ids.aiRunA,
+        sample_reason: "manual",
+        notes: "Milestone 11 integration spot check.",
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    const review = QaReviewResourceResponseSchema.parse(
+      created.json(),
+    ).qa_review;
+    expect(review).toMatchObject({
+      tenant_id: ids.tenantA,
+      ticket_id: ids.ticketA,
+      ai_run_id: ids.aiRunA,
+      sample_reason: "manual",
+      completed_at: null,
+    });
+
+    const list = await app!.inject({
+      method: "GET",
+      url: `/v1/qa-reviews?ticket_id=${ids.ticketA}&completed=false&limit=10`,
+      headers: authHeaders("qa_reviewer"),
+    });
+    const listBody = QaReviewListResponseSchema.parse(list.json());
+
+    expect(list.statusCode).toBe(200);
+    expect(listBody.qa_reviews.map((entry) => entry.qa_review_id)).toContain(
+      review.qa_review_id,
+    );
+
+    // Acceptance: QA review sees conversation, evidence, tool calls, AI
+    // output, human edits, and the final response in one package.
+    const evidence = await app!.inject({
+      method: "GET",
+      url: `/v1/qa-reviews/${review.qa_review_id}/evidence`,
+      headers: authHeaders("qa_reviewer"),
+    });
+
+    expect(evidence.statusCode).toBe(200);
+    const evidenceBody = QaReviewEvidenceResponseSchema.parse(evidence.json());
+    expect(evidenceBody.conversation.conversation_id).toBe(ids.conversationA);
+    expect(evidenceBody.messages.length).toBeGreaterThan(0);
+    expect(evidenceBody.ai_run?.ai_run_id).toBe(ids.aiRunA);
+    expect(evidenceBody.ai_run?.trace_id).toBe(`${fixturePrefix}_trace_a`);
+    expect(evidenceBody.ai_run?.structured_output).toMatchObject({
+      draft: { draft_text: "Tenant A AI draft." },
+    });
+    // The edited approval decided earlier in this suite preserves the AI
+    // draft alongside the human edit.
+    const editedApproval = evidenceBody.approvals.find(
+      (approval) => approval.status === "edited",
+    );
+    expect(editedApproval?.requested_payload).toBeDefined();
+    expect(editedApproval?.approved_payload).not.toBeNull();
+
+    const completed = await app!.inject({
+      method: "POST",
+      url: `/v1/qa-reviews/${review.qa_review_id}/complete`,
+      headers: authHeaders("qa_reviewer"),
+      payload: {
+        scores: { draft_quality: 4, safety: 5, evidence: 4 },
+        defects: [{ category: "bad_tone", severity: "low" }],
+        notes: "Draft was safe; tone slightly curt.",
+      },
+    });
+
+    expect(completed.statusCode).toBe(200);
+    const completedReview = QaReviewResourceResponseSchema.parse(
+      completed.json(),
+    ).qa_review;
+    expect(completedReview.completed_at).not.toBeNull();
+    expect(completedReview.reviewer_user_id).toBe(ids.reviewerUser);
+    expect(completedReview.defects).toEqual([
+      { category: "bad_tone", severity: "low" },
+    ]);
+
+    const conflict = await app!.inject({
+      method: "POST",
+      url: `/v1/qa-reviews/${review.qa_review_id}/complete`,
+      headers: authHeaders("qa_reviewer"),
+      payload: { scores: {}, defects: [] },
+    });
+
+    expect(conflict.statusCode).toBe(409);
+  });
+
+  it("returns 404 for QA reviews created against other tenants' resources", async () => {
+    const crossTenantTicket = await app!.inject({
+      method: "POST",
+      url: "/v1/qa-reviews",
+      headers: authHeaders("qa_reviewer"),
+      payload: { ticket_id: ids.ticketB, sample_reason: "manual" },
+    });
+
+    expect(crossTenantTicket.statusCode).toBe(404);
+
+    const crossTenantAiRun = await app!.inject({
+      method: "POST",
+      url: "/v1/qa-reviews",
+      headers: authHeaders("qa_reviewer"),
+      payload: {
+        ticket_id: ids.ticketA,
+        ai_run_id: ids.aiRunB,
+        sample_reason: "manual",
+      },
+    });
+
+    expect(crossTenantAiRun.statusCode).toBe(404);
+  });
+
+  it("denies QA review writes to roles without the write permission", async () => {
+    const response = await app!.inject({
+      method: "POST",
+      url: "/v1/qa-reviews",
+      headers: authHeaders("client_viewer"),
+      payload: { ticket_id: ids.ticketA, sample_reason: "manual" },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("records approval decision and API request metrics", async () => {
+    // Decisions were made earlier in this suite (approve/edit/reject/
+    // escalate); the shared recording metrics captured them.
+    const decisions = metrics.approvalDecisions.map((entry) => entry.decision);
+
+    expect(decisions).toEqual(
+      expect.arrayContaining(["approved", "edited", "rejected", "escalated"]),
+    );
+    expect(
+      metrics.approvalDecisions.every(
+        (entry) => entry.latencyMs !== null && entry.latencyMs >= 0,
+      ),
+    ).toBe(true);
+    expect(
+      metrics.apiRequests.some(
+        (request) =>
+          request.route === "/v1/approvals/:approval_id/approve" &&
+          request.statusCode === 200,
+      ),
+    ).toBe(true);
+    expect(metrics.criticalFailures).toEqual([]);
+  });
 });
 
 function authHeaders(role: RoleName) {
@@ -918,6 +1122,43 @@ async function seedFixtures(db: ReturnType<typeof createDatabase>) {
       tenantId: ids.tenantA,
       email: `${fixturePrefix}.reviewer@example.test`,
       displayName: "Tenant A Reviewer",
+    },
+  ]);
+
+  await db.insert(aiRuns).values([
+    {
+      aiRunId: ids.aiRunA,
+      tenantId: ids.tenantA,
+      ticketId: ids.ticketA,
+      conversationId: ids.conversationA,
+      runType: "full_graph",
+      promptVersion: "support_graph.v1",
+      modelProvider: "deterministic",
+      modelId: "deterministic-support-model.v1",
+      structuredOutput: {
+        draft: { draft_text: "Tenant A AI draft." },
+        final_recommendation: { automation_mode: "human_approve" },
+      },
+      confidence: 0.91,
+      riskLevel: "low",
+      automationRecommendation: "human_approve",
+      status: "succeeded",
+      latencyMs: 240,
+      traceId: `${fixturePrefix}_trace_a`,
+      completedAt: new Date("2026-06-19T00:00:01.000Z"),
+    },
+    {
+      aiRunId: ids.aiRunB,
+      tenantId: ids.tenantB,
+      ticketId: ids.ticketB,
+      conversationId: ids.conversationB,
+      runType: "full_graph",
+      promptVersion: "support_graph.v1",
+      modelProvider: "deterministic",
+      modelId: "deterministic-support-model.v1",
+      status: "succeeded",
+      traceId: `${fixturePrefix}_trace_b`,
+      completedAt: new Date("2026-06-19T00:00:01.000Z"),
     },
   ]);
 
@@ -1061,7 +1302,15 @@ async function cleanupFixtures(client: PostgresClient) {
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})
   `;
   await client`
+    delete from qa_reviews
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
+  await client`
     delete from approvals
+    where tenant_id in (${ids.tenantA}, ${ids.tenantB})
+  `;
+  await client`
+    delete from ai_runs
     where tenant_id in (${ids.tenantA}, ${ids.tenantB})
   `;
   await client`

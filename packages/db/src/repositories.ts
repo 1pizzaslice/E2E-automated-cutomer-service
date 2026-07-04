@@ -4,6 +4,9 @@ import {
   cosineDistance,
   desc,
   eq,
+  gte,
+  inArray,
+  isNotNull,
   isNull,
   or,
   sql,
@@ -22,6 +25,8 @@ import {
   kbChunks,
   kbDocuments,
   messages,
+  qaReviews,
+  type AiRun,
   type Approval,
   type AuditEvent,
   type Channel,
@@ -29,6 +34,7 @@ import {
   type CustomerIdentity,
   type KbDocument,
   type Message,
+  type NewAiRun,
   type NewApproval,
   type NewAuditEvent,
   type NewConversation,
@@ -37,6 +43,7 @@ import {
   type NewKbChunk,
   type NewKbDocument,
   type NewMessage,
+  type NewQaReview,
   type NewTenant,
   type NewTicket,
   type NewToolCall,
@@ -1133,4 +1140,247 @@ export function createAuditEventQuery(
     .values({ ...values, tenantId: scope.tenantId })
     .onConflictDoNothing()
     .returning();
+}
+
+// --- Milestone 11 AI run persistence + QA reviews ----------------------------
+
+export interface AiRunListQueryOptions extends ListQueryOptions {
+  readonly ticketId?: string;
+  readonly status?: AiRun["status"];
+  readonly runType?: AiRun["runType"];
+}
+
+export interface ToolCallListQueryOptions extends ListQueryOptions {
+  readonly ticketId?: string;
+  readonly aiRunId?: string;
+}
+
+export interface QaReviewListQueryOptions extends ListQueryOptions {
+  readonly ticketId?: string;
+  readonly aiRunId?: string;
+  /** true → only completed reviews; false → only open reviews. */
+  readonly completed?: boolean;
+}
+
+export interface QaSamplingCandidateQueryOptions extends ListQueryOptions {
+  /** Only consider AI runs created at or after this instant. */
+  readonly since?: Date;
+}
+
+/**
+ * Insert an AI run row (BACKEND_SPEC §11: append-only operational evidence).
+ * Callers supply a deterministic `aiRunId` (the runtime derives it from
+ * tenant/ticket/correlation ids) so a retried Temporal activity re-inserting
+ * the same run is a no-op; an empty result means the row already exists.
+ */
+export function createAiRunQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewAiRun, "tenantId">,
+) {
+  return db
+    .insert(aiRuns)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+/**
+ * Record the terminal outcome of an AI run (status, structured output,
+ * latency, trace id, `completed_at`). Only explicitly modeled lifecycle
+ * fields change; the append-only evidence fields stay as inserted.
+ */
+export function completeAiRunByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  aiRunId: string,
+  values: Partial<NewAiRun>,
+) {
+  return db
+    .update(aiRuns)
+    .set(values)
+    .where(
+      and(eq(aiRuns.tenantId, scope.tenantId), eq(aiRuns.aiRunId, aiRunId)),
+    )
+    .returning();
+}
+
+export function aiRunsListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: AiRunListQueryOptions,
+) {
+  const filters: SQL[] = [eq(aiRuns.tenantId, scope.tenantId)];
+
+  if (options.ticketId) {
+    filters.push(eq(aiRuns.ticketId, options.ticketId));
+  }
+
+  if (options.status) {
+    filters.push(eq(aiRuns.status, options.status));
+  }
+
+  if (options.runType) {
+    filters.push(eq(aiRuns.runType, options.runType));
+  }
+
+  return db
+    .select()
+    .from(aiRuns)
+    .where(and(...filters))
+    .orderBy(desc(aiRuns.createdAt), desc(aiRuns.aiRunId))
+    .limit(options.limit);
+}
+
+export function toolCallsListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: ToolCallListQueryOptions,
+) {
+  const filters: SQL[] = [eq(toolCalls.tenantId, scope.tenantId)];
+
+  if (options.ticketId) {
+    filters.push(eq(toolCalls.ticketId, options.ticketId));
+  }
+
+  if (options.aiRunId) {
+    filters.push(eq(toolCalls.aiRunId, options.aiRunId));
+  }
+
+  return db
+    .select()
+    .from(toolCalls)
+    .where(and(...filters))
+    .orderBy(desc(toolCalls.startedAt), desc(toolCalls.toolCallId))
+    .limit(options.limit);
+}
+
+/**
+ * Insert a QA review row. The QA sampling job supplies a deterministic
+ * `qaReviewId` derived from the sampled AI run, so re-running the job never
+ * queues the same run for review twice; an empty result means the review
+ * already exists.
+ */
+export function createQaReviewQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewQaReview, "tenantId">,
+) {
+  return db
+    .insert(qaReviews)
+    .values({ ...values, tenantId: scope.tenantId })
+    .onConflictDoNothing()
+    .returning();
+}
+
+export function qaReviewByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  qaReviewId: string,
+) {
+  return db
+    .select()
+    .from(qaReviews)
+    .where(
+      and(
+        eq(qaReviews.tenantId, scope.tenantId),
+        eq(qaReviews.qaReviewId, qaReviewId),
+      ),
+    )
+    .limit(1);
+}
+
+export function qaReviewsListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: QaReviewListQueryOptions,
+) {
+  const filters: SQL[] = [eq(qaReviews.tenantId, scope.tenantId)];
+
+  if (options.ticketId) {
+    filters.push(eq(qaReviews.ticketId, options.ticketId));
+  }
+
+  if (options.aiRunId) {
+    filters.push(eq(qaReviews.aiRunId, options.aiRunId));
+  }
+
+  if (options.completed === true) {
+    filters.push(isNotNull(qaReviews.completedAt));
+  } else if (options.completed === false) {
+    filters.push(isNull(qaReviews.completedAt));
+  }
+
+  return db
+    .select()
+    .from(qaReviews)
+    .where(and(...filters))
+    .orderBy(desc(qaReviews.createdAt), desc(qaReviews.qaReviewId))
+    .limit(options.limit);
+}
+
+/**
+ * Complete an open QA review with reviewer scores/defects/notes. The
+ * `completed_at is null` guard makes concurrent double-completion safe: the
+ * second completion matches zero rows and the caller reports a conflict
+ * instead of overwriting the first reviewer's assessment.
+ */
+export function completeQaReviewByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  qaReviewId: string,
+  values: Partial<NewQaReview>,
+) {
+  return db
+    .update(qaReviews)
+    .set(values)
+    .where(
+      and(
+        eq(qaReviews.tenantId, scope.tenantId),
+        eq(qaReviews.qaReviewId, qaReviewId),
+        isNull(qaReviews.completedAt),
+      ),
+    )
+    .returning();
+}
+
+/**
+ * Completed AI runs that have no QA review yet — the candidate pool for the
+ * QA sampling job (SOPS §10). Joins the owning ticket for routing context and
+ * left-joins `qa_reviews` on the AI run so already-sampled runs drop out.
+ * Ascending `created_at` keeps repeated job runs walking the backlog in a
+ * stable order.
+ */
+export function qaSamplingCandidatesQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: QaSamplingCandidateQueryOptions,
+) {
+  const filters: SQL[] = [
+    eq(aiRuns.tenantId, scope.tenantId),
+    inArray(aiRuns.status, ["succeeded", "failed"]),
+    isNull(qaReviews.qaReviewId),
+  ];
+
+  if (options.since) {
+    filters.push(gte(aiRuns.createdAt, options.since));
+  }
+
+  return db
+    .select({
+      aiRunId: aiRuns.aiRunId,
+      ticketId: aiRuns.ticketId,
+      conversationId: aiRuns.conversationId,
+      status: aiRuns.status,
+      automationRecommendation: aiRuns.automationRecommendation,
+      riskLevel: aiRuns.riskLevel,
+      createdAt: aiRuns.createdAt,
+      ticketStatus: tickets.status,
+    })
+    .from(aiRuns)
+    .innerJoin(tickets, eq(aiRuns.ticketId, tickets.ticketId))
+    .leftJoin(qaReviews, eq(qaReviews.aiRunId, aiRuns.aiRunId))
+    .where(and(...filters))
+    .orderBy(asc(aiRuns.createdAt), asc(aiRuns.aiRunId))
+    .limit(options.limit);
 }

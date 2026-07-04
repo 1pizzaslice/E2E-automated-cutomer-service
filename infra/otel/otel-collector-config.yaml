@@ -12,6 +12,14 @@ processors:
 exporters:
   debug:
     verbosity: basic
+  # Exposes every OTLP metric for Prometheus-compatible scraping at
+  # http://localhost:8889/metrics. Metric names map dot -> underscore with no
+  # extra type/unit suffixes, so `support.api.requests` scrapes as
+  # `support_api_requests`; see infra/observability/README.md and the alert
+  # rules in infra/observability/alerts.yaml.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    translation_strategy: UnderscoreEscapingWithoutSuffixes
 
 service:
   pipelines:
@@ -22,7 +30,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, prometheus]
     logs:
       receivers: [otlp]
       processors: [batch]

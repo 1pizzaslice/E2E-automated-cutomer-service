@@ -611,6 +611,23 @@ Rules:
 - Do not store secrets in AI run records.
 - Prompt content storage must follow redaction policy.
 
+Implementation note (Milestone 11): `ai_runs` rows are persisted by the
+worker-side `createPersistedRunAiGraph` wrapper
+(`packages/workers/src/activities/ticket-lifecycle-persistence.ts`), which
+wraps any `runAiGraph` activity implementation and records the run's
+structured output, confidence/risk/automation recommendation, guardrail
+results, latency, and `trace_id` after the graph completes (failed runs
+included, with a deterministic backfilled `ai_run_id` when the runtime could
+not produce one). Deterministic run ids make Temporal activity retries
+replay instead of duplicating rows, and a missing owning ticket row skips
+persistence rather than failing the workflow. Because the row now exists
+before `createApproval`/`sendOutboundMessage` run, the Milestone 10
+`approvals.ai_run_id`/`messages.ai_run_id` FK guards link automatically.
+`trace_id` is the observability join key: it connects the row to the OTel
+spans exported to the collector and to the runtime's redacted trace export
+(AI_RUNTIME_HARNESS §15). Tenant-scoped reads are served by
+`GET /v1/ai-runs` and `GET /v1/ai-runs/{ai_run_id}` (§17.11).
+
 ## 12. Approval Model
 
 Fields:
@@ -681,6 +698,21 @@ Defect categories:
 - `privacy_issue`
 - `tenant_leakage`
 - `unsafe_auto_send`
+
+Implementation note (Milestone 11): QA reviews are queued two ways — the
+deterministic QA sampling job (`packages/workers/src/qa-sampling.ts`,
+SOPS §10 rules: 100% of auto-send recommendations as
+`auto_send_candidate`, 100% of high-risk runs as `high_risk`, a
+hash-bucketed random share of the rest as `random_sample`, default 25%)
+and manual `POST /v1/qa-reviews` (`sample_reason: manual`). Reviewers
+complete a review through `POST /v1/qa-reviews/{qa_review_id}/complete`
+with 0-5 `scores` per SOP dimension and `defects` drawn from the taxonomy
+above; completion is guarded (`completed_at is null`) so double
+completion returns `409`. `GET /v1/qa-reviews/{qa_review_id}/evidence`
+returns the composite evidence package (ticket, conversation, messages
+including the outbound final response, the AI run with its trace link,
+tool calls, and approvals carrying the original AI draft plus the human
+edit) so a reviewer sees everything in one read (§17.14).
 
 ## 15. Routing Decision Contract
 
@@ -771,6 +803,13 @@ Current API skeleton implements:
 - `GET /v1/kb/documents/{kb_document_id}`
 - `GET /v1/approvals`
 - `GET /v1/approvals/{approval_id}`
+- `GET /v1/ai-runs`
+- `GET /v1/ai-runs/{ai_run_id}`
+- `GET /v1/qa-reviews`
+- `POST /v1/qa-reviews`
+- `GET /v1/qa-reviews/{qa_review_id}`
+- `POST /v1/qa-reviews/{qa_review_id}/complete`
+- `GET /v1/qa-reviews/{qa_review_id}/evidence`
 - `GET /v1/audit-events`
 - `GET /v1/audit-events/{audit_event_id}`
 - `GET /v1/tickets`
@@ -782,7 +821,7 @@ Current API skeleton implements:
 The current tenant, customer, ticket, conversation, message, policy, KB document, approval, and audit event endpoints are
 skeleton contracts where the database schema already supports those operations.
 Tenant/customer/ticket currently support list-create-read-update as documented
-below; conversations, messages, policies, and audit events currently support read/list only, while approvals support read/list plus the approve/edit/reject/escalate decision endpoints (§17.12). They validate
+below; conversations, messages, policies, audit events, and AI runs currently support read/list only, approvals support read/list plus the approve/edit/reject/escalate decision endpoints (§17.12), and QA reviews support list/read/create/complete plus the composite evidence read (§17.14). They validate
 headers, path params, query params, request bodies, and response bodies, then use
 the DB package tenant transaction helper for tenant-scoped data access. They
 enforce the current role-to-permission matrix before service/data access. They do
@@ -836,6 +875,9 @@ Current skeleton permissions:
 - `approvals:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `approvals:review`: `platform_admin`, `ops_admin`, `support_agent`. Grants the approve/edit/reject/escalate decision endpoints; `qa_reviewer`/`client_viewer` stay read-only.
 - `audit_events:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
+- `ai_runs:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`. AI run records are internal operational evidence, so `client_viewer` has no access.
+- `qa_reviews:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`.
+- `qa_reviews:write`: `platform_admin`, `ops_admin`, `qa_reviewer`. Grants QA review creation and completion; support agents can read reviews of their tickets but not author them.
 - `tickets:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `tickets:create`: `platform_admin`, `ops_admin`, `support_agent`.
 - `tickets:update`: `platform_admin`, `ops_admin`, `support_agent`.
@@ -991,6 +1033,16 @@ Current implementation:
 - `POST /v1/tickets/{ticket_id}/ai/draft`
 - `POST /v1/tickets/{ticket_id}/ai/retry`
 
+Current implementation:
+
+- `GET /v1/ai-runs` (permission `ai_runs:read`) lists tenant-scoped AI run
+  records with `limit`, `ticket_id`, `status`, and `run_type` query filters.
+- `GET /v1/ai-runs/{ai_run_id}` reads a tenant-scoped AI run including its
+  structured output, guardrail results, and the `trace_id` observability
+  link. Missing or cross-tenant runs return `404 RESOURCE_NOT_FOUND`.
+- The draft/retry trigger endpoints remain target contracts (the workflow
+  currently owns AI runs end to end).
+
 ### 17.12 Approvals
 
 - `GET /v1/approvals`
@@ -1020,6 +1072,37 @@ Current implementation:
 - `GET /v1/audit-events/{audit_event_id}` reads a tenant-scoped audit event.
 - `GET /v1/tickets/{ticket_id}/audit-events` lists tenant-scoped audit events for an existing tenant-scoped ticket with `limit`, `actor_type`, `action`, and `correlation_id` query filters. Missing or cross-tenant parent tickets return structured `RESOURCE_NOT_FOUND`.
 - Audit event writes now exist in two places: the approval decision endpoints append `approval.*` audit rows in the same transaction as the decision, and the worker `recordAuditEvent`/`createApproval`/`sendOutboundMessage` activity implementations persist workflow-owned audit rows (with deterministic ids so Temporal activity retries do not duplicate them). Ticket/customer and other skeleton write endpoints still do not emit audit events.
+
+### 17.14 QA Reviews
+
+- `GET /v1/qa-reviews`
+- `POST /v1/qa-reviews`
+- `GET /v1/qa-reviews/{qa_review_id}`
+- `POST /v1/qa-reviews/{qa_review_id}/complete`
+- `GET /v1/qa-reviews/{qa_review_id}/evidence`
+
+Current implementation:
+
+- `GET /v1/qa-reviews` (permission `qa_reviews:read`) lists tenant-scoped QA
+  reviews with `limit`, `ticket_id`, `ai_run_id`, and `completed`
+  (`true`/`false`) query filters.
+- `POST /v1/qa-reviews` (permission `qa_reviews:write`) queues a review for a
+  tenant ticket with an enum `sample_reason`
+  (`random_sample | auto_send_candidate | high_risk | manual`) and an
+  optional `ai_run_id`; a missing/cross-tenant ticket or AI run returns
+  `404 RESOURCE_NOT_FOUND`. The QA sampling job creates reviews through the
+  same data model with deterministic ids (§14).
+- `POST /v1/qa-reviews/{qa_review_id}/complete` (permission
+  `qa_reviews:write`) records reviewer `scores` (0-5 per SOP dimension),
+  `defects` (taxonomy of §14, each with optional severity and note), and
+  optional `notes`, stamping `reviewer_user_id` and `completed_at`.
+  Completing an already-completed review returns `409 CONFLICT`.
+- `GET /v1/qa-reviews/{qa_review_id}/evidence` (permission
+  `qa_reviews:read`) returns the composite evidence package: the review,
+  ticket, conversation, messages (inbound and outbound final response), the
+  linked AI run (structured output, guardrails, `trace_id`), the run's tool
+  calls, and the ticket's approvals with `requested_payload` (original AI
+  draft) and `approved_payload` (human edit).
 
 ## 18. Event Envelope
 

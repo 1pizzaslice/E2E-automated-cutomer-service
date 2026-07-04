@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { createRecordingOutboundChannelSender } from "@support/integrations";
+import { createRecordingSupportMetrics } from "@support/observability";
 import {
   NonRetryableActivityError,
   createInMemoryTicketLifecyclePersistenceStore,
+  createPersistedRunAiGraph,
   createTicketLifecyclePersistenceActivities,
+  deterministicAiRunId,
   deterministicApprovalId,
 } from "./ticket-lifecycle-persistence.js";
 import type {
   CreateApprovalActivityInput,
+  RunAiGraphActivityInput,
+  RunAiGraphActivityResult,
   SendOutboundMessageActivityInput,
 } from "../workflows/ticket-lifecycle-types.js";
 
@@ -387,5 +392,195 @@ describe("recordAuditEvent activity", () => {
       actorId: "workflow",
       correlationId: CORRELATION,
     });
+  });
+});
+
+describe("createPersistedRunAiGraph", () => {
+  const runInput: RunAiGraphActivityInput = {
+    tenant_id: TENANT,
+    ticket_id: TICKET,
+    initial_message_id: "msg_inbound_test",
+    correlation_id: CORRELATION,
+    ticket: {
+      ticket_id: TICKET,
+      conversation_id: CONVERSATION,
+      customer_id: "cus_test",
+      status: "waiting_ai",
+      priority: "p2",
+      automation_mode: "human_approve",
+      assigned_queue: null,
+      assigned_user_id: null,
+      sla_policy_id: null,
+      opened_at: "2026-07-04T11:00:00.000Z",
+      first_response_due_at: null,
+      next_response_due_at: null,
+      resolution_due_at: null,
+    },
+    triage: {
+      status: "triaged",
+      route: "human_approval",
+      reason_code: "v1_default_human_approval",
+      metadata: {},
+    },
+  };
+
+  const succeededResult: RunAiGraphActivityResult = {
+    status: "succeeded",
+    ai_run_id: "air_runtime_test",
+    trace_id: "trace_runtime_test",
+    classification: { topic: "shipping_delivery" },
+    routing_decision: {
+      topic: "shipping_delivery",
+      subtopic: null,
+      language: "en",
+      sentiment: "neutral",
+      urgency: "medium",
+      priority: "p2",
+      risk_level: "low",
+      confidence: 0.91,
+      automation_mode: "human_approve",
+      assigned_queue: null,
+      reason_codes: ["v1_default_human_approval"],
+      required_tools: ["order_lookup"],
+      required_evidence: [],
+    },
+    tool_calls: [{ tool_call_id: "tc_1" }],
+    draft: {
+      draft_text: "Your order shipped yesterday.",
+      customer_language: "en",
+      tone: "empathetic",
+      evidence: [
+        { type: "kb_chunk", ref_id: "kb_chunk_1", summary: "Shipping policy" },
+      ],
+      actions: [],
+      risk_level: "low",
+      confidence: 0.91,
+      needs_human: true,
+      human_review_reasons: ["v1_default_human_approval"],
+    },
+    guardrails: { passed: true },
+    final_recommendation: {
+      automation_mode: "human_approve",
+      risk_level: "low",
+      confidence: 0.91,
+      reason_codes: ["v1_default_human_approval"],
+    },
+    eval_signals: {},
+  };
+
+  it("persists a succeeded run with structured output and the trace link", async () => {
+    const store = createInMemoryTicketLifecyclePersistenceStore(makeFixtures());
+    const metrics = createRecordingSupportMetrics();
+    const runAiGraph = createPersistedRunAiGraph(async () => succeededResult, {
+      store,
+      metrics,
+      now: () => new Date("2026-07-04T12:00:00.000Z"),
+    });
+
+    const result = await runAiGraph(runInput);
+
+    expect(result).toEqual(succeededResult);
+    const runs = store.listAiRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      tenantId: TENANT,
+      aiRunId: "air_runtime_test",
+      ticketId: TICKET,
+      conversationId: CONVERSATION,
+      runType: "full_graph",
+      status: "succeeded",
+      confidence: 0.91,
+      riskLevel: "low",
+      automationRecommendation: "human_approve",
+      traceId: "trace_runtime_test",
+    });
+    expect(runs[0]?.structuredOutput).toMatchObject({
+      draft: { draft_text: "Your order shipped yesterday." },
+      final_recommendation: { automation_mode: "human_approve" },
+    });
+    expect(runs[0]?.retrievedContextRefs).toEqual({
+      evidence_ids: ["kb_chunk_1"],
+    });
+    expect(metrics.aiRuns).toEqual([
+      {
+        status: "succeeded",
+        automationMode: "human_approve",
+        riskLevel: "low",
+        durationMs: 0,
+      },
+    ]);
+  });
+
+  it("persists failed runs and backfills a deterministic ai_run_id", async () => {
+    const store = createInMemoryTicketLifecyclePersistenceStore(makeFixtures());
+    const metrics = createRecordingSupportMetrics();
+    const runAiGraph = createPersistedRunAiGraph(
+      async () => ({
+        status: "failed",
+        ai_run_id: null,
+        trace_id: null,
+        error_code: "AI_RUNTIME_ERROR",
+        error_message: "graph blew up",
+        retryable: false,
+        reason_codes: ["runtime_error", "route_to_human"],
+        eval_signals: {},
+      }),
+      { store, metrics },
+    );
+
+    const result = await runAiGraph(runInput);
+
+    expect(result.status).toBe("failed");
+    expect(result.ai_run_id).toBe(
+      deterministicAiRunId(TENANT, TICKET, CORRELATION),
+    );
+    const runs = store.listAiRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: "failed",
+      confidence: null,
+      automationRecommendation: null,
+    });
+    expect(runs[0]?.structuredOutput).toMatchObject({
+      error_code: "AI_RUNTIME_ERROR",
+    });
+    expect(metrics.aiRuns[0]?.status).toBe("failed");
+  });
+
+  it("dedupes retried persistence on the same deterministic run id", async () => {
+    const store = createInMemoryTicketLifecyclePersistenceStore(makeFixtures());
+    const runAiGraph = createPersistedRunAiGraph(async () => succeededResult, {
+      store,
+    });
+
+    await runAiGraph(runInput);
+    await runAiGraph(runInput);
+
+    expect(store.listAiRuns()).toHaveLength(1);
+  });
+
+  it("lets createApproval link the persisted run id", async () => {
+    const store = createInMemoryTicketLifecyclePersistenceStore(makeFixtures());
+    const runAiGraph = createPersistedRunAiGraph(async () => succeededResult, {
+      store,
+    });
+    const activities = createTicketLifecyclePersistenceActivities({
+      store,
+      outboundSender: createRecordingOutboundChannelSender(),
+    });
+
+    await runAiGraph(runInput);
+    await activities.createApproval({
+      ...createApprovalInput,
+      metadata: {
+        source: "ai_graph",
+        ai_graph: {
+          ai_run_id: "air_runtime_test",
+          draft: { draft_text: "Your order shipped yesterday." },
+        },
+      },
+    });
+
+    expect(store.listApprovals()[0]?.aiRunId).toBe("air_runtime_test");
   });
 });

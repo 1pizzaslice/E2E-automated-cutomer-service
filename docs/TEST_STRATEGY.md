@@ -542,6 +542,37 @@ Tests or smoke checks should confirm:
 - SLA breaches are visible.
 - Approval latency is measurable.
 
+Current coverage (Milestone 11):
+
+- `@support/observability` unit tests cover the telemetry bootstrap
+  (config loading, disabled mode, in-memory span/metric capture, span
+  nesting and error recording), the `SupportMetrics` port (recording +
+  OTel-backed instruments and attributes), and the structured logger
+  (required base fields, child bindings, level filtering, secret-key
+  redaction, active-span `trace_id`/`span_id` injection).
+- API tests assert per-request metrics with route templates and status
+  codes, the `http.request` span carrying
+  `support.request_id`/`support.correlation_id`/`support.tenant_id`
+  attributes, 5xx spans marked as errors, and (live) approval decision
+  metrics with measurable latency plus zero critical failures on the
+  happy path.
+- Tool executor calls run under the span/metrics wrapper; every tool
+  outcome (`succeeded`/`failed`/`blocked`) records a metric, making tool
+  failures visible.
+- Worker tests cover the activity instrumentation wrapper (success and
+  failure metrics, structured logs with correlation ids, and the
+  critical-failure mapping: failed AI graph results -> `ai_graph_failed`,
+  send errors -> `outbound_send_failed`, SLA breach emission ->
+  `sla_breached`), event-consumer dead-letter metrics, AI-run persistence
+  with trace links (offline + live PostgreSQL), and the deterministic QA
+  sampling job (rules, dedupe, tenant scoping,
+  `support.qa.review_created.v1` emission, live PostgreSQL run).
+- A live smoke drive (telemetry-enabled API against the Compose
+  otel-collector) verifies spans and metrics arrive at the collector and
+  scrape from the Prometheus endpoint (`:8889`) under the documented
+  names (`infra/observability/README.md`); alert definitions for the
+  critical failure modes live in `infra/observability/alerts.yaml`.
+
 ## 13. Test Review Checklist
 
 For every change, ask:

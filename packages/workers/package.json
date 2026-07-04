@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:integration": "RUN_WORKER_INTEGRATION_TESTS=true vitest run src/event-bus.integration.test.ts",
+    "test:integration": "RUN_WORKER_INTEGRATION_TESTS=true vitest run src/event-bus.integration.test.ts src/activities/ticket-lifecycle-persistence.integration.test.ts",
     "test:workflow": "RUN_TEMPORAL_WORKFLOW_TESTS=true vitest run src/ticket-lifecycle-workflow.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -16,6 +16,7 @@
     "@nats-io/transport-node": "^3.4.0",
     "@support/db": "workspace:*",
     "@support/integrations": "workspace:*",
+    "@support/observability": "workspace:*",
     "@support/shared-schemas": "workspace:*",
     "@temporalio/client": "^1.18.1",
     "@temporalio/worker": "^1.18.1",

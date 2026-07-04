@@ -11,6 +11,7 @@ import {
   type DomainEventEnvelope,
 } from "@support/shared-schemas";
 import { describe, expect, it, vi } from "vitest";
+import { createRecordingSupportMetrics } from "@support/observability";
 import {
   DEFAULT_SUPPORT_EVENT_CONSUMER_DURABLE,
   InMemoryDomainEventConsumerIdempotencyStore,
@@ -379,12 +380,14 @@ describe("processDomainEventMessage", () => {
       SUPPORT_EVENT_CONSUMER_MAX_DELIVER,
     );
     const errorPublisher = new FakeSupportEventErrorPublisher();
+    const metrics = createRecordingSupportMetrics();
 
     const result = await processDomainEventMessage(message, {
       consumerName: "ticket_projection",
       idempotencyStore: new InMemoryDomainEventConsumerIdempotencyStore(),
       handler: vi.fn().mockRejectedValue(new Error("handler failed")),
       errorPublisher,
+      metrics,
       now: () => new Date("2026-06-26T00:00:00.000Z"),
     });
 
@@ -401,6 +404,41 @@ describe("processDomainEventMessage", () => {
     expect(message.terms).toEqual([
       "domain event handler failed after max deliveries",
     ]);
+    expect(metrics.criticalFailures).toEqual(["event_dead_letter"]);
+  });
+
+  it("records dead-letter metrics for poison envelopes and not for retryable failures", async () => {
+    const invalidMetrics = createRecordingSupportMetrics();
+    const invalidMessage = new FakeJetStreamDomainEventMessage({
+      ...makeEvent(),
+      schema_version: "2",
+    });
+
+    await processDomainEventMessage(invalidMessage, {
+      consumerName: "ticket_projection",
+      idempotencyStore: new InMemoryDomainEventConsumerIdempotencyStore(),
+      handler: vi.fn(),
+      metrics: invalidMetrics,
+    });
+
+    expect(invalidMetrics.criticalFailures).toEqual(["event_dead_letter"]);
+
+    const retryMetrics = createRecordingSupportMetrics();
+    const event = makeEvent();
+    const retryMessage = new FakeJetStreamDomainEventMessage(
+      event,
+      buildDomainEventSubject(event),
+      2,
+    );
+
+    await processDomainEventMessage(retryMessage, {
+      consumerName: "ticket_projection",
+      idempotencyStore: new InMemoryDomainEventConsumerIdempotencyStore(),
+      handler: vi.fn().mockRejectedValue(new Error("handler failed")),
+      metrics: retryMetrics,
+    });
+
+    expect(retryMetrics.criticalFailures).toEqual([]);
   });
 });
 

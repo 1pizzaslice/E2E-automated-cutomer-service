@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
+  createInMemoryTelemetry,
+  createRecordingSupportMetrics,
+  SUPPORT_ATTR,
+  type InMemoryTelemetry,
+} from "@support/observability";
+import {
+  AiRunListResponseSchema,
+  AiRunResourceResponseSchema,
   ApprovalDecisionResponseSchema,
   ApprovalListResponseSchema,
   ApprovalResourceResponseSchema,
@@ -20,6 +28,9 @@ import {
   MessageResourceResponseSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
+  QaReviewEvidenceResponseSchema,
+  QaReviewListResponseSchema,
+  QaReviewResourceResponseSchema,
   TenantListResponseSchema,
   TenantResourceResponseSchema,
   TicketListResponseSchema,
@@ -871,6 +882,224 @@ describe("api tenant-scoped resource contracts", () => {
     expect(body.error.code).toBe("FORBIDDEN");
   });
 
+  it("lists AI run resources with observability trace links", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/ai-runs?ticket_id=ticket_test&status=succeeded&limit=10",
+      headers: authHeaders,
+    });
+    const body = AiRunListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.ai_runs[0]?.ai_run_id).toBe("air_test");
+    expect(body.ai_runs[0]?.trace_id).toBe("trace_test");
+  });
+
+  it("returns AI run resources and structured not-found errors", async () => {
+    app = buildApp({ services: makeServices() });
+    const found = await app.inject({
+      method: "GET",
+      url: "/v1/ai-runs/air_test",
+      headers: authHeaders,
+    });
+    const missing = await app.inject({
+      method: "GET",
+      url: "/v1/ai-runs/air_missing",
+      headers: authHeaders,
+    });
+
+    expect(found.statusCode).toBe(200);
+    expect(
+      AiRunResourceResponseSchema.parse(found.json()).ai_run.trace_id,
+    ).toBe("trace_test");
+    expect(missing.statusCode).toBe(404);
+    expect(ApiErrorResponseSchema.parse(missing.json()).error.code).toBe(
+      "RESOURCE_NOT_FOUND",
+    );
+  });
+
+  it("rejects AI run reads for roles without the ai_runs:read permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/ai-runs",
+      headers: clientViewerHeaders,
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("lists and reads QA review resources through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const qaHeaders = { ...authHeaders, "x-user-roles": "qa_reviewer" };
+    const list = await app.inject({
+      method: "GET",
+      url: "/v1/qa-reviews?ticket_id=ticket_test&completed=false&limit=10",
+      headers: qaHeaders,
+    });
+    const single = await app.inject({
+      method: "GET",
+      url: "/v1/qa-reviews/qa_test",
+      headers: qaHeaders,
+    });
+    const missing = await app.inject({
+      method: "GET",
+      url: "/v1/qa-reviews/qa_missing",
+      headers: qaHeaders,
+    });
+
+    expect(list.statusCode).toBe(200);
+    expect(
+      QaReviewListResponseSchema.parse(list.json()).qa_reviews[0]?.qa_review_id,
+    ).toBe("qa_test");
+    expect(single.statusCode).toBe(200);
+    expect(
+      QaReviewResourceResponseSchema.parse(single.json()).qa_review
+        .sample_reason,
+    ).toBe("auto_send_candidate");
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("creates QA reviews for reviewer roles", async () => {
+    app = buildApp({ services: makeServices() });
+    const qaHeaders = { ...authHeaders, "x-user-roles": "qa_reviewer" };
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/qa-reviews",
+      headers: qaHeaders,
+      payload: {
+        ticket_id: "ticket_test",
+        ai_run_id: "air_test",
+        sample_reason: "manual",
+        notes: "Spot check.",
+      },
+    });
+    const missingTicket = await app.inject({
+      method: "POST",
+      url: "/v1/qa-reviews",
+      headers: qaHeaders,
+      payload: { ticket_id: "ticket_missing", sample_reason: "manual" },
+    });
+    const missingAiRun = await app.inject({
+      method: "POST",
+      url: "/v1/qa-reviews",
+      headers: qaHeaders,
+      payload: {
+        ticket_id: "ticket_test",
+        ai_run_id: "air_missing",
+        sample_reason: "manual",
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(
+      QaReviewResourceResponseSchema.parse(created.json()).qa_review
+        .sample_reason,
+    ).toBe("manual");
+    expect(missingTicket.statusCode).toBe(404);
+    expect(missingAiRun.statusCode).toBe(404);
+  });
+
+  it("rejects QA review writes for roles without the write permission", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/qa-reviews",
+      headers: clientViewerHeaders,
+      payload: { ticket_id: "ticket_test", sample_reason: "manual" },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("completes QA reviews with scores and the defect taxonomy", async () => {
+    app = buildApp({ services: makeServices() });
+    const qaHeaders = { ...authHeaders, "x-user-roles": "qa_reviewer" };
+    const completed = await app.inject({
+      method: "POST",
+      url: "/v1/qa-reviews/qa_test/complete",
+      headers: qaHeaders,
+      payload: {
+        scores: { draft_quality: 4, safety: 5 },
+        defects: [{ category: "bad_tone", severity: "low" }],
+        notes: "Tone was curt but accurate.",
+      },
+    });
+    const invalidDefect = await app.inject({
+      method: "POST",
+      url: "/v1/qa-reviews/qa_test/complete",
+      headers: qaHeaders,
+      payload: {
+        scores: {},
+        defects: [{ category: "made_up_defect" }],
+      },
+    });
+    const conflict = await app.inject({
+      method: "POST",
+      url: "/v1/qa-reviews/qa_completed/complete",
+      headers: qaHeaders,
+      payload: { scores: {}, defects: [] },
+    });
+    const missing = await app.inject({
+      method: "POST",
+      url: "/v1/qa-reviews/qa_missing/complete",
+      headers: qaHeaders,
+      payload: { scores: {}, defects: [] },
+    });
+
+    expect(completed.statusCode).toBe(200);
+    const review = QaReviewResourceResponseSchema.parse(
+      completed.json(),
+    ).qa_review;
+    expect(review.completed_at).not.toBeNull();
+    expect(review.scores).toEqual({ draft_quality: 4, safety: 5 });
+    expect(invalidDefect.statusCode).toBe(400);
+    expect(conflict.statusCode).toBe(409);
+    expect(ApiErrorResponseSchema.parse(conflict.json()).error.code).toBe(
+      "CONFLICT",
+    );
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("returns the composite QA evidence package for reviewers", async () => {
+    app = buildApp({ services: makeServices() });
+    const qaHeaders = { ...authHeaders, "x-user-roles": "qa_reviewer" };
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/qa-reviews/qa_test/evidence",
+      headers: qaHeaders,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const evidence = QaReviewEvidenceResponseSchema.parse(response.json());
+
+    // The acceptance criterion: conversation, evidence, tool calls, AI
+    // output, human edits, and the final response are all visible.
+    expect(evidence.conversation.conversation_id).toBe("con_test");
+    expect(
+      evidence.messages.some((message) => message.direction === "inbound"),
+    ).toBe(true);
+    expect(evidence.ai_run?.structured_output).toEqual({
+      draft: { draft_text: "Draft reply." },
+    });
+    expect(evidence.ai_run?.trace_id).toBe("trace_test");
+    expect(evidence.tool_calls[0]?.tool_definition_id).toBe(
+      "tool_order_lookup",
+    );
+    expect(evidence.approvals[0]?.requested_payload).toEqual({
+      draft_text: "Original AI draft.",
+    });
+    expect(evidence.approvals[0]?.approved_payload).toEqual({
+      draft_text: "Human-edited reply.",
+    });
+    const finalResponse = evidence.messages.find(
+      (message) => message.direction === "outbound",
+    );
+    expect(finalResponse?.send_status).toBe("sent");
+    expect(finalResponse?.body_text).toBe("Your order shipped yesterday.");
+  });
+
   it("lists audit event resources through the shared response schema", async () => {
     app = buildApp({ services: makeServices() });
     const response = await app.inject({
@@ -1052,6 +1281,98 @@ describe("api tenant-scoped resource contracts", () => {
 
     expect(response.statusCode).toBe(404);
     expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+});
+
+describe("api observability", () => {
+  let telemetry: InMemoryTelemetry | undefined;
+
+  afterEach(async () => {
+    await telemetry?.shutdown();
+    telemetry = undefined;
+  });
+
+  it("records API request metrics with route templates and status codes", async () => {
+    const metrics = createRecordingSupportMetrics();
+    app = buildApp({ services: makeServices(), metrics });
+
+    await app.inject({
+      method: "GET",
+      url: "/v1/tickets/ticket_test",
+      headers: authHeaders,
+    });
+    await app.inject({
+      method: "GET",
+      url: "/v1/customers/missing",
+      headers: authHeaders,
+    });
+
+    expect(metrics.apiRequests).toHaveLength(2);
+    expect(metrics.apiRequests[0]).toMatchObject({
+      method: "GET",
+      route: "/v1/tickets/:ticket_id",
+      statusCode: 200,
+    });
+    expect(metrics.apiRequests[0]?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(metrics.apiRequests[1]).toMatchObject({
+      route: "/v1/customers/:customer_id",
+      statusCode: 404,
+    });
+  });
+
+  it("emits a request span carrying the correlation attributes", async () => {
+    telemetry = createInMemoryTelemetry();
+    const metrics = createRecordingSupportMetrics();
+    app = buildApp({ services: makeServices(), metrics });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tickets/ticket_test",
+      headers: { ...authHeaders, "x-correlation-id": "corr_trace_test" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const spans = telemetry.getFinishedSpans();
+    const requestSpan = spans.find((span) => span.name === "http.request");
+    expect(requestSpan).toBeDefined();
+    expect(requestSpan?.attributes[SUPPORT_ATTR.requestId]).toBe("req_test");
+    expect(requestSpan?.attributes[SUPPORT_ATTR.correlationId]).toBe(
+      "corr_trace_test",
+    );
+    expect(requestSpan?.attributes[SUPPORT_ATTR.tenantId]).toBe("ten_test");
+    expect(requestSpan?.attributes["http.route"]).toBe(
+      "/v1/tickets/:ticket_id",
+    );
+    expect(requestSpan?.attributes["http.response.status_code"]).toBe(200);
+  });
+
+  it("marks server-error request spans as errors", async () => {
+    telemetry = createInMemoryTelemetry();
+    const failing = makeServices();
+    const services: ApiServices = {
+      ...failing,
+      tickets: {
+        ...failing.tickets,
+        async getById() {
+          throw new Error("boom");
+        },
+      },
+    };
+    const metrics = createRecordingSupportMetrics();
+    app = buildApp({ services, metrics });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tickets/ticket_test",
+      headers: authHeaders,
+    });
+
+    expect(response.statusCode).toBe(500);
+    const requestSpan = telemetry
+      .getFinishedSpans()
+      .find((span) => span.name === "http.request");
+    expect(requestSpan?.status.code).toBe(2);
+    expect(metrics.apiRequests[0]?.statusCode).toBe(500);
   });
 });
 
@@ -1607,6 +1928,211 @@ function makeServices(
         };
       },
     },
+    aiRuns: {
+      async list(context, options) {
+        expectTenantContext(context);
+
+        return {
+          ai_runs: [makeAiRunResponse(context.tenant.tenantId)],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async getById(context, aiRunId) {
+        expectTenantContext(context);
+
+        if (aiRunId !== "air_test") {
+          return null;
+        }
+
+        return makeAiRunResponse(context.tenant.tenantId);
+      },
+    },
+    qaReviews: {
+      async list(context, options) {
+        expectTenantContext(context);
+
+        return {
+          qa_reviews: [makeQaReviewResponse(context.tenant.tenantId)],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async getById(context, qaReviewId) {
+        expectTenantContext(context);
+
+        if (qaReviewId !== "qa_test") {
+          return null;
+        }
+
+        return makeQaReviewResponse(context.tenant.tenantId);
+      },
+      async create(context, input) {
+        expectTenantContext(context);
+
+        if (input.ticket_id === "ticket_missing") {
+          return { outcome: "ticket_not_found" };
+        }
+
+        if (input.ai_run_id === "air_missing") {
+          return { outcome: "ai_run_not_found" };
+        }
+
+        return {
+          outcome: "created",
+          review: {
+            ...makeQaReviewResponse(context.tenant.tenantId),
+            sample_reason: input.sample_reason,
+            notes: input.notes ?? null,
+          },
+        };
+      },
+      async complete(context, qaReviewId, input) {
+        expectTenantContext(context);
+
+        if (qaReviewId === "qa_missing") {
+          return { outcome: "not_found" };
+        }
+
+        const review = {
+          ...makeQaReviewResponse(context.tenant.tenantId),
+          qa_review_id: qaReviewId,
+        };
+
+        if (qaReviewId === "qa_completed") {
+          return {
+            outcome: "conflict",
+            review: { ...review, completed_at: now },
+          };
+        }
+
+        return {
+          outcome: "completed",
+          review: {
+            ...review,
+            reviewer_user_id: context.actor.userId,
+            scores: input.scores,
+            defects: input.defects.map((defect) => ({ ...defect })),
+            notes: input.notes ?? null,
+            completed_at: now,
+          },
+        };
+      },
+      async evidence(context, qaReviewId) {
+        expectTenantContext(context);
+
+        if (qaReviewId !== "qa_test") {
+          return null;
+        }
+
+        const tenantId = context.tenant.tenantId;
+
+        return {
+          qa_review: makeQaReviewResponse(tenantId),
+          ticket: makeTicketResponse(tenantId),
+          conversation: {
+            conversation_id: "con_test",
+            tenant_id: tenantId,
+            customer_id: "cus_test",
+            channel_id: "chn_test",
+            external_thread_id: "thread-1",
+            status: "open",
+            last_message_at: now,
+            created_at: now,
+            updated_at: now,
+          },
+          messages: [
+            {
+              message_id: "msg_in_test",
+              tenant_id: tenantId,
+              conversation_id: "con_test",
+              ticket_id: "ticket_test",
+              channel_id: "chn_test",
+              direction: "inbound",
+              body_text: "Where is my order?",
+              body_html_ref: null,
+              attachments: [],
+              external_message_id: "ext-1",
+              external_thread_id: "thread-1",
+              raw_payload_ref: "file:///raw/1",
+              created_by_type: "customer",
+              created_by_user_id: null,
+              provider_message_id: null,
+              send_status: null,
+              sent_by_type: null,
+              ai_run_id: null,
+              approval_id: null,
+              sent_at: null,
+              idempotency_key: "in-1",
+              created_at: now,
+            },
+            {
+              message_id: "msg_out_test",
+              tenant_id: tenantId,
+              conversation_id: "con_test",
+              ticket_id: "ticket_test",
+              channel_id: "chn_test",
+              direction: "outbound",
+              body_text: "Your order shipped yesterday.",
+              body_html_ref: null,
+              attachments: [],
+              external_message_id: null,
+              external_thread_id: "thread-1",
+              raw_payload_ref: null,
+              created_by_type: "human",
+              created_by_user_id: "usr_agent",
+              provider_message_id: "prov-1",
+              send_status: "sent",
+              sent_by_type: "human",
+              ai_run_id: "air_test",
+              approval_id: "apr_test",
+              sent_at: now,
+              idempotency_key: "out-1",
+              created_at: now,
+            },
+          ],
+          ai_run: makeAiRunResponse(tenantId),
+          tool_calls: [
+            {
+              tool_call_id: "tc_test",
+              tenant_id: tenantId,
+              ticket_id: "ticket_test",
+              ai_run_id: "air_test",
+              tool_definition_id: "tool_order_lookup",
+              input: { order_number: "ORD-1" },
+              output: { order: { status: "shipped" } },
+              status: "succeeded",
+              side_effect_class: "read_only",
+              idempotency_key: null,
+              started_at: now,
+              completed_at: now,
+              error_code: null,
+              error_message: null,
+            },
+          ],
+          approvals: [
+            {
+              approval_id: "apr_test",
+              tenant_id: tenantId,
+              ticket_id: "ticket_test",
+              ai_run_id: "air_test",
+              approval_type: "reply",
+              status: "edited",
+              requested_payload: { draft_text: "Original AI draft." },
+              approved_payload: { draft_text: "Human-edited reply." },
+              reviewer_user_id: "usr_agent",
+              review_notes: null,
+              created_at: now,
+              resolved_at: now,
+            },
+          ],
+        };
+      },
+    },
     auditEvents: {
       async list(context, options) {
         expectTenantContext(context);
@@ -1832,4 +2358,77 @@ function expectTenantContext(context: TenantRequestContext): void {
   expect(context.requestId).toBe("req_test");
   expect(context.tenant.tenantId).toBe("ten_test");
   expect(context.actor.userId).toBe("usr_test");
+}
+
+function makeAiRunResponse(tenantId: string) {
+  return {
+    ai_run_id: "air_test",
+    tenant_id: tenantId,
+    ticket_id: "ticket_test",
+    conversation_id: "con_test",
+    run_type: "full_graph" as const,
+    prompt_version: "support_graph.v1",
+    model_provider: "deterministic",
+    model_id: "deterministic-support-model.v1",
+    input_refs: { correlation_id: "corr_test" },
+    retrieved_context_refs: { evidence_ids: ["kb_chunk_1"] },
+    structured_output: { draft: { draft_text: "Draft reply." } },
+    confidence: 0.9,
+    risk_level: "low",
+    automation_recommendation: "human_approve" as const,
+    guardrail_results: { passed: true },
+    status: "succeeded" as const,
+    latency_ms: 120,
+    input_tokens: null,
+    output_tokens: null,
+    cost_estimate: null,
+    trace_id: "trace_test",
+    created_at: now,
+    completed_at: now,
+  };
+}
+
+function makeQaReviewResponse(tenantId: string) {
+  return {
+    qa_review_id: "qa_test",
+    tenant_id: tenantId,
+    ticket_id: "ticket_test",
+    ai_run_id: "air_test",
+    reviewer_user_id: null,
+    sample_reason: "auto_send_candidate",
+    scores: {},
+    defects: [],
+    notes: null,
+    created_at: now,
+    completed_at: null,
+  };
+}
+
+function makeTicketResponse(tenantId: string) {
+  return {
+    ticket_id: "ticket_test",
+    tenant_id: tenantId,
+    conversation_id: "con_test",
+    customer_id: "cus_test",
+    status: "waiting_human" as const,
+    priority: "p2" as const,
+    topic: null,
+    subtopic: null,
+    language: null,
+    sentiment: null,
+    urgency_score: null,
+    automation_mode: "human_approve" as const,
+    assigned_queue: null,
+    assigned_user_id: null,
+    sla_policy_id: null,
+    policy_version_id: null,
+    opened_at: now,
+    first_response_due_at: null,
+    next_response_due_at: null,
+    resolution_due_at: null,
+    resolved_at: null,
+    closed_at: null,
+    created_at: now,
+    updated_at: now,
+  };
 }

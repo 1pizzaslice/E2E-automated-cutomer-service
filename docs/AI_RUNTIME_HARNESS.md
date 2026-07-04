@@ -709,6 +709,8 @@ Every AI run must record:
 
 Logs must be redacted. LLM observability store may hold richer traces according to retention and privacy policy.
 
+Implementation note (Milestone 11): the worker-side `createPersistedRunAiGraph` wrapper persists every run's terminal state to the `ai_runs` table — structured output, confidence/risk/automation recommendation, guardrail results, latency, and `trace_id` — with deterministic ids so Temporal retries replay instead of duplicating. `ai_runs.trace_id` matches the runtime's deterministic `RunTrace.trace_id` (`ai/runtime/tracing.py`), so the persisted row, the redacted trace export, and the OTel spans emitted around the activity all join on one id. Runs are readable through `GET /v1/ai-runs` / `GET /v1/ai-runs/{ai_run_id}`, and the QA evidence endpoint embeds the run for reviewers (BACKEND_SPEC §17.14).
+
 ## 16. Failure Handling
 
 Failure cases:

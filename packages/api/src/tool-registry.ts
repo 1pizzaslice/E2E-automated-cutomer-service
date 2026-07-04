@@ -11,6 +11,12 @@ import {
 } from "@support/db";
 import type { ToolDefinition } from "@support/integrations";
 import {
+  createNoopSupportMetrics,
+  SUPPORT_ATTR,
+  withSpan,
+  type SupportMetrics,
+} from "@support/observability";
+import {
   type ToolCallError,
   type ToolCallErrorCode,
   type ToolCallRequest,
@@ -143,6 +149,8 @@ export interface ToolExecutorDeps {
   readonly store: ToolRegistryStore;
   readonly tools: readonly RegisteredTool[];
   readonly maxOutputBytes?: number;
+  /** Domain metrics recorder; defaults to no-op. */
+  readonly metrics?: SupportMetrics;
 }
 
 export interface ToolExecutor {
@@ -195,6 +203,7 @@ async function withTimeout<T>(
  */
 export function createToolExecutor(deps: ToolExecutorDeps): ToolExecutor {
   const maxOutputBytes = deps.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  const metrics = deps.metrics ?? createNoopSupportMetrics();
   const registry = new Map<string, RegisteredTool>();
   for (const tool of deps.tools) {
     registry.set(tool.definition.name, tool);
@@ -221,127 +230,72 @@ export function createToolExecutor(deps: ToolExecutorDeps): ToolExecutor {
       return deps.tools.map((tool) => tool.definition);
     },
 
+    // Wraps the execution in a span + tool-call metrics keyed by the final
+    // outcome; the audit trail itself is written by the store calls inside.
     async execute(context, request) {
-      const toolName = request.tool_name;
-      const tool = registry.get(toolName);
+      const startedAtMs = Date.now();
 
-      // Resolve tenant-scoped visibility first. A tool that is not visible to the
-      // tenant (no active tool_definition row) never becomes a tenant tool call,
-      // so there is no definition to anchor an audit row to.
-      const resolved = await deps.store.resolveDefinition(
-        context.tenantId,
-        toolName,
+      return withSpan(
+        "tool.execute",
+        {
+          [SUPPORT_ATTR.tenantId]: context.tenantId,
+          [SUPPORT_ATTR.ticketId]: context.ticketId,
+          [SUPPORT_ATTR.aiRunId]: context.aiRunId,
+          [SUPPORT_ATTR.toolName]: request.tool_name,
+        },
+        async (span) => {
+          const result = await executeToolCall(context, request);
+
+          span.setAttribute(SUPPORT_ATTR.outcome, result.status);
+          metrics.recordToolCall({
+            tool: request.tool_name,
+            status: result.status,
+            sideEffectClass: result.side_effect_class,
+            durationMs: Date.now() - startedAtMs,
+          });
+
+          return result;
+        },
       );
-      if (!resolved) {
-        return blocked(
-          toolName,
-          tool?.definition.sideEffectClass ?? "read_only",
-          "",
-          {
-            code: "not_visible",
-            message: `Tool "${toolName}" is not enabled for this tenant.`,
-          },
-        );
-      }
+    },
 
-      const sideEffectClass = resolved.sideEffectClass;
-      const grants = toGrantedSet(context.grantedPermissions);
+    async close() {
+      await deps.store.close?.();
+    },
+  };
 
-      // The tenant enables a tool the code doesn't implement: a misconfiguration.
-      // We have a definition id, so this attempt is audited as blocked.
-      if (!tool) {
-        const toolCallId = await deps.store.recordStart({
-          tenantId: context.tenantId,
-          ticketId: context.ticketId,
-          aiRunId: context.aiRunId,
-          toolDefinitionId: resolved.toolDefinitionId,
-          sideEffectClass,
-          input: request.arguments,
-          idempotencyKey: null,
-        });
-        await deps.store.recordOutcome({
-          tenantId: context.tenantId,
-          toolCallId,
-          status: "blocked",
-          errorCode: "not_found",
-          errorMessage: `Tool "${toolName}" has no registered implementation.`,
-        });
-        return blocked(toolName, sideEffectClass, toolCallId, {
-          code: "not_found",
-          message: `Tool "${toolName}" has no registered implementation.`,
-        });
-      }
+  async function executeToolCall(
+    context: ToolExecutionContext,
+    request: ToolCallRequest,
+  ): Promise<ToolCallResult> {
+    const toolName = request.tool_name;
+    const tool = registry.get(toolName);
 
-      const isSideEffecting = sideEffectClass !== "read_only";
-      const idempotencyKey = request.idempotency_key ?? null;
+    // Resolve tenant-scoped visibility first. A tool that is not visible to the
+    // tenant (no active tool_definition row) never becomes a tenant tool call,
+    // so there is no definition to anchor an audit row to.
+    const resolved = await deps.store.resolveDefinition(
+      context.tenantId,
+      toolName,
+    );
+    if (!resolved) {
+      return blocked(
+        toolName,
+        tool?.definition.sideEffectClass ?? "read_only",
+        "",
+        {
+          code: "not_visible",
+          message: `Tool "${toolName}" is not enabled for this tenant.`,
+        },
+      );
+    }
 
-      // Idempotent replay: a side-effect tool retried with a used key returns the
-      // stored outcome (success or failure) instead of re-applying the effect.
-      if (isSideEffecting && idempotencyKey) {
-        const prior = await deps.store.findByIdempotencyKey(
-          context.tenantId,
-          resolved.toolDefinitionId,
-          idempotencyKey,
-        );
-        if (prior) {
-          return replayResult(toolName, sideEffectClass, prior);
-        }
-      }
+    const sideEffectClass = resolved.sideEffectClass;
+    const grants = toGrantedSet(context.grantedPermissions);
 
-      // Permission class gate. The tool is visible, but the caller must hold the
-      // tool's required permission class to run it. Audited as blocked.
-      if (!grants.has(tool.definition.permission)) {
-        const toolCallId = await deps.store.recordStart({
-          tenantId: context.tenantId,
-          ticketId: context.ticketId,
-          aiRunId: context.aiRunId,
-          toolDefinitionId: resolved.toolDefinitionId,
-          sideEffectClass,
-          input: request.arguments,
-          idempotencyKey: null,
-        });
-        const error: ToolCallError = {
-          code: "unauthorized",
-          message: `Missing permission "${tool.definition.permission}" for tool "${toolName}".`,
-        };
-        await deps.store.recordOutcome({
-          tenantId: context.tenantId,
-          toolCallId,
-          status: "blocked",
-          errorCode: error.code,
-          errorMessage: error.message,
-        });
-        return blocked(toolName, sideEffectClass, toolCallId, error);
-      }
-
-      // Argument validation. Malformed arguments are rejected before the handler
-      // runs. Audited as failed (the request routed, but its arguments were bad).
-      const parsedArgs = tool.argsSchema.safeParse(request.arguments);
-      if (!parsedArgs.success) {
-        const toolCallId = await deps.store.recordStart({
-          tenantId: context.tenantId,
-          ticketId: context.ticketId,
-          aiRunId: context.aiRunId,
-          toolDefinitionId: resolved.toolDefinitionId,
-          sideEffectClass,
-          input: request.arguments,
-          idempotencyKey: null,
-        });
-        const error: ToolCallError = {
-          code: "invalid_arguments",
-          message: formatZodError(parsedArgs.error),
-        };
-        await deps.store.recordOutcome({
-          tenantId: context.tenantId,
-          toolCallId,
-          status: "failed",
-          errorCode: error.code,
-          errorMessage: error.message,
-        });
-        return failed(toolName, sideEffectClass, toolCallId, error);
-      }
-
-      // Claim the idempotency key on the execution row (side-effect tools only).
+    // The tenant enables a tool the code doesn't implement: a misconfiguration.
+    // We have a definition id, so this attempt is audited as blocked.
+    if (!tool) {
       const toolCallId = await deps.store.recordStart({
         tenantId: context.tenantId,
         ticketId: context.ticketId,
@@ -349,94 +303,181 @@ export function createToolExecutor(deps: ToolExecutorDeps): ToolExecutor {
         toolDefinitionId: resolved.toolDefinitionId,
         sideEffectClass,
         input: request.arguments,
-        idempotencyKey: isSideEffecting ? idempotencyKey : null,
+        idempotencyKey: null,
       });
-
-      let rawOutput: JsonObject;
-      try {
-        rawOutput = await withTimeout(
-          tool.handler(parsedArgs.data, context),
-          tool.definition.timeoutMs,
-        );
-      } catch (caught) {
-        const error: ToolCallError =
-          caught === TIMEOUT_MARKER
-            ? {
-                code: "timeout",
-                message: `Tool "${toolName}" exceeded ${tool.definition.timeoutMs}ms.`,
-              }
-            : {
-                code: "tool_error",
-                message:
-                  caught instanceof Error ? caught.message : "Tool failed.",
-              };
-        await deps.store.recordOutcome({
-          tenantId: context.tenantId,
-          toolCallId,
-          status: "failed",
-          errorCode: error.code,
-          errorMessage: error.message,
-        });
-        return failed(toolName, sideEffectClass, toolCallId, error);
-      }
-
-      // Validate the shape of the result: an out-of-contract output must not be
-      // handed to the AI runtime as if it were trusted, bounded data.
-      const parsedResult = tool.resultSchema.safeParse(rawOutput);
-      if (!parsedResult.success) {
-        const error: ToolCallError = {
-          code: "output_invalid",
-          message: `Tool "${toolName}" returned an out-of-contract result.`,
-        };
-        await deps.store.recordOutcome({
-          tenantId: context.tenantId,
-          toolCallId,
-          status: "failed",
-          errorCode: error.code,
-          errorMessage: error.message,
-        });
-        return failed(toolName, sideEffectClass, toolCallId, error);
-      }
-
-      const output = parsedResult.data;
-
-      // Bound the result size. Oversized results are rejected, not truncated.
-      if (serializedSize(output) > maxOutputBytes) {
-        const error: ToolCallError = {
-          code: "result_too_large",
-          message: `Tool "${toolName}" result exceeds ${maxOutputBytes} bytes.`,
-        };
-        await deps.store.recordOutcome({
-          tenantId: context.tenantId,
-          toolCallId,
-          status: "failed",
-          errorCode: error.code,
-          errorMessage: error.message,
-        });
-        return failed(toolName, sideEffectClass, toolCallId, error);
-      }
-
       await deps.store.recordOutcome({
         tenantId: context.tenantId,
         toolCallId,
-        status: "succeeded",
-        output,
+        status: "blocked",
+        errorCode: "not_found",
+        errorMessage: `Tool "${toolName}" has no registered implementation.`,
       });
+      return blocked(toolName, sideEffectClass, toolCallId, {
+        code: "not_found",
+        message: `Tool "${toolName}" has no registered implementation.`,
+      });
+    }
 
-      return {
-        status: "succeeded",
-        tool_call_id: toolCallId,
-        tool_name: toolName,
-        side_effect_class: sideEffectClass,
-        output,
-        idempotent_replay: false,
+    const isSideEffecting = sideEffectClass !== "read_only";
+    const idempotencyKey = request.idempotency_key ?? null;
+
+    // Idempotent replay: a side-effect tool retried with a used key returns the
+    // stored outcome (success or failure) instead of re-applying the effect.
+    if (isSideEffecting && idempotencyKey) {
+      const prior = await deps.store.findByIdempotencyKey(
+        context.tenantId,
+        resolved.toolDefinitionId,
+        idempotencyKey,
+      );
+      if (prior) {
+        return replayResult(toolName, sideEffectClass, prior);
+      }
+    }
+
+    // Permission class gate. The tool is visible, but the caller must hold the
+    // tool's required permission class to run it. Audited as blocked.
+    if (!grants.has(tool.definition.permission)) {
+      const toolCallId = await deps.store.recordStart({
+        tenantId: context.tenantId,
+        ticketId: context.ticketId,
+        aiRunId: context.aiRunId,
+        toolDefinitionId: resolved.toolDefinitionId,
+        sideEffectClass,
+        input: request.arguments,
+        idempotencyKey: null,
+      });
+      const error: ToolCallError = {
+        code: "unauthorized",
+        message: `Missing permission "${tool.definition.permission}" for tool "${toolName}".`,
       };
-    },
+      await deps.store.recordOutcome({
+        tenantId: context.tenantId,
+        toolCallId,
+        status: "blocked",
+        errorCode: error.code,
+        errorMessage: error.message,
+      });
+      return blocked(toolName, sideEffectClass, toolCallId, error);
+    }
 
-    async close() {
-      await deps.store.close?.();
-    },
-  };
+    // Argument validation. Malformed arguments are rejected before the handler
+    // runs. Audited as failed (the request routed, but its arguments were bad).
+    const parsedArgs = tool.argsSchema.safeParse(request.arguments);
+    if (!parsedArgs.success) {
+      const toolCallId = await deps.store.recordStart({
+        tenantId: context.tenantId,
+        ticketId: context.ticketId,
+        aiRunId: context.aiRunId,
+        toolDefinitionId: resolved.toolDefinitionId,
+        sideEffectClass,
+        input: request.arguments,
+        idempotencyKey: null,
+      });
+      const error: ToolCallError = {
+        code: "invalid_arguments",
+        message: formatZodError(parsedArgs.error),
+      };
+      await deps.store.recordOutcome({
+        tenantId: context.tenantId,
+        toolCallId,
+        status: "failed",
+        errorCode: error.code,
+        errorMessage: error.message,
+      });
+      return failed(toolName, sideEffectClass, toolCallId, error);
+    }
+
+    // Claim the idempotency key on the execution row (side-effect tools only).
+    const toolCallId = await deps.store.recordStart({
+      tenantId: context.tenantId,
+      ticketId: context.ticketId,
+      aiRunId: context.aiRunId,
+      toolDefinitionId: resolved.toolDefinitionId,
+      sideEffectClass,
+      input: request.arguments,
+      idempotencyKey: isSideEffecting ? idempotencyKey : null,
+    });
+
+    let rawOutput: JsonObject;
+    try {
+      rawOutput = await withTimeout(
+        tool.handler(parsedArgs.data, context),
+        tool.definition.timeoutMs,
+      );
+    } catch (caught) {
+      const error: ToolCallError =
+        caught === TIMEOUT_MARKER
+          ? {
+              code: "timeout",
+              message: `Tool "${toolName}" exceeded ${tool.definition.timeoutMs}ms.`,
+            }
+          : {
+              code: "tool_error",
+              message:
+                caught instanceof Error ? caught.message : "Tool failed.",
+            };
+      await deps.store.recordOutcome({
+        tenantId: context.tenantId,
+        toolCallId,
+        status: "failed",
+        errorCode: error.code,
+        errorMessage: error.message,
+      });
+      return failed(toolName, sideEffectClass, toolCallId, error);
+    }
+
+    // Validate the shape of the result: an out-of-contract output must not be
+    // handed to the AI runtime as if it were trusted, bounded data.
+    const parsedResult = tool.resultSchema.safeParse(rawOutput);
+    if (!parsedResult.success) {
+      const error: ToolCallError = {
+        code: "output_invalid",
+        message: `Tool "${toolName}" returned an out-of-contract result.`,
+      };
+      await deps.store.recordOutcome({
+        tenantId: context.tenantId,
+        toolCallId,
+        status: "failed",
+        errorCode: error.code,
+        errorMessage: error.message,
+      });
+      return failed(toolName, sideEffectClass, toolCallId, error);
+    }
+
+    const output = parsedResult.data;
+
+    // Bound the result size. Oversized results are rejected, not truncated.
+    if (serializedSize(output) > maxOutputBytes) {
+      const error: ToolCallError = {
+        code: "result_too_large",
+        message: `Tool "${toolName}" result exceeds ${maxOutputBytes} bytes.`,
+      };
+      await deps.store.recordOutcome({
+        tenantId: context.tenantId,
+        toolCallId,
+        status: "failed",
+        errorCode: error.code,
+        errorMessage: error.message,
+      });
+      return failed(toolName, sideEffectClass, toolCallId, error);
+    }
+
+    await deps.store.recordOutcome({
+      tenantId: context.tenantId,
+      toolCallId,
+      status: "succeeded",
+      output,
+    });
+
+    return {
+      status: "succeeded",
+      tool_call_id: toolCallId,
+      tool_name: toolName,
+      side_effect_class: sideEffectClass,
+      output,
+      idempotent_replay: false,
+    };
+  }
 }
 
 function failed(

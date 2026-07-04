@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  AiRunListResponseSchema,
+  AiRunResourceResponseSchema,
+  AiRunResponseSchema,
   ApprovalApproveRequestSchema,
   ApprovalDecisionResponseSchema,
   ApprovalEditRequestSchema,
@@ -35,6 +38,12 @@ import {
   NormalizedOutboundMessageSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
+  QaReviewCompleteRequestSchema,
+  QaReviewCreateRequestSchema,
+  QaReviewEvidenceResponseSchema,
+  QaReviewListResponseSchema,
+  QaReviewResourceResponseSchema,
+  QaReviewResponseSchema,
   TicketCreateRequestSchema,
   TicketCreatedEventPayloadSchema,
   TicketListResponseSchema,
@@ -42,6 +51,7 @@ import {
   TicketStateTransitionEventPayloadSchema,
   TicketUpdateRequestSchema,
   ToolCallRequestSchema,
+  ToolCallResponseSchema,
   ToolCallResultSchema,
   ToolPermissionClassSchema,
   ToolSideEffectClassSchema,
@@ -1036,5 +1046,247 @@ describe("tool registry schemas", () => {
     };
 
     expect(ToolCallResultSchema.parse(blocked)).toEqual(blocked);
+  });
+});
+
+describe("observability and qa review schemas", () => {
+  const aiRun = {
+    ai_run_id: "air_test",
+    tenant_id: "ten_test",
+    ticket_id: "tkt_test",
+    conversation_id: "con_test",
+    run_type: "full_graph",
+    prompt_version: "support_graph.v1",
+    model_provider: "deterministic",
+    model_id: "deterministic-support-model.v1",
+    input_refs: { correlation_id: "corr-1" },
+    retrieved_context_refs: { evidence_ids: ["kb_chunk_1"] },
+    structured_output: { draft: { draft_text: "Hello" } },
+    confidence: 0.92,
+    risk_level: "low",
+    automation_recommendation: "human_approve",
+    guardrail_results: { passed: true },
+    status: "succeeded",
+    latency_ms: 240,
+    input_tokens: null,
+    output_tokens: null,
+    cost_estimate: null,
+    trace_id: "trace_abc123",
+    created_at: "2026-07-04T00:00:00.000Z",
+    completed_at: "2026-07-04T00:00:01.000Z",
+  };
+
+  const toolCall = {
+    tool_call_id: "tc_test",
+    tenant_id: "ten_test",
+    ticket_id: "tkt_test",
+    ai_run_id: "air_test",
+    tool_definition_id: "tool_order_lookup",
+    input: { order_number: "ORD-1" },
+    output: { order: { status: "shipped" } },
+    status: "succeeded",
+    side_effect_class: "read_only",
+    idempotency_key: null,
+    started_at: "2026-07-04T00:00:00.500Z",
+    completed_at: "2026-07-04T00:00:00.700Z",
+    error_code: null,
+    error_message: null,
+  };
+
+  const qaReview = {
+    qa_review_id: "qa_test",
+    tenant_id: "ten_test",
+    ticket_id: "tkt_test",
+    ai_run_id: "air_test",
+    reviewer_user_id: null,
+    sample_reason: "auto_send_candidate",
+    scores: {},
+    defects: [],
+    notes: null,
+    created_at: "2026-07-04T00:01:00.000Z",
+    completed_at: null,
+  };
+
+  it("validates ai run response, resource, and list contracts", () => {
+    expect(AiRunResponseSchema.parse(aiRun)).toEqual(aiRun);
+    expect(AiRunResourceResponseSchema.parse({ ai_run: aiRun })).toEqual({
+      ai_run: aiRun,
+    });
+    expect(
+      AiRunListResponseSchema.parse({
+        ai_runs: [aiRun],
+        page: { limit: 20, count: 1 },
+      }).ai_runs,
+    ).toHaveLength(1);
+  });
+
+  it("rejects ai runs with unknown status or run type", () => {
+    expect(() =>
+      AiRunResponseSchema.parse({ ...aiRun, status: "mystery" }),
+    ).toThrow();
+    expect(() =>
+      AiRunResponseSchema.parse({ ...aiRun, run_type: "vibes" }),
+    ).toThrow();
+  });
+
+  it("validates persisted tool call rows", () => {
+    expect(ToolCallResponseSchema.parse(toolCall)).toEqual(toolCall);
+    expect(() =>
+      ToolCallResponseSchema.parse({ ...toolCall, status: "unknown" }),
+    ).toThrow();
+  });
+
+  it("validates qa review response, resource, and list contracts", () => {
+    expect(QaReviewResponseSchema.parse(qaReview)).toEqual(qaReview);
+    expect(
+      QaReviewResourceResponseSchema.parse({ qa_review: qaReview }),
+    ).toEqual({ qa_review: qaReview });
+    expect(
+      QaReviewListResponseSchema.parse({
+        qa_reviews: [qaReview],
+        page: { limit: 20, count: 1 },
+      }).qa_reviews,
+    ).toHaveLength(1);
+  });
+
+  it("accepts qa review create requests with enum sample reasons only", () => {
+    expect(
+      QaReviewCreateRequestSchema.parse({
+        ticket_id: "tkt_test",
+        ai_run_id: "air_test",
+        sample_reason: "manual",
+      }),
+    ).toMatchObject({ sample_reason: "manual" });
+    expect(() =>
+      QaReviewCreateRequestSchema.parse({
+        ticket_id: "tkt_test",
+        sample_reason: "because",
+      }),
+    ).toThrow();
+    expect(() =>
+      QaReviewCreateRequestSchema.parse({
+        ticket_id: "tkt_test",
+        sample_reason: "manual",
+        surprise: true,
+      }),
+    ).toThrow();
+  });
+
+  it("validates qa review completion scores and defect taxonomy", () => {
+    expect(
+      QaReviewCompleteRequestSchema.parse({
+        scores: { draft_quality: 4, safety: 5 },
+        defects: [{ category: "bad_tone", severity: "low", note: "Curt." }],
+        notes: "Overall fine.",
+      }).defects,
+    ).toHaveLength(1);
+    expect(() =>
+      QaReviewCompleteRequestSchema.parse({
+        scores: { draft_quality: 9 },
+        defects: [],
+      }),
+    ).toThrow();
+    expect(() =>
+      QaReviewCompleteRequestSchema.parse({
+        scores: {},
+        defects: [{ category: "made_up_defect" }],
+      }),
+    ).toThrow();
+  });
+
+  it("validates the composite qa evidence package", () => {
+    const evidence = {
+      qa_review: qaReview,
+      ticket: {
+        ticket_id: "tkt_test",
+        tenant_id: "ten_test",
+        conversation_id: "con_test",
+        customer_id: "cus_test",
+        status: "waiting_human",
+        priority: "p2",
+        topic: "refund_request",
+        subtopic: null,
+        language: "en",
+        sentiment: null,
+        urgency_score: null,
+        automation_mode: "human_approve",
+        assigned_queue: null,
+        assigned_user_id: null,
+        sla_policy_id: null,
+        policy_version_id: null,
+        opened_at: "2026-07-04T00:00:00.000Z",
+        first_response_due_at: null,
+        next_response_due_at: null,
+        resolution_due_at: null,
+        resolved_at: null,
+        closed_at: null,
+        created_at: "2026-07-04T00:00:00.000Z",
+        updated_at: "2026-07-04T00:00:00.000Z",
+      },
+      conversation: {
+        conversation_id: "con_test",
+        tenant_id: "ten_test",
+        customer_id: "cus_test",
+        channel_id: "chn_test",
+        external_thread_id: "thread-1",
+        status: "open",
+        last_message_at: "2026-07-04T00:00:00.000Z",
+        created_at: "2026-07-04T00:00:00.000Z",
+        updated_at: "2026-07-04T00:00:00.000Z",
+      },
+      messages: [
+        {
+          message_id: "msg_in",
+          tenant_id: "ten_test",
+          conversation_id: "con_test",
+          ticket_id: "tkt_test",
+          channel_id: "chn_test",
+          direction: "inbound",
+          body_text: "Where is my refund?",
+          body_html_ref: null,
+          attachments: [],
+          external_message_id: "ext-1",
+          external_thread_id: "thread-1",
+          raw_payload_ref: "file:///raw/1",
+          created_by_type: "customer",
+          created_by_user_id: null,
+          provider_message_id: null,
+          send_status: null,
+          sent_by_type: null,
+          ai_run_id: null,
+          approval_id: null,
+          sent_at: null,
+          idempotency_key: "in-1",
+          created_at: "2026-07-04T00:00:00.000Z",
+        },
+      ],
+      ai_run: aiRun,
+      tool_calls: [toolCall],
+      approvals: [
+        {
+          approval_id: "apr_test",
+          tenant_id: "ten_test",
+          ticket_id: "tkt_test",
+          ai_run_id: "air_test",
+          approval_type: "reply",
+          status: "edited",
+          requested_payload: { draft_text: "Original AI draft." },
+          approved_payload: { draft_text: "Human-edited reply." },
+          reviewer_user_id: "usr_reviewer",
+          review_notes: "Softened tone.",
+          created_at: "2026-07-04T00:00:02.000Z",
+          resolved_at: "2026-07-04T00:04:00.000Z",
+        },
+      ],
+    };
+
+    const parsed = QaReviewEvidenceResponseSchema.parse(evidence);
+    expect(parsed.ai_run?.trace_id).toBe("trace_abc123");
+    expect(parsed.approvals[0]?.requested_payload).toEqual({
+      draft_text: "Original AI draft.",
+    });
+    expect(parsed.approvals[0]?.approved_payload).toEqual({
+      draft_text: "Human-edited reply.",
+    });
   });
 });

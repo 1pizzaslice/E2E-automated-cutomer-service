@@ -921,3 +921,5 @@ export type Approval = typeof approvals.$inferSelect;
 export type NewApproval = typeof approvals.$inferInsert;
 export type AuditEvent = typeof auditEvents.$inferSelect;
 export type NewAuditEvent = typeof auditEvents.$inferInsert;
+export type QaReview = typeof qaReviews.$inferSelect;
+export type NewQaReview = typeof qaReviews.$inferInsert;

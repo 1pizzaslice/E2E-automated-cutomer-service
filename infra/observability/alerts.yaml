@@ -1,0 +1,108 @@
+# Prometheus alert rules for the support platform's critical failure modes
+# (Milestone 11 acceptance: critical failure modes have metrics or alerts).
+# Metric names are the collector's Prometheus-exporter view of the OTel
+# instruments — see infra/observability/README.md for the mapping.
+groups:
+  - name: support-critical-failures
+    rules:
+      - alert: SupportAiGraphFailures
+        expr: increase(support_critical_failures{failure_mode="ai_graph_failed"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: AI graph runs are failing
+          description: >-
+            One or more AI graph executions failed in the last 15 minutes.
+            Failed runs route to a human, but sustained failures degrade the
+            product to manual handling. Check worker logs by trace_id and
+            the ai_runs rows with status = 'failed'.
+
+      - alert: SupportOutboundSendFailures
+        expr: increase(support_critical_failures{failure_mode="outbound_send_failed"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Outbound customer messages are failing to send
+          description: >-
+            Outbound sends threw in the last 15 minutes. Approved replies are
+            not reaching customers. Check `message.send_failed` audit events
+            and provider credentials/config for the affected channel.
+
+      - alert: SupportApprovalSignalFailures
+        expr: increase(support_critical_failures{failure_mode="approval_signal_failed"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Approval decisions are not reaching workflows
+          description: >-
+            An approval decision persisted but the Temporal signal failed
+            (API returned 502 WORKFLOW_ERROR). The workflow is still waiting;
+            redeliver the signal. Check Temporal availability.
+
+      - alert: SupportEventDeadLetters
+        expr: increase(support_critical_failures{failure_mode="event_dead_letter"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: high
+        annotations:
+          summary: Domain events are being dead-lettered
+          description: >-
+            The event consumer terminally dropped messages (poison envelope
+            or handler failure at max deliveries). Inspect the
+            support.events.errors.> stream for the structured error records.
+
+      - alert: SupportSlaBreaches
+        expr: increase(support_critical_failures{failure_mode="sla_breached"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: high
+        annotations:
+          summary: Ticket SLA breaches occurred
+          description: >-
+            First-response SLA timers fired before a response was sent.
+            Review the breached tickets (ticket.sla_breached audit events)
+            and queue staffing/automation rates.
+
+  - name: support-service-health
+    rules:
+      - alert: SupportApiServerErrorRate
+        expr: >-
+          sum(rate(support_api_requests{http_response_status_code=~"5.."}[5m]))
+            / clamp_min(sum(rate(support_api_requests[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: API 5xx rate above 5%
+          description: >-
+            More than 5% of API requests returned server errors over 5
+            minutes. Check API logs filtered by trace_id/request_id.
+
+      - alert: SupportWorkflowActivityFailureRate
+        expr: >-
+          sum(rate(support_workflow_activity_executions{outcome="failed"}[10m]))
+            / clamp_min(sum(rate(support_workflow_activity_executions[10m])), 1e-9) > 0.10
+        for: 10m
+        labels:
+          severity: high
+        annotations:
+          summary: Workflow activities failing above 10%
+          description: >-
+            Temporal activities are failing and retrying at an elevated rate.
+            Check worker logs and the failing activity label.
+
+      - alert: SupportApprovalDecisionLatencyP95High
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le) (rate(support_approval_latency_ms_bucket[30m]))) > 3600000
+        for: 15m
+        labels:
+          severity: medium
+        annotations:
+          summary: Approval decision p95 latency above 1 hour
+          description: >-
+            Human approvals are taking too long; first-response SLAs are at
+            risk. Review the approval queue and staffing.

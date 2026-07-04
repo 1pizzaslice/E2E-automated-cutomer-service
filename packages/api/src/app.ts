@@ -1,6 +1,11 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import {
+  createOtelSupportMetrics,
+  type SupportMetrics,
+} from "@support/observability";
 import { HttpError, registerErrorHandler } from "./errors.js";
 import { createDatabaseInboundWebhookDependencies } from "./inbound-webhook-deps.js";
+import { registerRequestTelemetry } from "./observability.js";
 import { registerRequestContext } from "./request-context.js";
 import { registerRoutes } from "./routes.js";
 import { createDatabaseApiServices, type ApiServices } from "./services.js";
@@ -12,21 +17,41 @@ import {
 export interface BuildAppOptions {
   readonly services?: ApiServices;
   readonly webhooks?: InboundWebhookDependencies;
+  /**
+   * Domain metrics recorder. Defaults to the OTel-backed implementation,
+   * which is a no-op unless the process started telemetry (server.ts);
+   * tests inject a recording implementation.
+   */
+  readonly metrics?: SupportMetrics;
 }
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
+      // DEVELOPMENT_RULES §13: structured logs carry service + environment;
+      // trace/request/tenant ids are bound per request by
+      // registerRequestTelemetry.
+      base: {
+        service: "api",
+        environment:
+          process.env.SUPPORT_ENVIRONMENT ?? process.env.NODE_ENV ?? "local",
+      },
+      redact: {
+        paths: ["req.headers.authorization"],
+        censor: "[REDACTED]",
+      },
     },
   });
   const services = options.services ?? createDatabaseApiServices();
   const webhooks =
     options.webhooks ?? createDatabaseInboundWebhookDependencies();
+  const metrics = options.metrics ?? createOtelSupportMetrics();
 
   registerRawJsonBodyParser(app);
   registerErrorHandler(app);
   registerRequestContext(app);
+  registerRequestTelemetry(app, metrics);
   registerRoutes(app, services);
   registerWebhookRoutes(app, webhooks);
 
