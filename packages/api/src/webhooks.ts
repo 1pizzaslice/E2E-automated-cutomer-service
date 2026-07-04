@@ -130,6 +130,8 @@ async function handleInboundWebhook(
       conversation_id: ingest.conversation_id,
       ticket_id: ingest.ticket_id,
       deduplicated: ingest.deduplicated,
+      rejected: ingest.rejected,
+      rejection_reason: ingest.rejection_reason,
       workflow_id: ingest.workflow?.workflow_id ?? null,
     });
   }
@@ -139,8 +141,11 @@ async function handleInboundWebhook(
     channel_id: resolution.channel_id,
     provider: resolution.provider,
     received: results.length,
-    accepted: results.filter((result) => !result.deduplicated).length,
+    accepted: results.filter(
+      (result) => !result.deduplicated && !result.rejected,
+    ).length,
     deduplicated: results.filter((result) => result.deduplicated).length,
+    rejected: results.filter((result) => result.rejected).length,
     results,
   });
 }

@@ -2,8 +2,25 @@ import { afterEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { createDatabase, type PostgresClient } from "./client.js";
 import {
+  activeAutomationPolicyVersionQuery,
   activeKbChunksForDocumentQuery,
+  aiDraftedTicketsCountQuery,
   aiRunByIdQuery,
+  aiRunStatusCountsQuery,
+  approvalResolutionCountsQuery,
+  approvalsRequestedCountQuery,
+  auditActionCountQuery,
+  clearMessageRawPayloadRefsQuery,
+  expiredAiRunsCountQuery,
+  expiredAttachmentMessagesCountQuery,
+  expiredRawPayloadMessagesQuery,
+  firstResponseMinutesAvgQuery,
+  outboundMessageCountsQuery,
+  qaReviewsCompletedStatsQuery,
+  qaReviewsCreatedCountQuery,
+  ticketTopTopicsQuery,
+  ticketsCreatedCountQuery,
+  ticketsResolvedStatsQuery,
   aiRunsListQuery,
   completeAiRunByIdQuery,
   completeQaReviewByIdQuery,
@@ -945,5 +962,172 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.params).toContain("ten_a");
     expect(compiled.params).toContain("succeeded");
     expect(compiled.params).toContain("failed");
+  });
+});
+
+describe("milestone 12 security and pilot readiness queries", () => {
+  const window = {
+    since: new Date("2026-06-27T00:00:00.000Z"),
+    until: new Date("2026-07-04T00:00:00.000Z"),
+  };
+
+  it("resolves the active automation policy version for the tenant", () => {
+    const query = activeAutomationPolicyVersionQuery(makeDb(), {
+      tenantId: "ten_a",
+    });
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('from "policy_versions"');
+    expect(compiled.sql).toContain('inner join "tenant_policies"');
+    expect(compiled.sql).toContain('"policy_versions"."tenant_id" = ');
+    expect(compiled.sql).toContain('"tenant_policies"."tenant_id" = ');
+    expect(compiled.sql).toContain('"tenant_policies"."domain" = ');
+    expect(compiled.sql).toContain('"tenant_policies"."status" = ');
+    expect(compiled.sql).toContain(
+      '"policy_versions"."activated_at" is not null',
+    );
+    expect(compiled.sql).toContain('order by "policy_versions"."version" desc');
+    expect(compiled.params).toContain("automation");
+    expect(compiled.params).toContain("active");
+    expect(compiled.params).toContain("ten_a");
+  });
+
+  it("selects expired raw payload refs in bounded batches", () => {
+    const query = expiredRawPayloadMessagesQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      { cutoff: new Date("2026-04-01T00:00:00.000Z"), limit: 100 },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"messages"."raw_payload_ref" is not null');
+    expect(compiled.sql).toContain('"messages"."created_at" < ');
+    expect(compiled.sql).toContain("limit");
+    expect(compiled.params).toContain("ten_a");
+  });
+
+  it("clears raw payload refs only for the given tenant-scoped messages", () => {
+    const query = clearMessageRawPayloadRefsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      ["msg_a", "msg_b"],
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "messages"');
+    expect(compiled.sql).toContain('"raw_payload_ref" = ');
+    expect(compiled.sql).toContain('"messages"."message_id" in (');
+    expect(compiled.sql).toContain('"messages"."raw_payload_ref" is not null');
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("msg_a");
+    expect(compiled.params).toContain("msg_b");
+  });
+
+  it("counts retention placeholders for attachments and ai runs", () => {
+    const cutoff = new Date("2026-04-01T00:00:00.000Z");
+    const attachments = expiredAttachmentMessagesCountQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      cutoff,
+    ).toSQL();
+    const aiRunsCount = expiredAiRunsCountQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      cutoff,
+    ).toSQL();
+
+    expect(attachments.sql).toContain("jsonb_array_length");
+    expect(attachments.sql).toContain('"messages"."created_at" < ');
+    expect(aiRunsCount.sql).toContain('from "ai_runs"');
+    expect(aiRunsCount.sql).toContain('"ai_runs"."created_at" < ');
+  });
+
+  it("builds the weekly report ticket aggregates", () => {
+    const created = ticketsCreatedCountQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const resolved = ticketsResolvedStatsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const firstResponse = firstResponseMinutesAvgQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const topTopics = ticketTopTopicsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+
+    expect(created.sql).toContain('"tickets"."created_at" >= ');
+    expect(created.sql).toContain('"tickets"."created_at" < ');
+    expect(resolved.sql).toContain('"tickets"."resolved_at" is not null');
+    expect(resolved.sql).toContain("avg(extract(epoch from");
+    expect(firstResponse.sql).toContain('"messages"."direction" = ');
+    expect(firstResponse.sql).toContain("min(");
+    expect(firstResponse.sql).toContain("group by");
+    expect(topTopics.sql).toContain('"tickets"."topic" is not null');
+    expect(topTopics.sql).toContain("group by");
+    expect(topTopics.sql).toContain("order by count(*) desc");
+  });
+
+  it("builds the weekly report ai, approval, outbound, and qa aggregates", () => {
+    const aiCounts = aiRunStatusCountsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const drafted = aiDraftedTicketsCountQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const requested = approvalsRequestedCountQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const resolutions = approvalResolutionCountsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const outbound = outboundMessageCountsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const qaCreated = qaReviewsCreatedCountQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const qaCompleted = qaReviewsCompletedStatsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      window,
+    ).toSQL();
+    const slaBreaches = auditActionCountQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "ticket.sla_breached",
+      window,
+    ).toSQL();
+
+    expect(aiCounts.sql).toContain('group by "ai_runs"."status"');
+    expect(drafted.sql).toContain("count(distinct");
+    expect(requested.sql).toContain('from "approvals"');
+    expect(resolutions.sql).toContain('"approvals"."resolved_at" is not null');
+    expect(outbound.sql).toContain('"messages"."direction" = ');
+    expect(outbound.sql).toContain("group by");
+    expect(qaCreated.sql).toContain('from "qa_reviews"');
+    expect(qaCompleted.sql).toContain("filter (where jsonb_array_length");
+    expect(slaBreaches.sql).toContain('"audit_events"."action" = ');
+    expect(slaBreaches.params).toContain("ticket.sla_breached");
   });
 });

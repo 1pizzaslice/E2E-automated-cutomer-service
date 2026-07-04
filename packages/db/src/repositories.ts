@@ -8,8 +8,10 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   or,
   sql,
+  type AnyColumn,
   type SQL,
 } from "drizzle-orm";
 import type { SupportDatabase } from "./client.js";
@@ -50,6 +52,7 @@ import {
   type TenantPolicy,
   type Ticket,
   type ToolCall,
+  policyVersions,
   tenantPolicies,
   tenants,
   tickets,
@@ -1383,4 +1386,399 @@ export function qaSamplingCandidatesQuery(
     .where(and(...filters))
     .orderBy(asc(aiRuns.createdAt), asc(aiRuns.aiRunId))
     .limit(options.limit);
+}
+
+/**
+ * The active automation policy version for a tenant: the highest activated
+ * version of an `automation`-domain policy whose header is `active`. Returns
+ * zero rows when the tenant has no automation policy configured — callers
+ * must fall back to the safe defaults (auto-send disabled).
+ */
+export function activeAutomationPolicyVersionQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+) {
+  return db
+    .select({
+      policyId: tenantPolicies.policyId,
+      policyVersionId: policyVersions.policyVersionId,
+      version: policyVersions.version,
+      content: policyVersions.content,
+      activatedAt: policyVersions.activatedAt,
+    })
+    .from(policyVersions)
+    .innerJoin(
+      tenantPolicies,
+      eq(policyVersions.policyId, tenantPolicies.policyId),
+    )
+    .where(
+      and(
+        eq(policyVersions.tenantId, scope.tenantId),
+        eq(tenantPolicies.tenantId, scope.tenantId),
+        eq(tenantPolicies.domain, "automation"),
+        eq(tenantPolicies.status, "active"),
+        isNotNull(policyVersions.activatedAt),
+      ),
+    )
+    .orderBy(desc(policyVersions.version), desc(policyVersions.policyVersionId))
+    .limit(1);
+}
+
+export interface RetentionCutoffQueryOptions {
+  readonly cutoff: Date;
+  readonly limit: number;
+}
+
+/**
+ * Messages whose raw provider payload reference has outlived the tenant's
+ * `raw_payload_days` retention window. Bounded so the retention job works in
+ * batches; the returned refs are handed to the operator/storage sweeper after
+ * the database reference is cleared.
+ */
+export function expiredRawPayloadMessagesQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: RetentionCutoffQueryOptions,
+) {
+  return db
+    .select({
+      messageId: messages.messageId,
+      rawPayloadRef: messages.rawPayloadRef,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        isNotNull(messages.rawPayloadRef),
+        lt(messages.createdAt, options.cutoff),
+      ),
+    )
+    .orderBy(asc(messages.createdAt), asc(messages.messageId))
+    .limit(options.limit);
+}
+
+export function clearMessageRawPayloadRefsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  messageIds: readonly string[],
+) {
+  return db
+    .update(messages)
+    .set({ rawPayloadRef: null })
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        inArray(messages.messageId, [...messageIds]),
+        isNotNull(messages.rawPayloadRef),
+      ),
+    )
+    .returning({
+      messageId: messages.messageId,
+    });
+}
+
+/**
+ * Planned-but-not-executed retention counts (BACKEND_SPEC section 22
+ * placeholders): attachment metadata and AI-run traces older than their
+ * cutoffs. The v1 retention job reports these; purging them is deferred until
+ * the blob-deletion and anonymization strategies land.
+ */
+export function expiredAttachmentMessagesCountQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  cutoff: Date,
+) {
+  return db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        sql`jsonb_array_length(${messages.attachments}) > 0`,
+        lt(messages.createdAt, cutoff),
+      ),
+    );
+}
+
+export function expiredAiRunsCountQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  cutoff: Date,
+) {
+  return db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(aiRuns)
+    .where(
+      and(eq(aiRuns.tenantId, scope.tenantId), lt(aiRuns.createdAt, cutoff)),
+    );
+}
+
+export interface ReportWindow {
+  readonly since: Date;
+  readonly until: Date;
+}
+
+function createdInWindow(column: AnyColumn, window: ReportWindow): SQL {
+  return and(gte(column, window.since), lt(column, window.until)) as SQL;
+}
+
+export function ticketsCreatedCountQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(tickets)
+    .where(
+      and(
+        eq(tickets.tenantId, scope.tenantId),
+        createdInWindow(tickets.createdAt, window),
+      ),
+    );
+}
+
+export function ticketsResolvedStatsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({
+      count: sql<number>`count(*)::int`,
+      resolutionMinutesAvg: sql<
+        number | null
+      >`avg(extract(epoch from (${tickets.resolvedAt} - ${tickets.createdAt})) / 60)::float8`,
+    })
+    .from(tickets)
+    .where(
+      and(
+        eq(tickets.tenantId, scope.tenantId),
+        isNotNull(tickets.resolvedAt),
+        gte(tickets.resolvedAt, window.since),
+        lt(tickets.resolvedAt, window.until),
+      ),
+    );
+}
+
+/**
+ * Average minutes from ticket creation to the first sent outbound message,
+ * over tickets created in the window that have at least one sent response.
+ */
+export function firstResponseMinutesAvgQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  const firstOutbound = db
+    .select({
+      ticketId: messages.ticketId,
+      firstSentAt: sql`min(${messages.sentAt})`.as("first_sent_at"),
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        eq(messages.direction, "outbound"),
+        eq(messages.sendStatus, "sent"),
+        isNotNull(messages.sentAt),
+      ),
+    )
+    .groupBy(messages.ticketId)
+    .as("first_outbound");
+
+  return db
+    .select({
+      firstResponseMinutesAvg: sql<
+        number | null
+      >`avg(extract(epoch from (${firstOutbound.firstSentAt} - ${tickets.createdAt})) / 60)::float8`,
+    })
+    .from(tickets)
+    .innerJoin(firstOutbound, eq(firstOutbound.ticketId, tickets.ticketId))
+    .where(
+      and(
+        eq(tickets.tenantId, scope.tenantId),
+        createdInWindow(tickets.createdAt, window),
+      ),
+    );
+}
+
+export function auditActionCountQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  action: string,
+  window: ReportWindow,
+) {
+  return db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.tenantId, scope.tenantId),
+        eq(auditEvents.action, action),
+        createdInWindow(auditEvents.createdAt, window),
+      ),
+    );
+}
+
+export function aiRunStatusCountsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({
+      status: aiRuns.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(aiRuns)
+    .where(
+      and(
+        eq(aiRuns.tenantId, scope.tenantId),
+        createdInWindow(aiRuns.createdAt, window),
+      ),
+    )
+    .groupBy(aiRuns.status);
+}
+
+/** Distinct tickets that received at least one succeeded AI run in the window. */
+export function aiDraftedTicketsCountQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({
+      count: sql<number>`count(distinct ${aiRuns.ticketId})::int`,
+    })
+    .from(aiRuns)
+    .where(
+      and(
+        eq(aiRuns.tenantId, scope.tenantId),
+        eq(aiRuns.status, "succeeded"),
+        createdInWindow(aiRuns.createdAt, window),
+      ),
+    );
+}
+
+export function approvalsRequestedCountQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(approvals)
+    .where(
+      and(
+        eq(approvals.tenantId, scope.tenantId),
+        createdInWindow(approvals.createdAt, window),
+      ),
+    );
+}
+
+export function approvalResolutionCountsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({
+      status: approvals.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(approvals)
+    .where(
+      and(
+        eq(approvals.tenantId, scope.tenantId),
+        isNotNull(approvals.resolvedAt),
+        gte(approvals.resolvedAt, window.since),
+        lt(approvals.resolvedAt, window.until),
+      ),
+    )
+    .groupBy(approvals.status);
+}
+
+export function outboundMessageCountsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({
+      sendStatus: messages.sendStatus,
+      sentByType: messages.sentByType,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        eq(messages.direction, "outbound"),
+        createdInWindow(messages.createdAt, window),
+      ),
+    )
+    .groupBy(messages.sendStatus, messages.sentByType);
+}
+
+export function qaReviewsCreatedCountQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(qaReviews)
+    .where(
+      and(
+        eq(qaReviews.tenantId, scope.tenantId),
+        createdInWindow(qaReviews.createdAt, window),
+      ),
+    );
+}
+
+export function qaReviewsCompletedStatsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+) {
+  return db
+    .select({
+      count: sql<number>`count(*)::int`,
+      withDefects: sql<number>`count(*) filter (where jsonb_array_length(${qaReviews.defects}) > 0)::int`,
+    })
+    .from(qaReviews)
+    .where(
+      and(
+        eq(qaReviews.tenantId, scope.tenantId),
+        isNotNull(qaReviews.completedAt),
+        gte(qaReviews.completedAt, window.since),
+        lt(qaReviews.completedAt, window.until),
+      ),
+    );
+}
+
+export function ticketTopTopicsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  window: ReportWindow,
+  limit = 5,
+) {
+  return db
+    .select({
+      topic: tickets.topic,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(tickets)
+    .where(
+      and(
+        eq(tickets.tenantId, scope.tenantId),
+        isNotNull(tickets.topic),
+        createdInWindow(tickets.createdAt, window),
+      ),
+    )
+    .groupBy(tickets.topic)
+    .orderBy(desc(sql`count(*)`), asc(tickets.topic))
+    .limit(limit);
 }

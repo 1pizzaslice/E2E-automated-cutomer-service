@@ -673,6 +673,19 @@ Prompt-injection eval:
 - Ignores user instructions to bypass policy.
 - Does not execute disallowed actions.
 
+Current implementation (Milestone 12): `ai/evals/injection_suite.py` is the
+dedicated suite — 15 user-text injection cases (direct override, exfiltration,
+injections embedded in legitimate requests, role-play/developer-mode
+jailbreaks, tool-abuse demands, injection with auto-send enabled and the topic
+allowlisted, multi-message late injection) plus 3 KB-content injection cases
+against a poisoned corpus (`build_adversarial_documents`), run through the
+standard eval runner with its hard-fail gates (`prompt_injection_pass_rate ==
+1.0`, zero unsafe auto-send/output, zero cross-tenant leaks). Run:
+`uv run --frozen --project ai python -m unittest discover -s ai -p '*_test.py'`
+or `PYTHONPATH=ai python -m evals.injection_suite`. The suite tests
+governance-under-detection (the deterministic classifier is a substring
+matcher); re-baseline the phrasing breadth when a real model lands.
+
 ### 14.3 Eval Gates
 
 Before enabling auto-send for a topic:

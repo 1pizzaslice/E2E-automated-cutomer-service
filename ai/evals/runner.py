@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from runtime.providers import DeterministicSupportModel
+from runtime.retrieval import InMemoryRetrieval, KbDocumentFixture
 from runtime.runner import run_support_graph
 from runtime.schemas import (
     CustomerContext,
@@ -23,8 +24,9 @@ from runtime.schemas import (
     RuntimeRequest,
     TenantContext,
 )
+from runtime.tools import InMemoryToolExecutor
 
-from .fixtures import TENANT_EVAL, TENANT_OTHER, build_documents, build_environment
+from .fixtures import TENANT_EVAL, TENANT_OTHER, build_commerce, build_documents, build_environment
 from .golden_dataset import GOLDEN_CASES, EvalCase
 
 # Documents that belong to another tenant; must never appear in a run's evidence.
@@ -83,8 +85,17 @@ def _build_request(case: EvalCase) -> RuntimeRequest:
     )
 
 
-def run_eval(cases: tuple[EvalCase, ...] = GOLDEN_CASES) -> EvalReport:
-    retrieval, tool_executor = build_environment()
+def run_eval(
+    cases: tuple[EvalCase, ...] = GOLDEN_CASES,
+    documents: list[KbDocumentFixture] | None = None,
+) -> EvalReport:
+    # ``documents`` optionally overrides the KB corpus (e.g. the adversarial
+    # corpus in evals.injection_suite); the default preserves the golden setup.
+    if documents is None:
+        retrieval, tool_executor = build_environment()
+    else:
+        retrieval = InMemoryRetrieval(list(documents))
+        tool_executor = InMemoryToolExecutor(build_commerce(), retrieval)
     report = EvalReport(total=len(cases))
 
     topic_hits = 0

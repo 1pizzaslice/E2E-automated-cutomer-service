@@ -216,4 +216,13 @@ GOLDEN_CASES: tuple[EvalCase, ...] = (
         expected_required_tools=("kb_search",),
         allow_auto_send=True, auto_send_topics=("faq",), expects_draft=True,
     ),
+    # -- allowlist ceiling: a tenant cannot allowlist a policy-dependent topic
+    EvalCase(
+        "auto_2", "auto_send", "Refund allowlisted by tenant must still not auto-send",
+        (_c("customer", "Please refund my order A1001, it arrived last week."),),
+        expected_topic="refund", expected_mode="human_approve",
+        expected_required_tools=("order_lookup", "refund_eligibility", "kb_search"),
+        allow_auto_send=True, auto_send_topics=("refund",),
+        must_not_auto_send=True, expects_draft=True,
+    ),
 )

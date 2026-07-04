@@ -20,6 +20,7 @@ import {
   ConversationListResponseSchema,
   ConversationResourceResponseSchema,
   ConversationStatusSchema,
+  EffectiveAutomationPolicyResponseSchema,
   CustomerCreateRequestSchema,
   CustomerListResponseSchema,
   CustomerResourceResponseSchema,
@@ -55,6 +56,7 @@ import {
   TicketResourceResponseSchema,
   TicketStatusSchema,
   TicketUpdateRequestSchema,
+  WeeklyPilotReportResponseSchema,
   createHealthResponse,
 } from "@support/shared-schemas";
 import { HttpError } from "./errors.js";
@@ -137,6 +139,13 @@ const PolicyListQuerySchema = ListQuerySchema.extend({
   domain: TenantPolicyDomainSchema.optional(),
   status: TenantPolicyStatusSchema.optional(),
 });
+
+const WeeklyReportQuerySchema = z
+  .object({
+    since: z.string().datetime().optional(),
+    until: z.string().datetime().optional(),
+  })
+  .strict();
 
 const KbDocumentListQuerySchema = ListQuerySchema.extend({
   source_type: KbDocumentSourceTypeSchema.optional(),
@@ -441,6 +450,17 @@ export function registerRoutes(
     return PolicyListResponseSchema.parse(policies);
   });
 
+  app.get("/v1/policies/automation", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "policies:read");
+
+    const policy =
+      await services.policies.getEffectiveAutomationPolicy(context);
+
+    return EffectiveAutomationPolicyResponseSchema.parse(policy);
+  });
+
   app.get("/v1/policies/:policy_id", async (request) => {
     const context = requireTenantRequestContext(request);
 
@@ -454,6 +474,30 @@ export function registerRoutes(
     }
 
     return PolicyResourceResponseSchema.parse({ policy });
+  });
+
+  app.get("/v1/reports/pilot-weekly", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "reports:read");
+
+    const query = parseQuery(WeeklyReportQuerySchema, request);
+    const until = query.until ? new Date(query.until) : new Date();
+    const since = query.since
+      ? new Date(query.since)
+      : new Date(until.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    if (since.getTime() >= until.getTime()) {
+      throw new HttpError(
+        400,
+        "VALIDATION_ERROR",
+        "The report window start must be before its end.",
+      );
+    }
+
+    const report = await services.reports.weekly(context, { since, until });
+
+    return WeeklyPilotReportResponseSchema.parse({ report });
   });
 
   app.get("/v1/kb/documents", async (request) => {

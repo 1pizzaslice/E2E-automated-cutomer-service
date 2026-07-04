@@ -567,6 +567,30 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/policies/automation": {
+        get: {
+          summary: "Resolve the tenant's effective auto-send automation policy",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description:
+                "Effective automation policy (safe defaults when unconfigured)",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/EffectiveAutomationPolicy",
+                  },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/policies/{policy_id}": {
         get: {
           summary: "Read a tenant-scoped policy",
@@ -587,6 +611,42 @@ export function buildOpenApiDocument() {
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/PolicyResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/reports/pilot-weekly": {
+        get: {
+          summary: "Weekly pilot review report (SOPS section 14 metrics)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            {
+              name: "since",
+              in: "query",
+              required: false,
+              schema: { type: "string", format: "date-time" },
+            },
+            {
+              name: "until",
+              in: "query",
+              required: false,
+              schema: { type: "string", format: "date-time" },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description:
+                "Weekly pilot report (defaults to the trailing seven days)",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/WeeklyPilotReportResponse",
+                  },
                 },
               },
             },
@@ -2521,6 +2581,8 @@ export function buildOpenApiDocument() {
             "conversation_id",
             "ticket_id",
             "deduplicated",
+            "rejected",
+            "rejection_reason",
             "workflow_id",
           ],
           additionalProperties: false,
@@ -2530,6 +2592,8 @@ export function buildOpenApiDocument() {
             conversation_id: { type: "string" },
             ticket_id: { type: "string" },
             deduplicated: { type: "boolean" },
+            rejected: { type: "boolean" },
+            rejection_reason: { type: ["string", "null"] },
             workflow_id: { type: ["string", "null"] },
           },
         },
@@ -2541,6 +2605,7 @@ export function buildOpenApiDocument() {
             "received",
             "accepted",
             "deduplicated",
+            "rejected",
             "results",
           ],
           additionalProperties: false,
@@ -2550,12 +2615,181 @@ export function buildOpenApiDocument() {
             received: { type: "integer", minimum: 0 },
             accepted: { type: "integer", minimum: 0 },
             deduplicated: { type: "integer", minimum: 0 },
+            rejected: { type: "integer", minimum: 0 },
             results: {
               type: "array",
               items: {
                 $ref: "#/components/schemas/InboundWebhookMessageResult",
               },
             },
+          },
+        },
+        AutoSendTopic: {
+          type: "string",
+          enum: ["faq", "order_status"],
+        },
+        EffectiveAutomationPolicy: {
+          type: "object",
+          required: [
+            "tenant_id",
+            "configured",
+            "policy_id",
+            "policy_version_id",
+            "version",
+            "activated_at",
+            "auto_send_enabled",
+            "auto_send_allowed_topics",
+          ],
+          properties: {
+            tenant_id: { type: "string", minLength: 1 },
+            configured: { type: "boolean" },
+            policy_id: { type: ["string", "null"], minLength: 1 },
+            policy_version_id: { type: ["string", "null"], minLength: 1 },
+            version: { type: ["integer", "null"], minimum: 1 },
+            activated_at: { type: ["string", "null"], format: "date-time" },
+            auto_send_enabled: { type: "boolean" },
+            auto_send_allowed_topics: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AutoSendTopic" },
+            },
+          },
+        },
+        WeeklyPilotReport: {
+          type: "object",
+          required: [
+            "tenant_id",
+            "window",
+            "tickets",
+            "ai_runs",
+            "approvals",
+            "outbound_messages",
+            "qa_reviews",
+            "top_topics",
+          ],
+          properties: {
+            tenant_id: { type: "string", minLength: 1 },
+            window: {
+              type: "object",
+              required: ["since", "until"],
+              properties: {
+                since: { type: "string", format: "date-time" },
+                until: { type: "string", format: "date-time" },
+              },
+            },
+            tickets: {
+              type: "object",
+              required: [
+                "created",
+                "resolved",
+                "manual_escalations",
+                "sla_breaches",
+                "first_response_minutes_avg",
+                "resolution_minutes_avg",
+                "escalation_rate",
+              ],
+              properties: {
+                created: { type: "integer", minimum: 0 },
+                resolved: { type: "integer", minimum: 0 },
+                manual_escalations: { type: "integer", minimum: 0 },
+                sla_breaches: { type: "integer", minimum: 0 },
+                first_response_minutes_avg: {
+                  type: ["number", "null"],
+                  minimum: 0,
+                },
+                resolution_minutes_avg: {
+                  type: ["number", "null"],
+                  minimum: 0,
+                },
+                escalation_rate: {
+                  type: ["number", "null"],
+                  minimum: 0,
+                  maximum: 1,
+                },
+              },
+            },
+            ai_runs: {
+              type: "object",
+              required: ["total", "succeeded", "failed", "draft_rate"],
+              properties: {
+                total: { type: "integer", minimum: 0 },
+                succeeded: { type: "integer", minimum: 0 },
+                failed: { type: "integer", minimum: 0 },
+                draft_rate: {
+                  type: ["number", "null"],
+                  minimum: 0,
+                  maximum: 1,
+                },
+              },
+            },
+            approvals: {
+              type: "object",
+              required: [
+                "requested",
+                "approved",
+                "edited",
+                "rejected",
+                "escalated",
+                "approval_rate",
+              ],
+              properties: {
+                requested: { type: "integer", minimum: 0 },
+                approved: { type: "integer", minimum: 0 },
+                edited: { type: "integer", minimum: 0 },
+                rejected: { type: "integer", minimum: 0 },
+                escalated: { type: "integer", minimum: 0 },
+                approval_rate: {
+                  type: ["number", "null"],
+                  minimum: 0,
+                  maximum: 1,
+                },
+              },
+            },
+            outbound_messages: {
+              type: "object",
+              required: ["sent", "failed", "auto_sent", "auto_send_rate"],
+              properties: {
+                sent: { type: "integer", minimum: 0 },
+                failed: { type: "integer", minimum: 0 },
+                auto_sent: { type: "integer", minimum: 0 },
+                auto_send_rate: {
+                  type: ["number", "null"],
+                  minimum: 0,
+                  maximum: 1,
+                },
+              },
+            },
+            qa_reviews: {
+              type: "object",
+              required: ["created", "completed", "with_defects", "defect_rate"],
+              properties: {
+                created: { type: "integer", minimum: 0 },
+                completed: { type: "integer", minimum: 0 },
+                with_defects: { type: "integer", minimum: 0 },
+                defect_rate: {
+                  type: ["number", "null"],
+                  minimum: 0,
+                  maximum: 1,
+                },
+              },
+            },
+            top_topics: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["topic", "count"],
+                properties: {
+                  topic: { type: "string", minLength: 1 },
+                  count: { type: "integer", minimum: 1 },
+                },
+              },
+            },
+          },
+        },
+        WeeklyPilotReportResponse: {
+          type: "object",
+          required: ["report"],
+          properties: {
+            report: { $ref: "#/components/schemas/WeeklyPilotReport" },
           },
         },
         TicketCreateRequest: {

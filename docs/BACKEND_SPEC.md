@@ -261,7 +261,9 @@ Current implementation:
 - Inbound intake persistence (`packages/api` `InboundIntakeStore`, PostgreSQL-backed) runs tenant-scoped under RLS: it dedups on `external_message_id` within tenant/channel (backed by the `messages_external_message_idx` unique index plus a conflict-safe insert, and the `messages_idempotency_idx` idempotency key), resolves or creates the customer via `customer_identities`, threads the conversation on `external_thread_id` (`conversations_external_thread_idx`), inserts the inbound message, and updates `conversations.last_message_at`. Duplicate provider events do not create duplicate messages or re-signal the workflow.
 - Normalized inbound intake is wired to the ready ticket lifecycle workflow start/signal boundary via an `InboundWorkflowLauncher` port. The default uses Temporal `signalWithStart` with a per-conversation workflow id (`ticket-lifecycle:{tenant}:{conversation}`): the first message starts `ticketLifecycleWorkflow`; later messages are delivered as `message_received` signals to the running workflow. Milestone 6 models one lifecycle workflow per conversation (deterministic ticket id `tkt_{conversation_id}`), a placeholder to revisit when the full ticketing milestone lands.
 - An email polling placeholder (`pollInboundEmailPlaceholder`) marks where scheduled IMAP/pull-API polling will feed the same normalized intake path; it currently performs no fetch.
-- Attachment binary storage (media download) and oversize-attachment rejection, HTML sanitization to `body_html_ref`, and multi-ticket-per-conversation lifecycle remain later slices.
+- Attachment validation (Milestone 12): the intake service validates every message's attachment metadata before any persistence or workflow signal, via the pure `validateInboundAttachments` in `packages/integrations` (`DEFAULT_ATTACHMENT_VALIDATION_POLICY`: 10 MiB size cap, a content-type allowlist that excludes executables/HTML/octet-stream, filename safety checks, and a 10-attachment-per-message bound; the policy is injectable per deployment). A `null` size (WhatsApp reports size only on download) passes metadata validation and is re-checked when binaries are fetched. Rejected messages create nothing — no customer, conversation, message, or workflow signal — and are reported per message in the webhook `202` response (`rejected: true` + `rejection_reason`, with a top-level `rejected` count) so providers do not retry.
+- The signing-secret and send-credential resolvers now share the validating `SecretResolver` in `packages/integrations/src/secrets.ts`: a reference must match `^[A-Z][A-Z0-9_]*$` (an environment variable name) before the environment is consulted, so tenant-influenced config cannot address arbitrary process state.
+- Attachment binary storage (media download) with post-download size re-checks, HTML sanitization to `body_html_ref`, and multi-ticket-per-conversation lifecycle remain later slices.
 
 ### 4.3 Outbound Message
 
@@ -671,6 +673,23 @@ Rules:
 - Audit events are append-only.
 - Audit events must exist for ticket transitions, AI runs, tool calls, approvals, outbound sends, policy changes, integration credential changes, and permission changes.
 
+Implementation note (Milestone 12): audit `action` values are constrained to
+the canonical closed taxonomy `SupportAuditActionSchema` in
+`@support/shared-schemas` — the workers audit boundary
+(`RecordAuditEventActivityInput.action`, `AppendAuditEventInput.action`) is
+typed to it at compile time and the API's approval-decision audit write
+validates against it at runtime. Live producers: the ticket lifecycle
+workflow (`ticket.manual_escalated`, `ai_graph.failed`, `ticket.sla_breached`,
+`ticket.close_requested`, `approval.completed`, `message.sent`), the
+persistence activities (`approval.requested`, `message.send_failed`), the API
+decide service (`approval.approved|edited|rejected|escalated`), and the
+retention job (`retention.applied`). Tool calls are audited in the
+`tool_calls` table (§10.2), not in `audit_events`. The taxonomy reserves
+`policy.created|activated|archived`, `integration.credential_changed`, and
+`permission.granted|revoked` for the corresponding write paths when they
+land; an audit-completeness test drives every live producer and asserts all
+emitted actions are canonical.
+
 ## 14. QA Review Model
 
 Fields:
@@ -798,7 +817,9 @@ Current API skeleton implements:
 - `GET /v1/conversations/{conversation_id}/messages`
 - `GET /v1/conversations/{conversation_id}/messages/{message_id}`
 - `GET /v1/policies`
+- `GET /v1/policies/automation`
 - `GET /v1/policies/{policy_id}`
+- `GET /v1/reports/pilot-weekly`
 - `GET /v1/kb/documents`
 - `GET /v1/kb/documents/{kb_document_id}`
 - `GET /v1/approvals`
@@ -841,7 +862,7 @@ Required on every non-health endpoint:
 - `Authorization: Bearer <token>` placeholder auth header.
 - `x-user-id` placeholder actor identifier.
 - `x-user-email` optional actor email.
-- `x-user-roles` optional comma-separated role list, defaulting to `support_agent`.
+- `x-user-roles` required comma-separated role list. There is no default role: a request without a parseable role is rejected with `401 AUTH_REQUIRED` (deny-by-default, Milestone 12 — an implicit role would let a misconfigured gateway mint access).
 - `x-request-id` optional request ID. If omitted, the API generates one.
 - `x-correlation-id` optional correlation ID. If omitted, it defaults to the request ID.
 
@@ -878,10 +899,18 @@ Current skeleton permissions:
 - `ai_runs:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`. AI run records are internal operational evidence, so `client_viewer` has no access.
 - `qa_reviews:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`.
 - `qa_reviews:write`: `platform_admin`, `ops_admin`, `qa_reviewer`. Grants QA review creation and completion; support agents can read reviews of their tickets but not author them.
+- `reports:read`: `platform_admin`, `ops_admin`, `qa_reviewer`, `client_viewer`. Grants the weekly pilot report; support agents work tickets, not reporting.
 - `tickets:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `tickets:create`: `platform_admin`, `ops_admin`, `support_agent`.
 - `tickets:update`: `platform_admin`, `ops_admin`, `support_agent`.
 - `integration_admin` currently has only `openapi:read` until integration endpoints are implemented.
+
+The role→permission matrix (`packages/api/src/rbac.ts` `ROLE_PERMISSIONS`) is
+the single source of truth; an RBAC matrix test enumerates every registered
+route via a Fastify `onRoute` collector and asserts each enforces exactly its
+documented permission for all six roles (plus `401` with no role), so a new
+endpoint fails the suite until it is added to the catalog with an explicit
+permission decision.
 
 ### 17.1 Health
 
@@ -997,8 +1026,9 @@ Current implementation:
 Current implementation:
 
 - `GET /v1/policies` lists tenant-scoped policies with `limit`, `domain`, and `status` query filters.
+- `GET /v1/policies/automation` (permission `policies:read`) resolves the tenant's effective auto-send controls: the highest activated version of an active `automation`-domain policy, with `policy_versions.content` validated against the shared `AutomationPolicyContentSchema` (`auto_send_enabled` kill switch + `auto_send_allowed_topics` constrained to the closed low-risk set `faq | order_status`). No policy, an inactive policy, or malformed content resolves to `configured: false` with the safe defaults (auto-send disabled, empty allowlist) — the controls fail closed. In v1 allowlist changes are an ops action (seed/SQL on `policy_versions`); the policy write/approve/activate endpoints remain future work.
 - `GET /v1/policies/{policy_id}` reads a tenant-scoped policy.
-- Policy create, policy version creation, approval, activation, immutable active-version enforcement, audit events, and workflow side effects remain future endpoints.
+- Policy create, policy version creation, approval, activation, immutable active-version enforcement, audit events, and workflow side effects remain future endpoints (the audit taxonomy already reserves `policy.created|activated|archived` for them).
 
 ### 17.9 KB
 
@@ -1103,6 +1133,24 @@ Current implementation:
   linked AI run (structured output, guardrails, `trace_id`), the run's tool
   calls, and the ticket's approvals with `requested_payload` (original AI
   draft) and `approved_payload` (human edit).
+
+### 17.15 Reports
+
+- `GET /v1/reports/pilot-weekly`
+
+Current implementation:
+
+- `GET /v1/reports/pilot-weekly` (permission `reports:read`) computes the
+  weekly pilot review report (SOPS §14) for the tenant over an optional
+  `since`/`until` ISO window (default: the trailing seven days; an inverted
+  window is a `400`). Aggregates run in one RLS transaction: ticket volume,
+  resolutions with average resolution minutes, average first-response
+  minutes (creation → first sent outbound message), manual escalations and
+  SLA breaches (from audit events), AI run counts and draft rate (distinct
+  tickets with a succeeded run / tickets created), approval decision counts
+  and approval rate, outbound send/failure counts with auto-send rate
+  (`sent_by_type = 'ai_auto'`), QA review counts with defect rate, and the
+  top ticket topics. Rates are `null` when the denominator is zero.
 
 ## 18. Event Envelope
 
@@ -1284,6 +1332,21 @@ V1 placeholders:
 - AI traces retention configurable per tenant.
 - Audit events retained longer than operational traces.
 - PII deletion/export workflow to be designed before enterprise customers.
+
+Current implementation (Milestone 12): `tenants.retention_policy` (jsonb,
+migration `0004`) holds the per-tenant configuration validated by the shared
+`TenantRetentionPolicySchema` (`raw_payload_days`, `attachment_days`,
+`ai_run_days`, `audit_event_days`; absent/null = retain indefinitely — the
+default). The workers retention job (`runTenantRetentionJob` +
+`createDatabaseRetentionStore`, all under RLS) computes per-class cutoffs and
+applies the safe subset: it clears expired `messages.raw_payload_ref`
+references in bounded batches, returns the cleared refs for the storage
+sweeper, and appends a `retention.applied` audit event. Attachment metadata
+and AI-run traces are counted and reported as planned-but-not-executed
+placeholders until the blob-deletion and anonymization strategies land.
+Missing or malformed retention configuration fails closed (nothing is
+purged). Changing a tenant's retention policy is an ops action; it is not
+exposed on the tenant API contract yet.
 
 ## 23. Backend Acceptance Criteria For V1 Pilot
 
