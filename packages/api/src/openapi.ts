@@ -993,6 +993,233 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/ai-runs": {
+        get: {
+          summary: "List tenant-scoped AI runs",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "ticket_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "status",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/AiRunStatus" },
+            },
+            {
+              name: "run_type",
+              in: "query",
+              required: false,
+              schema: { $ref: "#/components/schemas/AiRunType" },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "AI run list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/AiRunList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/ai-runs/{ai_run_id}": {
+        get: {
+          summary:
+            "Read a tenant-scoped AI run, including its observability trace link",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "ai_run_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "AI run resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/AiRunResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/qa-reviews": {
+        get: {
+          summary: "List tenant-scoped QA reviews",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            {
+              name: "ticket_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "ai_run_id",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "completed",
+              in: "query",
+              required: false,
+              schema: { type: "string", enum: ["true", "false"] },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "QA review list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/QaReviewList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+        post: {
+          summary: "Queue a ticket/AI run for QA review",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/QaReviewCreateRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "QA review created",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/QaReviewResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/qa-reviews/{qa_review_id}": {
+        get: {
+          summary: "Read a tenant-scoped QA review",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "qa_review_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "QA review resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/QaReviewResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/qa-reviews/{qa_review_id}/complete": {
+        post: {
+          summary: "Complete an open QA review with scores and defects",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "qa_review_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/QaReviewCompleteRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Completed QA review",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/QaReviewResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/qa-reviews/{qa_review_id}/evidence": {
+        get: {
+          summary:
+            "Read the composite QA evidence package for a review (conversation, messages, AI run, tool calls, approvals)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "qa_review_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "QA evidence package",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/QaReviewEvidence" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/audit-events": {
         get: {
           summary: "List tenant-scoped audit events",
@@ -1871,6 +2098,283 @@ export function buildOpenApiDocument() {
             approval: { $ref: "#/components/schemas/Approval" },
             workflow_signal: {
               $ref: "#/components/schemas/ApprovalWorkflowSignalResult",
+            },
+          },
+        },
+        AiRunType: {
+          enum: [
+            "classification",
+            "routing",
+            "draft",
+            "full_graph",
+            "critique",
+            "eval",
+          ],
+        },
+        AiRunStatus: {
+          enum: ["started", "succeeded", "failed", "canceled"],
+        },
+        AiRun: {
+          type: "object",
+          required: [
+            "ai_run_id",
+            "tenant_id",
+            "ticket_id",
+            "conversation_id",
+            "run_type",
+            "prompt_version",
+            "model_provider",
+            "model_id",
+            "input_refs",
+            "retrieved_context_refs",
+            "structured_output",
+            "confidence",
+            "risk_level",
+            "automation_recommendation",
+            "guardrail_results",
+            "status",
+            "latency_ms",
+            "input_tokens",
+            "output_tokens",
+            "cost_estimate",
+            "trace_id",
+            "created_at",
+            "completed_at",
+          ],
+          properties: {
+            ai_run_id: { type: "string" },
+            tenant_id: { type: "string" },
+            ticket_id: { type: "string" },
+            conversation_id: { type: "string" },
+            run_type: { $ref: "#/components/schemas/AiRunType" },
+            prompt_version: { type: "string" },
+            model_provider: { type: "string" },
+            model_id: { type: "string" },
+            input_refs: { type: "object", additionalProperties: true },
+            retrieved_context_refs: {
+              type: "object",
+              additionalProperties: true,
+            },
+            structured_output: {
+              type: ["object", "null"],
+              additionalProperties: true,
+            },
+            confidence: { type: ["number", "null"] },
+            risk_level: { type: ["string", "null"] },
+            automation_recommendation: {
+              oneOf: [
+                { $ref: "#/components/schemas/AutomationMode" },
+                { type: "null" },
+              ],
+            },
+            guardrail_results: { type: "object", additionalProperties: true },
+            status: { $ref: "#/components/schemas/AiRunStatus" },
+            latency_ms: { type: ["integer", "null"] },
+            input_tokens: { type: ["integer", "null"] },
+            output_tokens: { type: ["integer", "null"] },
+            cost_estimate: { type: ["number", "null"] },
+            trace_id: { type: ["string", "null"] },
+            created_at: { type: "string", format: "date-time" },
+            completed_at: { type: ["string", "null"], format: "date-time" },
+          },
+        },
+        AiRunResource: {
+          type: "object",
+          required: ["ai_run"],
+          properties: {
+            ai_run: { $ref: "#/components/schemas/AiRun" },
+          },
+        },
+        AiRunList: {
+          type: "object",
+          required: ["ai_runs", "page"],
+          properties: {
+            ai_runs: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AiRun" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        ToolCall: {
+          type: "object",
+          required: [
+            "tool_call_id",
+            "tenant_id",
+            "ticket_id",
+            "ai_run_id",
+            "tool_definition_id",
+            "input",
+            "output",
+            "status",
+            "side_effect_class",
+            "idempotency_key",
+            "started_at",
+            "completed_at",
+            "error_code",
+            "error_message",
+          ],
+          properties: {
+            tool_call_id: { type: "string" },
+            tenant_id: { type: "string" },
+            ticket_id: { type: "string" },
+            ai_run_id: { type: "string" },
+            tool_definition_id: { type: "string" },
+            input: { type: "object", additionalProperties: true },
+            output: { type: ["object", "null"], additionalProperties: true },
+            status: {
+              enum: ["planned", "running", "succeeded", "failed", "blocked"],
+            },
+            side_effect_class: {
+              enum: [
+                "read_only",
+                "draft_side_effect",
+                "reversible_write",
+                "irreversible_write",
+              ],
+            },
+            idempotency_key: { type: ["string", "null"] },
+            started_at: { type: ["string", "null"], format: "date-time" },
+            completed_at: { type: ["string", "null"], format: "date-time" },
+            error_code: { type: ["string", "null"] },
+            error_message: { type: ["string", "null"] },
+          },
+        },
+        QaSampleReason: {
+          enum: ["random_sample", "auto_send_candidate", "high_risk", "manual"],
+        },
+        QaDefectCategory: {
+          enum: [
+            "wrong_policy",
+            "wrong_tool_use",
+            "missing_evidence",
+            "hallucination",
+            "bad_tone",
+            "missed_escalation",
+            "privacy_issue",
+            "tenant_leakage",
+            "unsafe_auto_send",
+          ],
+        },
+        QaDefectSeverity: {
+          enum: ["critical", "high", "medium", "low"],
+        },
+        QaReviewDefect: {
+          type: "object",
+          additionalProperties: false,
+          required: ["category"],
+          properties: {
+            category: { $ref: "#/components/schemas/QaDefectCategory" },
+            severity: { $ref: "#/components/schemas/QaDefectSeverity" },
+            note: { type: "string", minLength: 1 },
+          },
+        },
+        QaReview: {
+          type: "object",
+          required: [
+            "qa_review_id",
+            "tenant_id",
+            "ticket_id",
+            "ai_run_id",
+            "reviewer_user_id",
+            "sample_reason",
+            "scores",
+            "defects",
+            "notes",
+            "created_at",
+            "completed_at",
+          ],
+          properties: {
+            qa_review_id: { type: "string" },
+            tenant_id: { type: "string" },
+            ticket_id: { type: "string" },
+            ai_run_id: { type: ["string", "null"] },
+            reviewer_user_id: { type: ["string", "null"] },
+            sample_reason: { type: "string" },
+            scores: { type: "object", additionalProperties: true },
+            defects: {
+              type: "array",
+              items: { type: "object", additionalProperties: true },
+            },
+            notes: { type: ["string", "null"] },
+            created_at: { type: "string", format: "date-time" },
+            completed_at: { type: ["string", "null"], format: "date-time" },
+          },
+        },
+        QaReviewResource: {
+          type: "object",
+          required: ["qa_review"],
+          properties: {
+            qa_review: { $ref: "#/components/schemas/QaReview" },
+          },
+        },
+        QaReviewList: {
+          type: "object",
+          required: ["qa_reviews", "page"],
+          properties: {
+            qa_reviews: {
+              type: "array",
+              items: { $ref: "#/components/schemas/QaReview" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        QaReviewCreateRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["ticket_id", "sample_reason"],
+          properties: {
+            ticket_id: { type: "string", minLength: 1 },
+            ai_run_id: { type: ["string", "null"], minLength: 1 },
+            sample_reason: { $ref: "#/components/schemas/QaSampleReason" },
+            notes: { type: ["string", "null"], minLength: 1 },
+          },
+        },
+        QaReviewCompleteRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["scores", "defects"],
+          properties: {
+            scores: {
+              type: "object",
+              additionalProperties: { type: "number", minimum: 0, maximum: 5 },
+            },
+            defects: {
+              type: "array",
+              items: { $ref: "#/components/schemas/QaReviewDefect" },
+            },
+            notes: { type: ["string", "null"], minLength: 1 },
+          },
+        },
+        QaReviewEvidence: {
+          type: "object",
+          required: [
+            "qa_review",
+            "ticket",
+            "conversation",
+            "messages",
+            "ai_run",
+            "tool_calls",
+            "approvals",
+          ],
+          properties: {
+            qa_review: { $ref: "#/components/schemas/QaReview" },
+            ticket: { $ref: "#/components/schemas/Ticket" },
+            conversation: { $ref: "#/components/schemas/Conversation" },
+            messages: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Message" },
+            },
+            ai_run: {
+              oneOf: [{ $ref: "#/components/schemas/AiRun" }, { type: "null" }],
+            },
+            tool_calls: {
+              type: "array",
+              items: { $ref: "#/components/schemas/ToolCall" },
+            },
+            approvals: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Approval" },
             },
           },
         },

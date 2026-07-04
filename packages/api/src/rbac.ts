@@ -20,6 +20,9 @@ export type ApiPermission =
   | "approvals:read"
   | "approvals:review"
   | "audit_events:read"
+  | "ai_runs:read"
+  | "qa_reviews:read"
+  | "qa_reviews:write"
   | "tickets:read"
   | "tickets:create"
   | "tickets:update";
@@ -44,6 +47,9 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "approvals:read",
       "approvals:review",
       "audit_events:read",
+      "ai_runs:read",
+      "qa_reviews:read",
+      "qa_reviews:write",
       "tickets:read",
       "tickets:create",
       "tickets:update",
@@ -64,6 +70,9 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "approvals:read",
       "approvals:review",
       "audit_events:read",
+      "ai_runs:read",
+      "qa_reviews:read",
+      "qa_reviews:write",
       "tickets:read",
       "tickets:create",
       "tickets:update",
@@ -82,6 +91,8 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "approvals:read",
       "approvals:review",
       "audit_events:read",
+      "ai_runs:read",
+      "qa_reviews:read",
       "tickets:read",
       "tickets:create",
       "tickets:update",
@@ -96,6 +107,9 @@ const ROLE_PERMISSIONS: Readonly<Record<RoleName, ReadonlySet<ApiPermission>>> =
       "kb:search",
       "approvals:read",
       "audit_events:read",
+      "ai_runs:read",
+      "qa_reviews:read",
+      "qa_reviews:write",
       "tickets:read",
     ]),
     client_viewer: new Set([

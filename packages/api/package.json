@@ -14,6 +14,7 @@
   "dependencies": {
     "@support/db": "workspace:*",
     "@support/integrations": "workspace:*",
+    "@support/observability": "workspace:*",
     "@support/shared-schemas": "workspace:*",
     "@temporalio/client": "^1.18.1",
     "fastify": "^5.0.0",

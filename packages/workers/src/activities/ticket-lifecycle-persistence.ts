@@ -4,19 +4,26 @@ import {
   approvalByIdQuery,
   channelByIdQuery,
   conversationByIdQuery,
+  createAiRunQuery,
   createApprovalQuery,
   createAuditEventQuery,
   createDatabaseFromEnv,
   createOutboundMessageQuery,
   customerIdentityForCustomerQuery,
   messageByIdempotencyKeyQuery,
+  ticketByIdQuery,
   updateMessageSendResultByIdQuery,
   withTenantTransaction,
+  type AiRun,
   type Approval,
   type JsonObject,
   type Message,
 } from "@support/db";
 import type { OutboundChannelSender } from "@support/integrations";
+import {
+  createNoopSupportMetrics,
+  type SupportMetrics,
+} from "@support/observability";
 import {
   NormalizedOutboundMessageSchema,
   type DomainEventActorType,
@@ -26,6 +33,8 @@ import type {
   CreateApprovalActivityInput,
   CreateApprovalActivityResult,
   RecordAuditEventActivityInput,
+  RunAiGraphActivityInput,
+  RunAiGraphActivityResult,
   SendOutboundMessageActivityInput,
   SendOutboundMessageActivityResult,
 } from "../workflows/ticket-lifecycle-types.js";
@@ -115,6 +124,40 @@ export interface AppendAuditEventInput {
   readonly correlationId: string | null;
 }
 
+export interface RecordAiRunResultInput {
+  readonly tenantId: string;
+  readonly aiRunId: string;
+  readonly ticketId: string;
+  readonly conversationId: string;
+  readonly runType: AiRun["runType"];
+  readonly promptVersion: string;
+  readonly modelProvider: string;
+  readonly modelId: string;
+  readonly inputRefs: JsonObject;
+  readonly retrievedContextRefs: JsonObject;
+  readonly structuredOutput: JsonObject | null;
+  readonly confidence: number | null;
+  readonly riskLevel: string | null;
+  readonly automationRecommendation: AiRun["automationRecommendation"];
+  readonly guardrailResults: JsonObject;
+  readonly status: "succeeded" | "failed";
+  readonly latencyMs: number | null;
+  readonly traceId: string | null;
+  readonly completedAt: Date;
+}
+
+export interface RecordAiRunResultOutcome {
+  readonly aiRunId: string;
+  /** False when the run was already recorded (activity retry replay). */
+  readonly created: boolean;
+  /**
+   * False when the owning ticket row does not exist yet, so the append-only
+   * evidence row cannot satisfy its foreign keys and is skipped rather than
+   * failing the workflow (mirrors the Milestone 10 `ai_run_id` FK guard).
+   */
+  readonly persisted: boolean;
+}
+
 export interface OutboundSendContext {
   readonly conversation: {
     readonly conversationId: string;
@@ -162,6 +205,9 @@ export interface TicketLifecyclePersistenceStore {
     input: RecordSendResultInput,
   ): Promise<OutboundMessageRecord>;
   appendAuditEvent(input: AppendAuditEventInput): Promise<void>;
+  recordAiRunResult(
+    input: RecordAiRunResultInput,
+  ): Promise<RecordAiRunResultOutcome>;
   close?(): Promise<void>;
 }
 
@@ -215,6 +261,140 @@ export function deterministicApprovalId(
   correlationId: string,
 ): string {
   return `apr_${sha24([tenantId, ticketId, correlationId])}`;
+}
+
+/**
+ * Fallback AI run id for failed runs that never produced one (input
+ * validation failures return `ai_run_id: null`). Derived from the same
+ * workflow identity as the runtime's own deterministic id, so activity
+ * retries land on the same row.
+ */
+export function deterministicAiRunId(
+  tenantId: string,
+  ticketId: string,
+  correlationId: string,
+): string {
+  return `air_${sha24([tenantId, ticketId, correlationId])}`;
+}
+
+/** Provenance recorded on `ai_runs` rows for the v1 deterministic runtime. */
+export const AI_RUN_PROMPT_VERSION = "support_graph.v1";
+export const AI_RUN_MODEL_PROVIDER = "deterministic";
+export const AI_RUN_MODEL_ID = "deterministic-support-model.v1";
+
+export interface PersistedRunAiGraphDependencies {
+  readonly store: TicketLifecyclePersistenceStore;
+  readonly now?: () => Date;
+  readonly metrics?: SupportMetrics;
+}
+
+/**
+ * Wraps any `runAiGraph` activity implementation with AI run persistence
+ * (BACKEND_SPEC §11) and AI run metrics. After the inner graph completes,
+ * the run's structured output, confidence/risk/automation recommendation,
+ * guardrail results, latency, and `trace_id` are written to `ai_runs` —
+ * which is what lets `approvals.ai_run_id` / `messages.ai_run_id` link up
+ * (the Milestone 10 FK guard finds the row from here on). Failed runs are
+ * persisted too: they are operational evidence, and their `ai_run_id` is
+ * backfilled deterministically when the runtime could not produce one.
+ */
+export function createPersistedRunAiGraph(
+  runAiGraph: (
+    input: RunAiGraphActivityInput,
+  ) => Promise<RunAiGraphActivityResult>,
+  dependencies: PersistedRunAiGraphDependencies,
+): (input: RunAiGraphActivityInput) => Promise<RunAiGraphActivityResult> {
+  const now = dependencies.now ?? (() => new Date());
+  const metrics = dependencies.metrics ?? createNoopSupportMetrics();
+
+  return async (input) => {
+    const startedAt = now();
+    const result = await runAiGraph(input);
+    const completedAt = now();
+    const latencyMs = Math.max(0, completedAt.getTime() - startedAt.getTime());
+
+    const aiRunId =
+      result.ai_run_id ??
+      deterministicAiRunId(
+        input.tenant_id,
+        input.ticket_id,
+        input.correlation_id,
+      );
+
+    await dependencies.store.recordAiRunResult({
+      tenantId: input.tenant_id,
+      aiRunId,
+      ticketId: input.ticket_id,
+      conversationId: input.ticket.conversation_id,
+      runType: "full_graph",
+      promptVersion: AI_RUN_PROMPT_VERSION,
+      modelProvider: AI_RUN_MODEL_PROVIDER,
+      modelId: AI_RUN_MODEL_ID,
+      inputRefs: {
+        correlation_id: input.correlation_id,
+        initial_message_id: input.initial_message_id,
+      },
+      retrievedContextRefs:
+        result.status === "succeeded"
+          ? {
+              evidence_ids:
+                result.draft?.evidence.map((evidence) => evidence.ref_id) ?? [],
+            }
+          : {},
+      structuredOutput:
+        result.status === "succeeded"
+          ? {
+              classification: result.classification,
+              routing_decision: result.routing_decision,
+              tool_calls: result.tool_calls,
+              draft: result.draft,
+              guardrails: result.guardrails,
+              final_recommendation: result.final_recommendation,
+              eval_signals: result.eval_signals,
+            }
+          : {
+              error_code: result.error_code,
+              error_message: result.error_message,
+              retryable: result.retryable,
+              reason_codes: result.reason_codes,
+              eval_signals: result.eval_signals,
+            },
+      confidence:
+        result.status === "succeeded"
+          ? result.final_recommendation.confidence
+          : null,
+      riskLevel:
+        result.status === "succeeded"
+          ? result.final_recommendation.risk_level
+          : null,
+      automationRecommendation:
+        result.status === "succeeded"
+          ? result.final_recommendation.automation_mode
+          : null,
+      guardrailResults: result.status === "succeeded" ? result.guardrails : {},
+      status: result.status,
+      latencyMs,
+      traceId: result.trace_id,
+      completedAt,
+    });
+
+    metrics.recordAiRun({
+      status: result.status,
+      automationMode:
+        result.status === "succeeded"
+          ? result.final_recommendation.automation_mode
+          : null,
+      riskLevel:
+        result.status === "succeeded"
+          ? result.final_recommendation.risk_level
+          : null,
+      durationMs: latencyMs,
+    });
+
+    return result.status === "failed" && result.ai_run_id === null
+      ? { ...result, ai_run_id: aiRunId }
+      : result;
+  };
 }
 
 export function createTicketLifecyclePersistenceActivities(
@@ -489,9 +669,10 @@ export function createDatabaseTicketLifecyclePersistenceStore(): TicketLifecycle
       const scope = { tenantId: input.tenantId };
 
       return withTenantTransaction(getDatabase().client, scope, async (db) => {
-        // `approvals.ai_run_id` is a foreign key into `ai_runs`. AI run rows
-        // are not persisted until the observability milestone, so the id is
-        // linked only when its row exists; it always remains available inside
+        // `approvals.ai_run_id` is a foreign key into `ai_runs`. Runs are
+        // persisted by `createPersistedRunAiGraph` before the workflow asks
+        // for an approval, so the row normally exists; the guard remains for
+        // runs recorded by other paths, and the id is always available inside
         // `requested_payload.ai_graph.ai_run_id` either way.
         const aiRunId =
           input.aiRunId !== null &&
@@ -682,6 +863,49 @@ export function createDatabaseTicketLifecyclePersistenceStore(): TicketLifecycle
       });
     },
 
+    async recordAiRunResult(input) {
+      const scope = { tenantId: input.tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        // `ai_runs.ticket_id`/`conversation_id` are non-null foreign keys.
+        // A run can only be recorded once its ticket row exists; when it
+        // does not (placeholder ticket activities in tests), the evidence is
+        // skipped instead of failing the workflow with an FK violation.
+        const ticketRows = await ticketByIdQuery(db, scope, input.ticketId);
+
+        if (!ticketRows[0]) {
+          return { aiRunId: input.aiRunId, created: false, persisted: false };
+        }
+
+        const inserted = await createAiRunQuery(db, scope, {
+          aiRunId: input.aiRunId,
+          ticketId: input.ticketId,
+          conversationId: input.conversationId,
+          runType: input.runType,
+          promptVersion: input.promptVersion,
+          modelProvider: input.modelProvider,
+          modelId: input.modelId,
+          inputRefs: input.inputRefs,
+          retrievedContextRefs: input.retrievedContextRefs,
+          structuredOutput: input.structuredOutput,
+          confidence: input.confidence,
+          riskLevel: input.riskLevel,
+          automationRecommendation: input.automationRecommendation,
+          guardrailResults: input.guardrailResults,
+          status: input.status,
+          latencyMs: input.latencyMs,
+          traceId: input.traceId,
+          completedAt: input.completedAt,
+        });
+
+        return {
+          aiRunId: input.aiRunId,
+          created: inserted[0] !== undefined,
+          persisted: true,
+        };
+      });
+    },
+
     async close() {
       await database?.client.end();
     },
@@ -728,6 +952,7 @@ export interface InMemoryTicketLifecyclePersistenceStore extends TicketLifecycle
     idempotencyKey: string;
   } & OutboundMessageRecord)[];
   listAuditEvents(): readonly AppendAuditEventInput[];
+  listAiRuns(): readonly RecordAiRunResultInput[];
   setApprovalDecision(params: {
     readonly tenantId: string;
     readonly approvalId: string;
@@ -761,6 +986,7 @@ export function createInMemoryTicketLifecyclePersistenceStore(
     } & OutboundMessageRecord
   >();
   const auditEvents = new Map<string, AppendAuditEventInput>();
+  const aiRuns = new Map<string, RecordAiRunResultInput>();
   const conversations = [...(fixtures.conversations ?? [])];
   const channels = [...(fixtures.channels ?? [])];
   const identities = [...(fixtures.identities ?? [])];
@@ -920,6 +1146,18 @@ export function createInMemoryTicketLifecyclePersistenceStore(
       }
     },
 
+    async recordAiRunResult(input) {
+      const key = `${input.tenantId}:${input.aiRunId}`;
+
+      if (aiRuns.has(key)) {
+        return { aiRunId: input.aiRunId, created: false, persisted: true };
+      }
+
+      aiRuns.set(key, input);
+
+      return { aiRunId: input.aiRunId, created: true, persisted: true };
+    },
+
     listApprovals() {
       return [...approvals.values()];
     },
@@ -928,6 +1166,9 @@ export function createInMemoryTicketLifecyclePersistenceStore(
     },
     listAuditEvents() {
       return [...auditEvents.values()];
+    },
+    listAiRuns() {
+      return [...aiRuns.values()];
     },
     setApprovalDecision(params) {
       const key = `${params.tenantId}:${params.approvalId}`;

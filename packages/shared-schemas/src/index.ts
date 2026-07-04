@@ -1154,6 +1154,219 @@ export type TicketListResponse = z.infer<typeof TicketListResponseSchema>;
 export type TicketCreateRequest = z.infer<typeof TicketCreateRequestSchema>;
 export type TicketUpdateRequest = z.infer<typeof TicketUpdateRequestSchema>;
 
+// --- Observability + QA review (Milestone 11) --------------------------------
+
+export const AiRunTypeSchema = z.enum([
+  "classification",
+  "routing",
+  "draft",
+  "full_graph",
+  "critique",
+  "eval",
+]);
+
+export const AiRunStatusSchema = z.enum([
+  "started",
+  "succeeded",
+  "failed",
+  "canceled",
+]);
+
+/**
+ * Read contract for a persisted AI run (BACKEND_SPEC §11). `trace_id` is the
+ * observability link: it joins the run to its OTel spans and to the redacted
+ * runtime trace export, so a QA reviewer or operator can walk from the ticket
+ * to the exact graph execution.
+ */
+export const AiRunResponseSchema = z.object({
+  ai_run_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  ticket_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  run_type: AiRunTypeSchema,
+  prompt_version: z.string().min(1),
+  model_provider: z.string().min(1),
+  model_id: z.string().min(1),
+  input_refs: JsonObjectSchema,
+  retrieved_context_refs: JsonObjectSchema,
+  structured_output: JsonObjectSchema.nullable(),
+  confidence: z.number().nullable(),
+  risk_level: z.string().nullable(),
+  automation_recommendation: AutomationModeSchema.nullable(),
+  guardrail_results: JsonObjectSchema,
+  status: AiRunStatusSchema,
+  latency_ms: z.number().int().nullable(),
+  input_tokens: z.number().int().nullable(),
+  output_tokens: z.number().int().nullable(),
+  cost_estimate: z.number().nullable(),
+  trace_id: z.string().nullable(),
+  created_at: z.string().datetime(),
+  completed_at: z.string().datetime().nullable(),
+});
+
+export const AiRunResourceResponseSchema = z.object({
+  ai_run: AiRunResponseSchema,
+});
+
+export const AiRunListResponseSchema = z.object({
+  ai_runs: z.array(AiRunResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export type AiRunType = z.infer<typeof AiRunTypeSchema>;
+export type AiRunStatus = z.infer<typeof AiRunStatusSchema>;
+export type AiRunResponse = z.infer<typeof AiRunResponseSchema>;
+export type AiRunResourceResponse = z.infer<typeof AiRunResourceResponseSchema>;
+export type AiRunListResponse = z.infer<typeof AiRunListResponseSchema>;
+
+export const PersistedToolCallStatusSchema = z.enum([
+  "planned",
+  "running",
+  "succeeded",
+  "failed",
+  "blocked",
+]);
+
+/** Read contract for a persisted `tool_calls` audit row (BACKEND_SPEC §10). */
+export const ToolCallResponseSchema = z.object({
+  tool_call_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  ticket_id: z.string().min(1),
+  ai_run_id: z.string().min(1),
+  tool_definition_id: z.string().min(1),
+  input: JsonObjectSchema,
+  output: JsonObjectSchema.nullable(),
+  status: PersistedToolCallStatusSchema,
+  side_effect_class: ToolSideEffectClassSchema,
+  idempotency_key: z.string().nullable(),
+  started_at: z.string().datetime().nullable(),
+  completed_at: z.string().datetime().nullable(),
+  error_code: z.string().nullable(),
+  error_message: z.string().nullable(),
+});
+
+export type PersistedToolCallStatus = z.infer<
+  typeof PersistedToolCallStatusSchema
+>;
+export type ToolCallResponse = z.infer<typeof ToolCallResponseSchema>;
+
+/** Why a ticket/AI run was queued for QA review (SOPS §10 sampling rules). */
+export const QaSampleReasonSchema = z.enum([
+  "random_sample",
+  "auto_send_candidate",
+  "high_risk",
+  "manual",
+]);
+
+/** QA defect taxonomy (BACKEND_SPEC §14). */
+export const QaDefectCategorySchema = z.enum([
+  "wrong_policy",
+  "wrong_tool_use",
+  "missing_evidence",
+  "hallucination",
+  "bad_tone",
+  "missed_escalation",
+  "privacy_issue",
+  "tenant_leakage",
+  "unsafe_auto_send",
+]);
+
+export const QaDefectSeveritySchema = z.enum([
+  "critical",
+  "high",
+  "medium",
+  "low",
+]);
+
+export const QaReviewDefectSchema = z
+  .object({
+    category: QaDefectCategorySchema,
+    severity: QaDefectSeveritySchema.optional(),
+    note: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const QaReviewResponseSchema = z.object({
+  qa_review_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  ticket_id: z.string().min(1),
+  ai_run_id: z.string().nullable(),
+  reviewer_user_id: z.string().nullable(),
+  sample_reason: z.string().min(1),
+  scores: JsonObjectSchema,
+  defects: JsonArraySchema,
+  notes: z.string().nullable(),
+  created_at: z.string().datetime(),
+  completed_at: z.string().datetime().nullable(),
+});
+
+export const QaReviewResourceResponseSchema = z.object({
+  qa_review: QaReviewResponseSchema,
+});
+
+export const QaReviewListResponseSchema = z.object({
+  qa_reviews: z.array(QaReviewResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export const QaReviewCreateRequestSchema = z
+  .object({
+    ticket_id: z.string().min(1),
+    ai_run_id: z.string().min(1).nullish(),
+    sample_reason: QaSampleReasonSchema,
+    notes: z.string().min(1).nullish(),
+  })
+  .strict();
+
+/**
+ * Reviewer completion payload. `scores` maps SOP review dimensions
+ * (classification, routing, policy, tool use, evidence, draft quality, tone,
+ * safety, privacy, resolution) to a 0-5 score; `defects` may be empty when
+ * the review found no issues.
+ */
+export const QaReviewCompleteRequestSchema = z
+  .object({
+    scores: z.record(z.string().min(1), z.number().min(0).max(5)),
+    defects: z.array(QaReviewDefectSchema),
+    notes: z.string().min(1).nullish(),
+  })
+  .strict();
+
+/**
+ * Composite QA evidence package: everything a reviewer needs to assess an
+ * AI-assisted ticket in one read — the conversation and its messages (inbound
+ * and the final outbound response), the persisted AI run (draft, evidence,
+ * guardrails, trace link), the tool calls it made, and the approvals with the
+ * original AI draft (`requested_payload`) plus the human edit
+ * (`approved_payload`).
+ */
+export const QaReviewEvidenceResponseSchema = z.object({
+  qa_review: QaReviewResponseSchema,
+  ticket: TicketResponseSchema,
+  conversation: ConversationResponseSchema,
+  messages: z.array(MessageResponseSchema),
+  ai_run: AiRunResponseSchema.nullable(),
+  tool_calls: z.array(ToolCallResponseSchema),
+  approvals: z.array(ApprovalResponseSchema),
+});
+
+export type QaSampleReason = z.infer<typeof QaSampleReasonSchema>;
+export type QaDefectCategory = z.infer<typeof QaDefectCategorySchema>;
+export type QaDefectSeverity = z.infer<typeof QaDefectSeveritySchema>;
+export type QaReviewDefect = z.infer<typeof QaReviewDefectSchema>;
+export type QaReviewResponse = z.infer<typeof QaReviewResponseSchema>;
+export type QaReviewResourceResponse = z.infer<
+  typeof QaReviewResourceResponseSchema
+>;
+export type QaReviewListResponse = z.infer<typeof QaReviewListResponseSchema>;
+export type QaReviewCreateRequest = z.infer<typeof QaReviewCreateRequestSchema>;
+export type QaReviewCompleteRequest = z.infer<
+  typeof QaReviewCompleteRequestSchema
+>;
+export type QaReviewEvidenceResponse = z.infer<
+  typeof QaReviewEvidenceResponseSchema
+>;
+
 export const MessageReceivedEventPayloadSchema = z
   .object({
     message_id: z.string().min(1),
@@ -1318,6 +1531,9 @@ export type TicketSlaBreachedEventPayload = z.infer<
 >;
 export type MessageSentEventPayload = z.infer<
   typeof MessageSentEventPayloadSchema
+>;
+export type QaReviewCreatedEventPayload = z.infer<
+  typeof QaReviewCreatedEventPayloadSchema
 >;
 
 function getDomainEventPayloadSchema(

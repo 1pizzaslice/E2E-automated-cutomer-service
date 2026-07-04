@@ -4,6 +4,15 @@ import { createDatabase, type PostgresClient } from "./client.js";
 import {
   activeKbChunksForDocumentQuery,
   aiRunByIdQuery,
+  aiRunsListQuery,
+  completeAiRunByIdQuery,
+  completeQaReviewByIdQuery,
+  createAiRunQuery,
+  createQaReviewQuery,
+  qaReviewByIdQuery,
+  qaReviewsListQuery,
+  qaSamplingCandidatesQuery,
+  toolCallsListQuery,
   approvalByIdQuery,
   approvalsListQuery,
   auditEventByIdQuery,
@@ -768,5 +777,173 @@ describe("tenant-scoped repository queries", () => {
     expect(compiled.sql).toContain("on conflict do nothing");
     expect(compiled.sql).toContain("returning");
     expect(compiled.params).toContain("approval.approved");
+  });
+
+  it("inserts ai runs with conflict-safe retry dedup", () => {
+    const query = createAiRunQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        aiRunId: "air_a",
+        ticketId: "tic_a",
+        conversationId: "cnv_a",
+        runType: "full_graph",
+        promptVersion: "support_graph.v1",
+        modelProvider: "deterministic",
+        modelId: "deterministic-support-model.v1",
+        status: "succeeded",
+        traceId: "trace_a",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "ai_runs"');
+    expect(compiled.sql).toContain("on conflict do nothing");
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("air_a");
+    expect(compiled.params).toContain("trace_a");
+  });
+
+  it("completes ai runs scoped by tenant and run id", () => {
+    const query = completeAiRunByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "air_a",
+      {
+        status: "succeeded",
+        latencyMs: 250,
+        completedAt: new Date("2026-07-04T00:00:00.000Z"),
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "ai_runs"');
+    expect(compiled.sql).toContain('"ai_runs"."tenant_id" = ');
+    expect(compiled.sql).toContain('"ai_runs"."ai_run_id" = ');
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("air_a");
+  });
+
+  it("lists ai runs with ticket, status, and run type filters", () => {
+    const query = aiRunsListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        limit: 20,
+        ticketId: "tic_a",
+        status: "succeeded",
+        runType: "full_graph",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"ai_runs"."tenant_id" = ');
+    expect(compiled.sql).toContain('"ai_runs"."ticket_id" = ');
+    expect(compiled.sql).toContain('"ai_runs"."status" = ');
+    expect(compiled.sql).toContain('"ai_runs"."run_type" = ');
+    expect(compiled.sql).toContain("order by");
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("succeeded");
+  });
+
+  it("lists tool calls filtered by ticket and ai run", () => {
+    const query = toolCallsListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      { limit: 50, ticketId: "tic_a", aiRunId: "air_a" },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"tool_calls"."tenant_id" = ');
+    expect(compiled.sql).toContain('"tool_calls"."ticket_id" = ');
+    expect(compiled.sql).toContain('"tool_calls"."ai_run_id" = ');
+    expect(compiled.params).toContain("air_a");
+  });
+
+  it("inserts qa reviews with conflict-safe sampling dedup", () => {
+    const query = createQaReviewQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      {
+        qaReviewId: "qa_a",
+        ticketId: "tic_a",
+        aiRunId: "air_a",
+        sampleReason: "auto_send_candidate",
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('insert into "qa_reviews"');
+    expect(compiled.sql).toContain("on conflict do nothing");
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("qa_a");
+    expect(compiled.params).toContain("auto_send_candidate");
+  });
+
+  it("reads qa reviews by tenant and id", () => {
+    const query = qaReviewByIdQuery(makeDb(), { tenantId: "ten_a" }, "qa_a");
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"qa_reviews"."tenant_id" = $1');
+    expect(compiled.sql).toContain('"qa_reviews"."qa_review_id" = $2');
+    expect(compiled.params).toEqual(["ten_a", "qa_a", 1]);
+  });
+
+  it("lists qa reviews with ticket, ai run, and completion filters", () => {
+    const query = qaReviewsListQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      { limit: 20, ticketId: "tic_a", aiRunId: "air_a", completed: false },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('"qa_reviews"."tenant_id" = ');
+    expect(compiled.sql).toContain('"qa_reviews"."ticket_id" = ');
+    expect(compiled.sql).toContain('"qa_reviews"."ai_run_id" = ');
+    expect(compiled.sql).toContain('"qa_reviews"."completed_at" is null');
+    expect(compiled.params).toContain("tic_a");
+  });
+
+  it("completes qa reviews only while they are still open", () => {
+    const query = completeQaReviewByIdQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      "qa_a",
+      {
+        reviewerUserId: "usr_reviewer",
+        scores: { draft_quality: 4 },
+        defects: [{ category: "bad_tone" }],
+        completedAt: new Date("2026-07-04T00:00:00.000Z"),
+      },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "qa_reviews"');
+    expect(compiled.sql).toContain('"qa_reviews"."tenant_id" = ');
+    expect(compiled.sql).toContain('"qa_reviews"."qa_review_id" = ');
+    expect(compiled.sql).toContain('"qa_reviews"."completed_at" is null');
+    expect(compiled.sql).toContain("returning");
+    expect(compiled.params).toContain("qa_a");
+  });
+
+  it("selects unsampled completed ai runs as qa sampling candidates", () => {
+    const query = qaSamplingCandidatesQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      { limit: 100, since: new Date("2026-07-01T00:00:00.000Z") },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('from "ai_runs"');
+    expect(compiled.sql).toContain('inner join "tickets"');
+    expect(compiled.sql).toContain('left join "qa_reviews"');
+    expect(compiled.sql).toContain('"ai_runs"."tenant_id" = ');
+    expect(compiled.sql).toContain('"ai_runs"."status" in (');
+    expect(compiled.sql).toContain('"qa_reviews"."qa_review_id" is null');
+    expect(compiled.sql).toContain('"ai_runs"."created_at" >= ');
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("succeeded");
+    expect(compiled.params).toContain("failed");
   });
 });

@@ -243,6 +243,24 @@ Defect severity:
 - Medium: incomplete answer, poor tone, unnecessary escalation.
 - Low: wording/style issue.
 
+Sampling job (Milestone 11):
+
+- `runQaSamplingJob` (`packages/workers/src/qa-sampling.ts`) implements the
+  rates above per tenant: 100% of `auto_send` recommendations
+  (`auto_send_candidate`), 100% of high-risk runs (`high_risk`), and a
+  deterministic hash-bucketed random share of the rest (`random_sample`,
+  default 25%). Candidates are completed AI runs with no QA review yet;
+  re-runs are idempotent (deterministic `qa_review_id` + conflict-safe
+  insert) and each new review emits `support.qa.review_created.v1`.
+- Reviewers work the queue through the API: `GET /v1/qa-reviews?completed=false`
+  to list open reviews, `GET /v1/qa-reviews/{id}/evidence` for the full
+  package (conversation, messages, AI run + trace link, tool calls,
+  approvals with the original AI draft and human edit), and
+  `POST /v1/qa-reviews/{id}/complete` with the dimension scores (0-5) and
+  defect taxonomy above.
+- Until a scheduler exists, run the job from a worker process or an
+  operational script per tenant on a daily cadence during pilot.
+
 ## 11. Prompt And AI Release SOP
 
 Prompt/model/graph changes require:
@@ -315,6 +333,18 @@ Incident steps:
 8. Add regression test/eval.
 9. Update SOP/docs.
 10. Record postmortem.
+
+Alert-to-incident mapping (Milestone 11): the alert definitions in
+`infra/observability/alerts.yaml` page on the `support_critical_failures`
+metric by `failure_mode` — `ai_graph_failed` (AI provider outage /
+runtime regression), `outbound_send_failed` (outbound send outage),
+`approval_signal_failed` (decision persisted but workflow not resumed —
+redeliver the signal), `event_dead_letter` (event consumer dropping
+messages; inspect `support.events.errors.>`), and `sla_breached` (major
+SLA breach) — plus API 5xx rate, workflow activity failure rate, and
+approval latency p95. Each firing alert enters this SOP at step 1; use
+the shared `correlation_id`/`trace_id` on spans, logs, and audit events
+to identify affected tenants/tickets (step 4).
 
 Severity:
 

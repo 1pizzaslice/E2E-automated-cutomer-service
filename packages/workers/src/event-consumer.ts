@@ -19,6 +19,7 @@ import {
   type SupportEventErrorKind,
   type SupportEventErrorRecord,
 } from "@support/shared-schemas";
+import type { SupportMetrics } from "@support/observability";
 import { SUPPORT_EVENTS_STREAM, SUPPORT_EVENTS_SUBJECT } from "./event-bus.js";
 import type { SupportEventErrorPublisher } from "./event-errors.js";
 
@@ -206,6 +207,12 @@ export interface ProcessDomainEventMessageOptions {
   readonly idempotencyStore: DomainEventConsumerIdempotencyStore;
   readonly handler: DomainEventHandler;
   readonly errorPublisher?: SupportEventErrorPublisher;
+  /**
+   * Domain metrics recorder; when provided, terminally dropped messages
+   * (poison envelopes, handler failure at max deliveries) record an
+   * `event_dead_letter` critical failure.
+   */
+  readonly metrics?: SupportMetrics;
   readonly nakDelayMs?: number;
   readonly maxDeliver?: number;
   readonly now?: () => Date;
@@ -325,6 +332,7 @@ export async function processDomainEventMessage(
     });
 
     message.term("invalid domain event envelope");
+    options.metrics?.recordCriticalFailure("event_dead_letter");
     return {
       status: "invalid",
       error: parsed.error,
@@ -395,6 +403,7 @@ export async function processDomainEventMessage(
 
     if (deadLettered) {
       message.term("domain event handler failed after max deliveries");
+      options.metrics?.recordCriticalFailure("event_dead_letter");
     } else {
       message.nak(nakDelayMs);
     }

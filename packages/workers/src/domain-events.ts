@@ -6,6 +6,7 @@ import {
   type DomainEventName,
   type MessageReceivedEventPayload,
   type MessageSentEventPayload,
+  type QaReviewCreatedEventPayload,
   type TicketCreatedEventPayload,
   type TicketSlaBreachedEventPayload,
   type TicketStateTransitionEventName,
@@ -46,6 +47,10 @@ export interface MessageSentEventInput extends DomainEventEmissionMetadata {
   readonly payload: MessageSentEventPayload;
 }
 
+export interface QaReviewCreatedEventInput extends DomainEventEmissionMetadata {
+  readonly payload: QaReviewCreatedEventPayload;
+}
+
 export function buildMessageReceivedEvent(
   input: MessageReceivedEventInput,
 ): DomainEventEnvelope {
@@ -78,6 +83,12 @@ export function buildMessageSentEvent(
   input: MessageSentEventInput,
 ): DomainEventEnvelope {
   return buildDomainEventEnvelope("support.message.sent.v1", input);
+}
+
+export function buildQaReviewCreatedEvent(
+  input: QaReviewCreatedEventInput,
+): DomainEventEnvelope {
+  return buildDomainEventEnvelope("support.qa.review_created.v1", input);
 }
 
 export async function emitMessageReceivedEvent(
@@ -113,6 +124,13 @@ export async function emitMessageSentEvent(
   input: MessageSentEventInput,
 ): Promise<DomainEventPublishReceipt> {
   return publisher.publish(buildMessageSentEvent(input));
+}
+
+export async function emitQaReviewCreatedEvent(
+  publisher: DomainEventPublisher,
+  input: QaReviewCreatedEventInput,
+): Promise<DomainEventPublishReceipt> {
+  return publisher.publish(buildQaReviewCreatedEvent(input));
 }
 
 function buildDomainEventEnvelope(

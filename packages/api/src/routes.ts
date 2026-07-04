@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  AiRunListResponseSchema,
+  AiRunResourceResponseSchema,
+  AiRunStatusSchema,
+  AiRunTypeSchema,
   ApprovalApproveRequestSchema,
   ApprovalDecisionResponseSchema,
   ApprovalEditRequestSchema,
@@ -35,6 +39,11 @@ import {
   MessageResourceResponseSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
+  QaReviewCompleteRequestSchema,
+  QaReviewCreateRequestSchema,
+  QaReviewEvidenceResponseSchema,
+  QaReviewListResponseSchema,
+  QaReviewResourceResponseSchema,
   TenantResourceResponseSchema,
   TenantPolicyDomainSchema,
   TenantPolicyStatusSchema,
@@ -88,6 +97,14 @@ const ApprovalParamsSchema = z.object({
 
 const AuditEventParamsSchema = z.object({
   audit_event_id: z.string().min(1),
+});
+
+const AiRunParamsSchema = z.object({
+  ai_run_id: z.string().min(1),
+});
+
+const QaReviewParamsSchema = z.object({
+  qa_review_id: z.string().min(1),
 });
 
 const TicketParamsSchema = z.object({
@@ -151,6 +168,22 @@ const TicketListQuerySchema = ListQuerySchema.extend({
   status: TicketStatusSchema.optional(),
   customer_id: z.string().min(1).optional(),
   assigned_queue: z.string().min(1).optional(),
+});
+
+const AiRunListQuerySchema = ListQuerySchema.extend({
+  ticket_id: z.string().min(1).optional(),
+  status: AiRunStatusSchema.optional(),
+  run_type: AiRunTypeSchema.optional(),
+});
+
+const QaReviewListQuerySchema = ListQuerySchema.extend({
+  ticket_id: z.string().min(1).optional(),
+  ai_run_id: z.string().min(1).optional(),
+  // z.coerce.boolean() would treat "false" as true, so parse explicitly.
+  completed: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
 });
 
 export function registerRoutes(
@@ -608,6 +641,142 @@ export function registerRoutes(
       };
     }),
   );
+
+  app.get("/v1/ai-runs", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "ai_runs:read");
+
+    const query = parseQuery(AiRunListQuerySchema, request);
+    const aiRuns = await services.aiRuns.list(context, query);
+
+    return AiRunListResponseSchema.parse(aiRuns);
+  });
+
+  app.get("/v1/ai-runs/:ai_run_id", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "ai_runs:read");
+
+    const { ai_run_id: aiRunId } = parseParams(AiRunParamsSchema, request);
+    const aiRun = await services.aiRuns.getById(context, aiRunId);
+
+    if (!aiRun) {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "AI run was not found.");
+    }
+
+    return AiRunResourceResponseSchema.parse({ ai_run: aiRun });
+  });
+
+  app.get("/v1/qa-reviews", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "qa_reviews:read");
+
+    const query = parseQuery(QaReviewListQuerySchema, request);
+    const qaReviews = await services.qaReviews.list(context, query);
+
+    return QaReviewListResponseSchema.parse(qaReviews);
+  });
+
+  app.post("/v1/qa-reviews", async (request, reply) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "qa_reviews:write");
+
+    const input = parseBody(QaReviewCreateRequestSchema, request);
+    const result = await services.qaReviews.create(context, input);
+
+    if (result.outcome === "ticket_not_found") {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Ticket was not found.");
+    }
+
+    if (result.outcome === "ai_run_not_found") {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "AI run was not found.");
+    }
+
+    reply.status(201);
+    return QaReviewResourceResponseSchema.parse({ qa_review: result.review });
+  });
+
+  app.get("/v1/qa-reviews/:qa_review_id", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "qa_reviews:read");
+
+    const { qa_review_id: qaReviewId } = parseParams(
+      QaReviewParamsSchema,
+      request,
+    );
+    const qaReview = await services.qaReviews.getById(context, qaReviewId);
+
+    if (!qaReview) {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "QA review was not found.",
+      );
+    }
+
+    return QaReviewResourceResponseSchema.parse({ qa_review: qaReview });
+  });
+
+  app.post("/v1/qa-reviews/:qa_review_id/complete", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "qa_reviews:write");
+
+    const { qa_review_id: qaReviewId } = parseParams(
+      QaReviewParamsSchema,
+      request,
+    );
+    const input = parseBody(QaReviewCompleteRequestSchema, request);
+    const result = await services.qaReviews.complete(
+      context,
+      qaReviewId,
+      input,
+    );
+
+    if (result.outcome === "not_found") {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "QA review was not found.",
+      );
+    }
+
+    if (result.outcome === "conflict") {
+      throw new HttpError(
+        409,
+        "CONFLICT",
+        "QA review has already been completed.",
+      );
+    }
+
+    return QaReviewResourceResponseSchema.parse({ qa_review: result.review });
+  });
+
+  app.get("/v1/qa-reviews/:qa_review_id/evidence", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "qa_reviews:read");
+
+    const { qa_review_id: qaReviewId } = parseParams(
+      QaReviewParamsSchema,
+      request,
+    );
+    const evidence = await services.qaReviews.evidence(context, qaReviewId);
+
+    if (!evidence) {
+      throw new HttpError(
+        404,
+        "RESOURCE_NOT_FOUND",
+        "QA review was not found.",
+      );
+    }
+
+    return QaReviewEvidenceResponseSchema.parse(evidence);
+  });
 
   app.get("/v1/audit-events", async (request) => {
     const context = requireTenantRequestContext(request);
