@@ -473,6 +473,64 @@ export type NormalizedInboundMessage = z.infer<
   typeof NormalizedInboundMessageSchema
 >;
 
+export const NormalizedOutboundChannelSchema = z.enum(["email", "whatsapp"]);
+
+// Outbound send lifecycle per BACKEND_SPEC §4.3. The `messages.send_status`
+// column stores these values; `canceled` is reserved for future explicit
+// cancellation flows.
+export const OutboundSendStatusSchema = z.enum([
+  "queued",
+  "sent",
+  "failed",
+  "canceled",
+]);
+
+export const OutboundSentByTypeSchema = z.enum(["human", "ai_auto", "system"]);
+
+/**
+ * Normalized outbound message contract consumed by the channel send path
+ * (BACKEND_SPEC §4.3). It is the outbound mirror of
+ * `NormalizedInboundMessageSchema`: the send activity assembles it from the
+ * approved draft plus conversation/channel/recipient context, the channel
+ * adapters map it to a provider request, and the persistence layer records it
+ * as a `direction: "outbound"` message row. `idempotency_key` is required so
+ * repeated sends for the same approval are deduplicated.
+ */
+export const NormalizedOutboundMessageSchema = z
+  .object({
+    tenant_id: z.string().min(1),
+    conversation_id: z.string().min(1),
+    ticket_id: z.string().min(1).nullable(),
+    channel_id: z.string().min(1),
+    channel: NormalizedOutboundChannelSchema,
+    provider: z.string().min(1),
+    to: NormalizedInboundCustomerIdentitySchema,
+    direction: z.literal("outbound"),
+    subject: z.string().min(1).nullable(),
+    body: z
+      .object({
+        text: z.string().min(1),
+        html: z.string().nullable(),
+      })
+      .strict(),
+    external_thread_id: z.string().min(1).nullable(),
+    approval_id: z.string().min(1).nullable(),
+    ai_run_id: z.string().min(1).nullable(),
+    sent_by_type: OutboundSentByTypeSchema,
+    sent_by_user_id: z.string().min(1).nullable(),
+    idempotency_key: z.string().min(1),
+  })
+  .strict();
+
+export type NormalizedOutboundChannel = z.infer<
+  typeof NormalizedOutboundChannelSchema
+>;
+export type OutboundSendStatus = z.infer<typeof OutboundSendStatusSchema>;
+export type OutboundSentByType = z.infer<typeof OutboundSentByTypeSchema>;
+export type NormalizedOutboundMessage = z.infer<
+  typeof NormalizedOutboundMessageSchema
+>;
+
 export const InboundWebhookMessageResultSchema = z
   .object({
     external_message_id: z.string(),
@@ -871,6 +929,80 @@ export type ApprovalResourceResponse = z.infer<
   typeof ApprovalResourceResponseSchema
 >;
 export type ApprovalListResponse = z.infer<typeof ApprovalListResponseSchema>;
+
+// Terminal statuses a human reviewer can set on a pending approval
+// (BACKEND_SPEC §12/§17.12). `expired` is reserved for future timeout handling
+// and is never set through the decision endpoints.
+export const ApprovalDecisionStatusSchema = z.enum([
+  "approved",
+  "edited",
+  "rejected",
+  "escalated",
+]);
+
+export const ApprovalApproveRequestSchema = z
+  .object({
+    review_notes: z.string().min(1).nullish(),
+  })
+  .strict();
+
+// Edited approvals must carry the human-edited payload; the original AI draft
+// is preserved in `requested_payload` (BACKEND_SPEC §12: edited approvals
+// preserve original AI draft and human edit).
+export const ApprovalEditRequestSchema = z
+  .object({
+    approved_payload: JsonObjectSchema,
+    review_notes: z.string().min(1).nullish(),
+  })
+  .strict();
+
+export const ApprovalRejectRequestSchema = z
+  .object({
+    review_notes: z.string().min(1).nullish(),
+  })
+  .strict();
+
+export const ApprovalEscalateRequestSchema = z
+  .object({
+    review_notes: z.string().min(1).nullish(),
+  })
+  .strict();
+
+/**
+ * Outcome of the Temporal `approval_completed` signal delivery attempted by a
+ * decision endpoint. `delivered: false` with a reason is not an error: seeded
+ * or manually created approvals may have no running lifecycle workflow.
+ */
+export const ApprovalWorkflowSignalResultSchema = z
+  .object({
+    delivered: z.boolean(),
+    workflow_id: z.string().min(1).nullable(),
+    reason: z.string().min(1).nullable(),
+  })
+  .strict();
+
+export const ApprovalDecisionResponseSchema = z.object({
+  approval: ApprovalResponseSchema,
+  workflow_signal: ApprovalWorkflowSignalResultSchema,
+});
+
+export type ApprovalDecisionStatus = z.infer<
+  typeof ApprovalDecisionStatusSchema
+>;
+export type ApprovalApproveRequest = z.infer<
+  typeof ApprovalApproveRequestSchema
+>;
+export type ApprovalEditRequest = z.infer<typeof ApprovalEditRequestSchema>;
+export type ApprovalRejectRequest = z.infer<typeof ApprovalRejectRequestSchema>;
+export type ApprovalEscalateRequest = z.infer<
+  typeof ApprovalEscalateRequestSchema
+>;
+export type ApprovalWorkflowSignalResult = z.infer<
+  typeof ApprovalWorkflowSignalResultSchema
+>;
+export type ApprovalDecisionResponse = z.infer<
+  typeof ApprovalDecisionResponseSchema
+>;
 
 export const AuditActorTypeSchema = z.enum([
   "system",

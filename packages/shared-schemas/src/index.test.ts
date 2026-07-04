@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  ApprovalApproveRequestSchema,
+  ApprovalDecisionResponseSchema,
+  ApprovalEditRequestSchema,
+  ApprovalEscalateRequestSchema,
   ApprovalListResponseSchema,
+  ApprovalRejectRequestSchema,
   ApprovalResourceResponseSchema,
   ApiErrorResponseSchema,
   AuditEventListResponseSchema,
@@ -27,6 +32,7 @@ import {
   MessageListResponseSchema,
   MessageResourceResponseSchema,
   NormalizedInboundMessageSchema,
+  NormalizedOutboundMessageSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
   TicketCreateRequestSchema,
@@ -832,6 +838,138 @@ describe("normalized inbound message schema", () => {
         unexpected_field: "value",
       }),
     ).toThrow();
+  });
+});
+
+describe("normalized outbound message schema", () => {
+  const outboundMessage = {
+    tenant_id: "ten_test",
+    conversation_id: "con_test",
+    ticket_id: "tkt_con_test",
+    channel_id: "chn_test",
+    channel: "email",
+    provider: "mailgun",
+    to: {
+      type: "email",
+      value: "customer@example.com",
+      display_name: "Customer Name",
+    },
+    direction: "outbound",
+    subject: "Re: Where is my order?",
+    body: {
+      text: "Your order shipped yesterday.",
+      html: null,
+    },
+    external_thread_id: "provider-thread-id",
+    approval_id: "apr_test",
+    ai_run_id: "run_test",
+    sent_by_type: "human",
+    sent_by_user_id: "usr_reviewer",
+    idempotency_key: "outbound:ten_test:tkt_con_test:apr_test",
+  };
+
+  it("validates a canonical outbound email message", () => {
+    expect(NormalizedOutboundMessageSchema.parse(outboundMessage)).toEqual(
+      outboundMessage,
+    );
+  });
+
+  it("accepts a WhatsApp outbound message without a subject", () => {
+    expect(
+      NormalizedOutboundMessageSchema.parse({
+        ...outboundMessage,
+        channel: "whatsapp",
+        provider: "whatsapp_cloud",
+        to: { type: "whatsapp_id", value: "15551234567", display_name: null },
+        subject: null,
+        external_thread_id: null,
+      }),
+    ).toMatchObject({ channel: "whatsapp" });
+  });
+
+  it("rejects an outbound message without body text", () => {
+    expect(() =>
+      NormalizedOutboundMessageSchema.parse({
+        ...outboundMessage,
+        body: { text: "", html: null },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a missing idempotency key", () => {
+    const { idempotency_key: _omitted, ...withoutKey } = outboundMessage;
+
+    expect(() => NormalizedOutboundMessageSchema.parse(withoutKey)).toThrow();
+  });
+
+  it("rejects inbound direction and unknown keys", () => {
+    expect(() =>
+      NormalizedOutboundMessageSchema.parse({
+        ...outboundMessage,
+        direction: "inbound",
+      }),
+    ).toThrow();
+    expect(() =>
+      NormalizedOutboundMessageSchema.parse({
+        ...outboundMessage,
+        unexpected_field: "value",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("approval decision request schemas", () => {
+  it("accepts approve/reject/escalate with and without review notes", () => {
+    expect(ApprovalApproveRequestSchema.parse({})).toEqual({});
+    expect(
+      ApprovalApproveRequestSchema.parse({ review_notes: "Looks right." }),
+    ).toEqual({ review_notes: "Looks right." });
+    expect(ApprovalRejectRequestSchema.parse({ review_notes: null })).toEqual({
+      review_notes: null,
+    });
+    expect(ApprovalEscalateRequestSchema.parse({})).toEqual({});
+  });
+
+  it("requires the human-edited payload on edit", () => {
+    expect(
+      ApprovalEditRequestSchema.parse({
+        approved_payload: { draft_text: "Edited response." },
+        review_notes: "Softened the tone.",
+      }),
+    ).toMatchObject({ approved_payload: { draft_text: "Edited response." } });
+    expect(() => ApprovalEditRequestSchema.parse({})).toThrow();
+  });
+
+  it("rejects unknown decision request keys", () => {
+    expect(() =>
+      ApprovalApproveRequestSchema.parse({ approved_payload: {} }),
+    ).toThrow();
+  });
+
+  it("validates the decision response with the workflow signal result", () => {
+    const decision = {
+      approval: {
+        approval_id: "apr_test",
+        tenant_id: "ten_test",
+        ticket_id: "tkt_test",
+        ai_run_id: null,
+        approval_type: "reply",
+        status: "approved",
+        requested_payload: { draft_text: "Original draft." },
+        approved_payload: { draft_text: "Original draft." },
+        reviewer_user_id: "usr_reviewer",
+        review_notes: null,
+        created_at: "2026-07-04T00:00:00.000Z",
+        resolved_at: "2026-07-04T00:05:00.000Z",
+      },
+      workflow_signal: {
+        delivered: true,
+        workflow_id: "ticket-lifecycle:ten_test:con_test",
+        reason: null,
+      },
+    };
+
+    expect(ApprovalDecisionResponseSchema.parse(decision)).toEqual(decision);
   });
 });
 

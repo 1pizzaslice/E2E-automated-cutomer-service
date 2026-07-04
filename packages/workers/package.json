@@ -14,6 +14,8 @@
   "dependencies": {
     "@nats-io/jetstream": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
+    "@support/db": "workspace:*",
+    "@support/integrations": "workspace:*",
     "@support/shared-schemas": "workspace:*",
     "@temporalio/client": "^1.18.1",
     "@temporalio/worker": "^1.18.1",

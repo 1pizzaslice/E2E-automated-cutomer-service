@@ -84,6 +84,12 @@ importers:
       '@nats-io/transport-node':
         specifier: ^3.4.0
         version: 3.4.0
+      '@support/db':
+        specifier: workspace:*
+        version: link:../db
+      '@support/integrations':
+        specifier: workspace:*
+        version: link:../integrations
       '@support/shared-schemas':
         specifier: workspace:*
         version: link:../shared-schemas

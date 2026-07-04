@@ -290,6 +290,12 @@ Rules:
 - Human approval is required unless policy allows auto-send.
 - Outbound failure should keep ticket in actionable state.
 
+Current implementation (Milestone 10):
+
+- Outbound messages are rows in the shared `messages` table with `direction: "outbound"`; the partial unique index on `(tenant_id, idempotency_key)` enforces send idempotency for the workflow's `outbound:{tenant}:{ticket}:{approval_id}` key. The shared `NormalizedOutboundMessageSchema` is the validated contract between the send activity, the channel adapters, and persistence; `OutboundSendStatusSchema`/`OutboundSentByTypeSchema` encode the `send_status`/`sent_by_type` enums (the columns remain free text in PostgreSQL — an enum migration is a follow-up).
+- The worker `sendOutboundMessage` activity implementation (`packages/workers/src/activities/ticket-lifecycle-persistence.ts`) replays an already-`sent` idempotency key without contacting the provider, otherwise resolves conversation → channel → recipient identity → approval in one tenant transaction, extracts the approved draft (`approved_payload` first, falling back to the preserved AI draft), inserts the row as `queued`, sends through the `OutboundChannelSender` port, and records the terminal `sent`/`failed` outcome plus a `message.send_failed` audit event on failure. Retryable provider failures re-use the same message row on the next Temporal attempt; permanent failures raise `NonRetryableActivityError`.
+- `packages/integrations/src/channels` provides the pure outbound adapters (`buildOutboundEmailProviderRequest` with RFC 5322 reply-threading headers, `buildOutboundWhatsAppProviderRequest` for Cloud API text sends) and `createHttpOutboundChannelSender` for the `mailgun`/`whatsapp_cloud` providers with an injectable `fetch`. Provider credentials are resolved from the channel config's `send_credential_ref` through an env-backed `OutboundCredentialResolver` (secrets stay out of channel rows, §4.1).
+
 ## 5. Conversation Model
 
 ### 5.1 Conversation
@@ -776,15 +782,16 @@ Current API skeleton implements:
 The current tenant, customer, ticket, conversation, message, policy, KB document, approval, and audit event endpoints are
 skeleton contracts where the database schema already supports those operations.
 Tenant/customer/ticket currently support list-create-read-update as documented
-below; conversations, messages, policies, KB documents, approvals, and audit events currently support read/list only. They validate
+below; conversations, messages, policies, and audit events currently support read/list only, while approvals support read/list plus the approve/edit/reject/escalate decision endpoints (§17.12). They validate
 headers, path params, query params, request bodies, and response bodies, then use
 the DB package tenant transaction helper for tenant-scoped data access. They
 enforce the current role-to-permission matrix before service/data access. They do
-not yet implement workflow side effects, idempotency, audit behavior, customer
-identity merge logic, message ingestion, outbound sending, internal-note writes,
+not yet implement customer
+identity merge logic, internal-note writes,
 policy version mutation/approval/activation, or ticket lifecycle transitions.
-They also do not yet implement KB document creation/update, ingestion, chunking,
-embedding, retrieval search, KB audit side effects, or approval actions.
+Approval decision endpoints write audit events, signal the Temporal workflow,
+and (through the workflow's send activity) trigger idempotent outbound sends;
+other write endpoints still have no workflow side effects or audit behavior.
 
 Endpoint families below include current implementation notes where available; otherwise they are target contracts for future milestones.
 
@@ -827,6 +834,7 @@ Current skeleton permissions:
 - `policies:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `kb_documents:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `approvals:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
+- `approvals:review`: `platform_admin`, `ops_admin`, `support_agent`. Grants the approve/edit/reject/escalate decision endpoints; `qa_reviewer`/`client_viewer` stay read-only.
 - `audit_events:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `tickets:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `tickets:create`: `platform_admin`, `ops_admin`, `support_agent`.
@@ -996,7 +1004,9 @@ Current implementation:
 
 - `GET /v1/approvals` lists tenant-scoped approval records with `limit`, `status`, `ticket_id`, and `approval_type` query filters.
 - `GET /v1/approvals/{approval_id}` reads a tenant-scoped approval record, including requested and approved payload metadata.
-- Approval approve/edit/reject/escalate actions, Temporal signals, audit events, outbound side effects, and workflow resume behavior remain future endpoints.
+- `POST /v1/approvals/{approval_id}/approve|edit|reject|escalate` (permission `approvals:review`) resolve a `pending` approval with a terminal status. Each decision, in one tenant transaction, updates the approval (`status`, `reviewer_user_id` from `x-user-id`, `review_notes`, `resolved_at`, `approved_payload`) and appends an `approval.{approved|edited|rejected|escalated}` audit event whose metadata carries both `requested_payload` and `approved_payload` (the edited-draft audit trail). `approve` mirrors `requested_payload` into `approved_payload`; `edit` requires the human-edited `approved_payload` in the request body while `requested_payload` preserves the original AI draft (§12); `reject`/`escalate` approve nothing.
+- After the decision commits, the API signals the ticket lifecycle workflow (`approval_completed` on workflow id `ticket-lifecycle:{tenant_id}:{conversation_id}`, conversation resolved through the approval's ticket) via an injectable `ApprovalWorkflowSignaler` (Temporal-backed default, lazy connection). The response is `{ approval, workflow_signal }`; a missing workflow (`workflow_not_found`) or missing ticket (`ticket_not_found`) is reported in `workflow_signal` rather than failing, because manually seeded approvals have no waiting workflow. Transport-level signal failures return `502 WORKFLOW_ERROR` after the decision has been persisted.
+- Deciding a non-pending approval returns `409 CONFLICT` (the `pending`-guarded update makes concurrent double-decides safe); missing or cross-tenant approvals return `404 RESOURCE_NOT_FOUND`.
 
 ### 17.13 Audit
 
@@ -1009,7 +1019,7 @@ Current implementation:
 - `GET /v1/audit-events` lists tenant-scoped audit events with `limit`, `actor_type`, `entity_type`, `entity_id`, `action`, and `correlation_id` query filters.
 - `GET /v1/audit-events/{audit_event_id}` reads a tenant-scoped audit event.
 - `GET /v1/tickets/{ticket_id}/audit-events` lists tenant-scoped audit events for an existing tenant-scoped ticket with `limit`, `actor_type`, `action`, and `correlation_id` query filters. Missing or cross-tenant parent tickets return structured `RESOURCE_NOT_FOUND`.
-- Audit event creation remains workflow/service-owned future behavior; current ticket/customer/approval skeleton endpoints do not emit audit events yet.
+- Audit event writes now exist in two places: the approval decision endpoints append `approval.*` audit rows in the same transaction as the decision, and the worker `recordAuditEvent`/`createApproval`/`sendOutboundMessage` activity implementations persist workflow-owned audit rows (with deterministic ids so Temporal activity retries do not duplicate them). Ticket/customer and other skeleton write endpoints still do not emit audit events.
 
 ## 18. Event Envelope
 
@@ -1103,8 +1113,9 @@ Current implementation:
 - Approval outcomes are routed deterministically once `approval_completed` resolves the wait. The workflow records `approval.completed` audit for every outcome, then: `approved`/`edited` call `sendOutboundMessage` with a deterministic `outbound:{tenant}:{ticket}:{approval_id}` idempotency key, emit `support.message.sent.v1`, record `message.sent` audit, and end in the `responded` phase; `rejected` ends in the `completed` phase without sending; `escalated` records `ticket.manual_escalated` audit and ends in the `manual_escalated` phase. `sendOutboundMessage` and the side-effect emit/audit activities run with the explicit side-effect retry policy.
 - `packages/workers/src/activities/ticket-lifecycle-activities.ts` provides the first activity adapter for `emitDomainEvent`; it reuses `emitTicketCreatedEvent`, `emitTicketStateTransitionEvent`, `emitTicketSlaBreachedEvent`, and `emitMessageSentEvent` from the Milestone 4 domain-event helpers through an injected `DomainEventPublisher`.
 - `packages/workers/src/temporal-worker.ts` provides worker config/runtime scaffolding for local Temporal at `localhost:7233`, namespace `default`, and task queue `support-ticket-lifecycle`.
-- API CRUD endpoints still do not start or signal workflows. Inbound channel intake and approval action endpoints will own start/signal calls in later milestones.
-- Ticket DB mutation, real LangGraph execution, approval persistence, audit persistence, the real channel send behind `sendOutboundMessage`, next-response/resolution SLA timers, and retry/idempotency persistence are activity contracts/placeholders only in this slice.
+- Inbound channel intake owns workflow start/`message_received` signals; the Milestone 10 approval decision endpoints own the `approval_completed` signal through the API `ApprovalWorkflowSignaler`.
+- `packages/workers/src/activities/ticket-lifecycle-persistence.ts` provides the production `createApproval`, `sendOutboundMessage`, and `recordAuditEvent` activity implementations over a `TicketLifecyclePersistenceStore` port (database implementation under `withTenantTransaction`/RLS, in-memory implementation for offline tests). `createApproval` derives a deterministic approval id from (tenant, ticket, correlation) so activity retries replay instead of duplicating, links `ai_run_id` only when the `ai_runs` row exists, and audits `approval.requested`; `recordAuditEvent` hashes its input into a deterministic audit id so retried writes dedupe; outbound send/idempotency behavior is documented in §4.3.
+- Ticket DB mutation, real LangGraph execution behind `runAiGraph`, inbound-message recording, and next-response/resolution SLA timers remain activity contracts/placeholders; a production worker entrypoint composes the persistence activities with those remaining placeholders when it lands.
 
 ### 19.2 KbIngestionWorkflow
 

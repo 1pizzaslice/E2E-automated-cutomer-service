@@ -6,10 +6,12 @@ import {
   auditEventsListQuery,
   conversationByIdQuery,
   conversationsListQuery,
+  createAuditEventQuery,
   createCustomerQuery,
   createDatabaseFromEnv,
   createTenantQuery,
   createTicketQuery,
+  resolvePendingApprovalByIdQuery,
   customerByIdQuery,
   customersListQuery,
   kbDocumentByIdQuery,
@@ -41,8 +43,11 @@ import {
   type Ticket,
 } from "@support/db";
 import type {
+  ApprovalDecisionResponse,
+  ApprovalDecisionStatus,
   ApprovalListResponse,
   ApprovalResponse,
+  ApprovalWorkflowSignalResult,
   AuditEventListResponse,
   AuditEventResponse,
   ConversationListResponse,
@@ -71,6 +76,11 @@ import type {
   TicketResponse,
   TicketUpdateRequest,
 } from "@support/shared-schemas";
+import {
+  createTemporalApprovalWorkflowSignaler,
+  type ApprovalWorkflowSignaler,
+} from "./approval-workflow-signaler.js";
+import { HttpError } from "./errors.js";
 import {
   createDatabaseKbIngestionService,
   type KbIngestionService,
@@ -127,6 +137,21 @@ export interface ApprovalListOptions extends ListOptions {
   readonly ticket_id?: string;
   readonly approval_type?: Approval["approvalType"];
 }
+
+export interface ApprovalDecisionInput {
+  readonly status: ApprovalDecisionStatus;
+  /** Human-edited payload; required by the route contract for `edited`. */
+  readonly approved_payload?: Record<string, unknown>;
+  readonly review_notes?: string | null;
+}
+
+export type ApprovalDecisionOutcome =
+  | {
+      readonly outcome: "resolved";
+      readonly decision: ApprovalDecisionResponse;
+    }
+  | { readonly outcome: "not_found" }
+  | { readonly outcome: "conflict"; readonly approval: ApprovalResponse };
 
 export interface AuditEventListOptions extends ListOptions {
   readonly actor_type?: AuditEvent["actorType"];
@@ -243,6 +268,11 @@ export interface ApiServices {
       context: TenantRequestContext,
       approvalId: string,
     ): Promise<ApprovalResponse | null>;
+    decide(
+      context: TenantRequestContext,
+      approvalId: string,
+      decision: ApprovalDecisionInput,
+    ): Promise<ApprovalDecisionOutcome>;
   };
   readonly auditEvents: {
     list(
@@ -284,6 +314,7 @@ export interface ApiServices {
 export interface DatabaseApiServicesDeps {
   readonly kbIngestion?: KbIngestionService;
   readonly kbRetrieval?: KbRetrievalService;
+  readonly approvalSignaler?: ApprovalWorkflowSignaler;
 }
 
 export function createDatabaseApiServices(
@@ -292,6 +323,8 @@ export function createDatabaseApiServices(
   let database: ReturnType<typeof createDatabaseFromEnv> | undefined;
   const kbIngestion = deps.kbIngestion ?? createDatabaseKbIngestionService();
   const kbRetrieval = deps.kbRetrieval ?? createDatabaseKbRetrievalService();
+  const approvalSignaler =
+    deps.approvalSignaler ?? createTemporalApprovalWorkflowSignaler();
 
   function getDatabase(): ReturnType<typeof createDatabaseFromEnv> {
     if (!database) {
@@ -719,6 +752,148 @@ export function createDatabaseApiServices(
           },
         );
       },
+      async decide(context, approvalId, decision) {
+        const tenantId = context.tenant.tenantId;
+        const scope = { tenantId };
+        const decidedAt = new Date();
+
+        const resolution = await withTenantTransaction(
+          getClient(),
+          scope,
+          async (db) => {
+            const existingRows = await approvalByIdQuery(db, scope, approvalId);
+            const existing = existingRows[0];
+
+            if (!existing) {
+              return { kind: "not_found" as const };
+            }
+
+            if (existing.status !== "pending") {
+              return { kind: "conflict" as const, approval: existing };
+            }
+
+            // Approved decisions send the AI draft as-is, so the approved
+            // payload mirrors the request; edited decisions carry the human
+            // edit while `requested_payload` preserves the original AI draft
+            // (BACKEND_SPEC §12). Rejected/escalated decisions approve nothing.
+            const approvedPayload =
+              decision.status === "edited"
+                ? (decision.approved_payload ?? {})
+                : decision.status === "approved"
+                  ? existing.requestedPayload
+                  : null;
+
+            const updatedRows = await resolvePendingApprovalByIdQuery(
+              db,
+              scope,
+              approvalId,
+              {
+                status: decision.status,
+                approvedPayload,
+                reviewerUserId: context.actor.userId,
+                reviewNotes: decision.review_notes ?? null,
+                resolvedAt: decidedAt,
+              },
+            );
+            const updated = updatedRows[0];
+
+            if (!updated) {
+              return { kind: "conflict" as const, approval: existing };
+            }
+
+            await createAuditEventQuery(db, scope, {
+              auditEventId: createId("aud"),
+              actorType: "human",
+              actorId: context.actor.userId,
+              entityType: "approval",
+              entityId: approvalId,
+              action: `approval.${decision.status}`,
+              metadata: {
+                ticket_id: existing.ticketId,
+                status: decision.status,
+                review_notes: decision.review_notes ?? null,
+                requested_payload: existing.requestedPayload,
+                approved_payload: approvedPayload,
+                decided_at: decidedAt.toISOString(),
+              },
+              correlationId: context.correlationId,
+            });
+
+            const ticketRows = await ticketByIdQuery(
+              db,
+              scope,
+              existing.ticketId,
+            );
+
+            return {
+              kind: "resolved" as const,
+              approval: updated,
+              conversationId: ticketRows[0]?.conversationId ?? null,
+            };
+          },
+        );
+
+        if (resolution.kind === "not_found") {
+          return { outcome: "not_found" };
+        }
+
+        if (resolution.kind === "conflict") {
+          return {
+            outcome: "conflict",
+            approval: mapApproval(resolution.approval),
+          };
+        }
+
+        let workflowSignal: ApprovalWorkflowSignalResult;
+
+        if (resolution.conversationId === null) {
+          workflowSignal = {
+            delivered: false,
+            workflow_id: null,
+            reason: "ticket_not_found",
+          };
+        } else {
+          try {
+            const signalResult = await approvalSignaler.signalApprovalCompleted(
+              {
+                workflowId: `ticket-lifecycle:${tenantId}:${resolution.conversationId}`,
+                signal: {
+                  approval_id: approvalId,
+                  status: decision.status,
+                  actor_id: context.actor.userId,
+                  decided_at: decidedAt.toISOString(),
+                  notes: decision.review_notes ?? null,
+                },
+              },
+            );
+            workflowSignal = {
+              delivered: signalResult.delivered,
+              workflow_id: signalResult.workflow_id,
+              reason: signalResult.reason,
+            };
+          } catch (error) {
+            throw new HttpError(
+              502,
+              "WORKFLOW_ERROR",
+              "The approval decision was recorded but the workflow signal failed; redeliver the signal before retrying.",
+              [
+                {
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                },
+              ],
+            );
+          }
+        }
+
+        return {
+          outcome: "resolved",
+          decision: {
+            approval: mapApproval(resolution.approval),
+            workflow_signal: workflowSignal,
+          },
+        };
+      },
     },
     auditEvents: {
       async list(context, options) {
@@ -938,6 +1113,7 @@ export function createDatabaseApiServices(
     async close() {
       await kbIngestion.close?.();
       await kbRetrieval.close?.();
+      await approvalSignaler.close?.();
       await database?.client.end();
     },
   };

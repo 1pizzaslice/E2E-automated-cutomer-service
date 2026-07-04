@@ -1,7 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  ApprovalApproveRequestSchema,
+  ApprovalDecisionResponseSchema,
+  ApprovalEditRequestSchema,
+  ApprovalEscalateRequestSchema,
   ApprovalListResponseSchema,
+  ApprovalRejectRequestSchema,
   ApprovalResourceResponseSchema,
   ApprovalStatusSchema,
   ApprovalTypeSchema,
@@ -50,7 +55,7 @@ import {
   requireTenantRequestContext,
 } from "./request-context.js";
 import { requirePermission } from "./rbac.js";
-import type { ApiServices } from "./services.js";
+import type { ApiServices, ApprovalDecisionInput } from "./services.js";
 
 const TenantParamsSchema = z.object({
   tenant_id: z.string().min(1),
@@ -559,6 +564,51 @@ export function registerRoutes(
     return ApprovalResourceResponseSchema.parse({ approval });
   });
 
+  app.post("/v1/approvals/:approval_id/approve", async (request) =>
+    handleApprovalDecision(services, request, () => {
+      const input = parseOptionalBody(ApprovalApproveRequestSchema, request);
+
+      return {
+        status: "approved",
+        review_notes: input.review_notes ?? null,
+      };
+    }),
+  );
+
+  app.post("/v1/approvals/:approval_id/edit", async (request) =>
+    handleApprovalDecision(services, request, () => {
+      const input = parseBody(ApprovalEditRequestSchema, request);
+
+      return {
+        status: "edited",
+        approved_payload: input.approved_payload,
+        review_notes: input.review_notes ?? null,
+      };
+    }),
+  );
+
+  app.post("/v1/approvals/:approval_id/reject", async (request) =>
+    handleApprovalDecision(services, request, () => {
+      const input = parseOptionalBody(ApprovalRejectRequestSchema, request);
+
+      return {
+        status: "rejected",
+        review_notes: input.review_notes ?? null,
+      };
+    }),
+  );
+
+  app.post("/v1/approvals/:approval_id/escalate", async (request) =>
+    handleApprovalDecision(services, request, () => {
+      const input = parseOptionalBody(ApprovalEscalateRequestSchema, request);
+
+      return {
+        status: "escalated",
+        review_notes: input.review_notes ?? null,
+      };
+    }),
+  );
+
   app.get("/v1/audit-events", async (request) => {
     const context = requireTenantRequestContext(request);
 
@@ -732,6 +782,58 @@ function parseBody<T extends z.ZodType>(
   }
 
   return parsed.data;
+}
+
+/** Like {@link parseBody}, but treats an absent request body as `{}`. */
+function parseOptionalBody<T extends z.ZodType>(
+  schema: T,
+  request: FastifyRequest,
+): z.infer<T> {
+  const parsed = schema.safeParse(request.body ?? {});
+
+  if (!parsed.success) {
+    throw new HttpError(
+      400,
+      "VALIDATION_ERROR",
+      "Request body is invalid.",
+      parsed.error.issues,
+    );
+  }
+
+  return parsed.data;
+}
+
+/**
+ * Shared approve/edit/reject/escalate handling: authorize, resolve the pending
+ * approval through the service (which persists the decision, appends the audit
+ * event, and signals the waiting Temporal workflow), and map the not-found and
+ * already-resolved outcomes onto the structured API errors.
+ */
+async function handleApprovalDecision(
+  services: ApiServices,
+  request: FastifyRequest,
+  buildDecision: () => ApprovalDecisionInput,
+) {
+  const context = requireTenantRequestContext(request);
+
+  requirePermission(context.actor, "approvals:review");
+
+  const { approval_id: approvalId } = parseParams(
+    ApprovalParamsSchema,
+    request,
+  );
+  const decision = buildDecision();
+  const result = await services.approvals.decide(context, approvalId, decision);
+
+  if (result.outcome === "not_found") {
+    throw new HttpError(404, "RESOURCE_NOT_FOUND", "Approval was not found.");
+  }
+
+  if (result.outcome === "conflict") {
+    throw new HttpError(409, "CONFLICT", "Approval has already been resolved.");
+  }
+
+  return ApprovalDecisionResponseSchema.parse(result.decision);
 }
 
 function isPlatformAdmin(roles: readonly string[]): boolean {

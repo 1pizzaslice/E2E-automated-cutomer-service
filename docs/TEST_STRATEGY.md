@@ -223,7 +223,8 @@ Current Milestone 5 Temporal foundation coverage:
 - `packages/workers/src/temporal-worker.test.ts` verifies Temporal worker config defaults, environment overrides, and explicit ticket lifecycle activity retry-policy constants.
 - `packages/workers/src/ticket-lifecycle-workflow.test.ts` is an opt-in live Temporal workflow test. It starts `ticketLifecycleWorkflow` against a running Temporal service, verifies the workflow reaches the approval wait state, resumes on `approval_completed`, deduplicates repeated inbound message/customer-reply signals, fires a first-response SLA breach timer while waiting for approval, routes successful AI graph activity output into approval metadata, routes structured AI graph failures to human approval with audit, routes approval outcomes (approved and edited send an outbound message once through `sendOutboundMessage` with a deterministic idempotency key, rejected does not send, escalated routes to manual handling without sending), and replays a completed workflow history with `Worker.runReplayHistory`.
 - The live workflow test is skipped in default `pnpm test` runs. Run it after `pnpm infra:up` with `TEMPORAL_ADDRESS=localhost:7233 pnpm --filter @support/workers test:workflow`.
-- The real channel send behind `sendOutboundMessage`, next-response/resolution SLA timer tests, outbound delivery/idempotency persistence tests, and API workflow start/signal tests remain pending.
+- Milestone 10 filled in the real channel send: `packages/workers/src/activities/ticket-lifecycle-persistence.test.ts` covers the production `createApproval`/`sendOutboundMessage`/`recordAuditEvent` activity implementations (approval persistence + `approval.requested` audit + retry dedup, outbound send-once + idempotent replay + provider-failure recording + fail-fast validation, audit append + retry dedup) over the in-memory store, and `packages/api/src/app.integration.test.ts` covers the API approval decision → `approval_completed` signal boundary with a recording signaler (approve/edit/reject/escalate, 409 double-decide, cross-tenant 404, read-only-role 403).
+- Next-response/resolution SLA timer tests, a live-PostgreSQL workers test for `createDatabaseTicketLifecyclePersistenceStore`, and a live workflow test composing the persistence activities into a running worker remain pending.
 
 Current Milestone 6 Channel Intake coverage:
 
@@ -289,6 +290,12 @@ Required tests:
 - Customer-visible body excludes internal notes.
 - Outbound audit event created.
 
+Current Milestone 10 coverage:
+
+- `packages/integrations/src/channels/outbound.test.ts` covers the pure email/WhatsApp outbound adapters (provider request mapping, reply-threading headers, channel mismatch rejection), the HTTP sender for `mailgun`/`whatsapp_cloud` with a stubbed `fetch` (URLs, basic/bearer auth, form/JSON encoding, provider message-id extraction), failure mapping (5xx retryable, 4xx non-retryable, missing credential/config/provider failing without a network call, transport exceptions retryable), and the recording sender test double.
+- `packages/workers/src/activities/ticket-lifecycle-persistence.test.ts` covers the `sendOutboundMessage` activity over the in-memory store: the approved draft sends once and persists a `sent` outbound message row; the human-edited draft is sent for `edited` approvals; a duplicate idempotency key replays the first outcome without re-contacting the provider; a failed provider send records the `failed` status plus a `message.send_failed` audit event and a simulated Temporal retry re-uses the same message row; missing conversation/approval/recipient/draft fail fast as `NonRetryableActivityError` without sending.
+- Internal notes are not part of the outbound path yet (drafts come from approval payloads only); the internal-note exclusion test lands with internal-note writes.
+
 ### 3.12 Audit
 
 Required tests:
@@ -300,6 +307,11 @@ Required tests:
 - Outbound send audited.
 - Policy activation audited.
 - Integration config update audited.
+
+Current Milestone 10 coverage:
+
+- Approval actions: `packages/api/src/app.integration.test.ts` asserts each decision endpoint appends an `approval.{status}` audit row with actor/entity fields and that the `approval.edited` metadata carries both `requested_payload` and `approved_payload` (the edited-draft audit trail). `packages/workers/src/activities/ticket-lifecycle-persistence.test.ts` asserts `approval.requested` is audited exactly once across activity retries.
+- Outbound sends: the workflow records `message.sent` through the now-persistent `recordAuditEvent` activity (deterministic audit ids dedupe retried writes; covered in the persistence activity tests) and the send activity audits `message.send_failed` on provider failure.
 
 ### 3.13 Event Bus
 
