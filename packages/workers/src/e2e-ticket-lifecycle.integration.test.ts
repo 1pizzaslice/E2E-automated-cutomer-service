@@ -196,7 +196,10 @@ describeLive(
       await eventBus.ensureStreams();
 
       runtime = await startWorker();
-      app = buildApp();
+      // The e2e drives the lifecycle, not the IdP: reviewer actions use the
+      // explicit insecure-header mode (Milestone 16 JWT coverage lives in the
+      // API package's auth suites).
+      app = buildApp({ auth: { mode: "insecure-headers" } });
       await app.ready();
     }, 120_000);
 

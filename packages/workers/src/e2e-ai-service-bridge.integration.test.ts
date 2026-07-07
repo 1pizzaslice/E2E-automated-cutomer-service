@@ -276,8 +276,12 @@ describeLive("live AI runtime service bridge end to end", () => {
     await eventBus.ensureStreams();
 
     // Real HTTP listener: the sidecar calls back into this API for tool
-    // execution and KB retrieval.
-    app = buildApp({ internalAuth: { token: INTERNAL_API_TOKEN } });
+    // execution and KB retrieval. Machine-token auth is mode-independent;
+    // insecure-header mode only frees the build from JWT env requirements.
+    app = buildApp({
+      internalAuth: { token: INTERNAL_API_TOKEN },
+      auth: { mode: "insecure-headers" },
+    });
     await app.listen({ port: 0, host: "127.0.0.1" });
     const address = app.server.address();
 

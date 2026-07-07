@@ -51,6 +51,27 @@ describe("pilot tenant seed plan", () => {
     }
   });
 
+  it("links seeded users to IdP subjects only when provided", () => {
+    const unlinked = buildPilotSeedPlan({ now });
+    for (const user of unlinked.users) {
+      expect(user.idpSubject).toBeNull();
+    }
+
+    const linked = buildPilotSeedPlan({
+      now,
+      idpSubjects: { ops: "user_clerk_ops" },
+    });
+    const opsUser = linked.users.find(
+      (user) => user.userId === "usr_pilot_ops",
+    );
+    const agentUser = linked.users.find(
+      (user) => user.userId === "usr_pilot_agent",
+    );
+
+    expect(opsUser?.idpSubject).toBe("user_clerk_ops");
+    expect(agentUser?.idpSubject).toBeNull();
+  });
+
   it("stores channel secrets as environment variable names, never values", () => {
     const plan = buildPilotSeedPlan({ now });
     const [channel] = plan.channels;

@@ -33,10 +33,19 @@ import {
   customersListQuery,
   kbDocumentByIdQuery,
   kbDocumentsListQuery,
+  activatePolicyVersionQuery,
+  activePoliciesInDomainQuery,
+  createPolicyVersionQuery,
+  createTenantPolicyQuery,
+  latestActivatedPolicyVersionQuery,
+  latestPolicyVersionNumberQuery,
   messageByIdQuery,
   messagesListQuery,
   policiesListQuery,
   policyByIdQuery,
+  policyVersionByIdQuery,
+  policyVersionsListQuery,
+  updateTenantPolicyStatusQuery,
   qaReviewByIdQuery,
   qaReviewsListQuery,
   tenantsListQuery,
@@ -58,10 +67,13 @@ import {
   type NewCustomer,
   type NewTenant,
   type NewTicket,
+  type PolicyVersion,
   type PostgresClient,
   type QaReview,
+  type SupportDatabase,
   type Tenant,
   type TenantPolicy,
+  type TenantScope,
   type Ticket,
   type ToolCall,
 } from "@support/db";
@@ -75,6 +87,7 @@ import {
   AutomationPolicyContentSchema,
   SupportAuditActionSchema,
   type EffectiveAutomationPolicyResponse,
+  type SupportAuditAction,
   type WeeklyPilotReport,
 } from "@support/shared-schemas";
 import type {
@@ -102,8 +115,14 @@ import type {
   KbSearchResponse,
   MessageListResponse,
   MessageResponse,
+  PolicyActivationResponse,
+  PolicyCreateRequest,
+  PolicyCreateResponse,
   PolicyListResponse,
   PolicyResponse,
+  PolicyVersionCreateRequest,
+  PolicyVersionListResponse,
+  PolicyVersionResponse,
   QaReviewCompleteRequest,
   QaReviewCreateRequest,
   QaReviewEvidenceResponse,
@@ -228,6 +247,27 @@ export type QaReviewCompleteOutcome =
   | { readonly outcome: "not_found" }
   | { readonly outcome: "conflict"; readonly review: QaReviewResponse };
 
+export type PolicyVersionCreateOutcome =
+  | {
+      readonly outcome: "created";
+      readonly policyVersion: PolicyVersionResponse;
+    }
+  | { readonly outcome: "not_found" }
+  | { readonly outcome: "archived" };
+
+export type PolicyActivationOutcome =
+  | {
+      readonly outcome: "activated";
+      readonly result: PolicyActivationResponse;
+    }
+  | { readonly outcome: "not_found" }
+  | { readonly outcome: "conflict"; readonly reason: string };
+
+export type PolicyArchiveOutcome =
+  | { readonly outcome: "archived"; readonly policy: PolicyResponse }
+  | { readonly outcome: "not_found" }
+  | { readonly outcome: "conflict" };
+
 export interface ReportWindowOptions {
   readonly since: Date;
   readonly until: Date;
@@ -306,6 +346,28 @@ export interface ApiServices {
     getEffectiveAutomationPolicy(
       context: TenantRequestContext,
     ): Promise<EffectiveAutomationPolicyResponse>;
+    create(
+      context: TenantRequestContext,
+      input: PolicyCreateRequest,
+    ): Promise<PolicyCreateResponse>;
+    listVersions(
+      context: TenantRequestContext,
+      policyId: string,
+      options: ListOptions,
+    ): Promise<PolicyVersionListResponse | null>;
+    createVersion(
+      context: TenantRequestContext,
+      policyId: string,
+      input: PolicyVersionCreateRequest,
+    ): Promise<PolicyVersionCreateOutcome>;
+    activateVersion(
+      context: TenantRequestContext,
+      policyVersionId: string,
+    ): Promise<PolicyActivationOutcome>;
+    archive(
+      context: TenantRequestContext,
+      policyId: string,
+    ): Promise<PolicyArchiveOutcome>;
   };
   readonly reports: {
     weekly(
@@ -794,6 +856,303 @@ export function createDatabaseApiServices(
             activated_at: row.activatedAt?.toISOString() ?? null,
             auto_send_enabled: content.data.auto_send_enabled,
             auto_send_allowed_topics: content.data.auto_send_allowed_topics,
+          };
+        });
+      },
+      async create(context, input) {
+        const scope = { tenantId: context.tenant.tenantId };
+
+        // Fail closed at write time: automation content outside the closed
+        // allowlist ceiling must never exist as a draft that could later be
+        // activated (Milestone 16 — allowlist changes are API-driven now).
+        assertValidPolicyContent(input.domain, input.content);
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const policyRows = await createTenantPolicyQuery(db, scope, {
+            policyId: input.policy_id ?? createId("pol"),
+            name: input.name,
+            domain: input.domain,
+            status: "draft",
+          });
+          const policy = policyRows[0]!;
+          const versionRows = await createPolicyVersionQuery(db, scope, {
+            policyVersionId: input.policy_version_id ?? createId("polv"),
+            policyId: policy.policyId,
+            version: 1,
+            content: input.content,
+            schemaVersion: input.schema_version ?? `${input.domain}.v1`,
+            createdByUserId: context.actor.userId,
+          });
+          const version = versionRows[0]!;
+
+          await recordPolicyAuditEvent(db, scope, context, "policy.created", {
+            policyId: policy.policyId,
+            metadata: {
+              policy_version_id: version.policyVersionId,
+              version: version.version,
+              domain: policy.domain,
+              name: policy.name,
+            },
+          });
+
+          return {
+            policy: mapPolicy(policy),
+            policy_version: mapPolicyVersion(version),
+          };
+        });
+      },
+      async listVersions(context, policyId, options) {
+        const scope = { tenantId: context.tenant.tenantId };
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const policyRows = await policyByIdQuery(db, scope, policyId);
+
+          if (!policyRows[0]) {
+            return null;
+          }
+
+          const rows = await policyVersionsListQuery(db, scope, policyId, {
+            limit: options.limit,
+          });
+
+          return {
+            policy_versions: rows.map(mapPolicyVersion),
+            page: {
+              count: rows.length,
+              limit: options.limit,
+            },
+          };
+        });
+      },
+      async createVersion(context, policyId, input) {
+        const scope = { tenantId: context.tenant.tenantId };
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const policyRows = await policyByIdQuery(db, scope, policyId);
+          const policy = policyRows[0];
+
+          if (!policy) {
+            return { outcome: "not_found" as const };
+          }
+
+          if (policy.status === "archived") {
+            return { outcome: "archived" as const };
+          }
+
+          assertValidPolicyContent(policy.domain, input.content);
+
+          const maxRows = await latestPolicyVersionNumberQuery(
+            db,
+            scope,
+            policyId,
+          );
+          const nextVersion = (maxRows[0]?.maxVersion ?? 0) + 1;
+          const versionRows = await createPolicyVersionQuery(db, scope, {
+            policyVersionId: input.policy_version_id ?? createId("polv"),
+            policyId,
+            version: nextVersion,
+            content: input.content,
+            schemaVersion: input.schema_version ?? `${policy.domain}.v1`,
+            createdByUserId: context.actor.userId,
+          });
+          const version = versionRows[0]!;
+
+          await recordPolicyAuditEvent(db, scope, context, "policy.created", {
+            policyId,
+            metadata: {
+              policy_version_id: version.policyVersionId,
+              version: version.version,
+              domain: policy.domain,
+            },
+          });
+
+          return {
+            outcome: "created" as const,
+            policyVersion: mapPolicyVersion(version),
+          };
+        });
+      },
+      async activateVersion(context, policyVersionId) {
+        const scope = { tenantId: context.tenant.tenantId };
+        const activatedAt = new Date();
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const versionRows = await policyVersionByIdQuery(
+            db,
+            scope,
+            policyVersionId,
+          );
+          const version = versionRows[0];
+
+          if (!version) {
+            return { outcome: "not_found" as const };
+          }
+
+          if (version.activatedAt) {
+            return {
+              outcome: "conflict" as const,
+              reason: "Policy version has already been activated.",
+            };
+          }
+
+          const policyRows = await policyByIdQuery(db, scope, version.policyId);
+          const policy = policyRows[0];
+
+          if (!policy) {
+            return { outcome: "not_found" as const };
+          }
+
+          if (policy.status === "archived") {
+            return {
+              outcome: "conflict" as const,
+              reason: "An archived policy cannot be activated.",
+            };
+          }
+
+          // The effective version of a policy is its highest activated
+          // version, so activating a draft older than the current active
+          // version would silently do nothing — reject it instead.
+          const latestActivatedRows = await latestActivatedPolicyVersionQuery(
+            db,
+            scope,
+            version.policyId,
+          );
+          const latestActivated = latestActivatedRows[0];
+
+          if (latestActivated && latestActivated.version >= version.version) {
+            return {
+              outcome: "conflict" as const,
+              reason:
+                "A newer or equal version of this policy is already active.",
+            };
+          }
+
+          // Defense in depth: nothing invalid may become effective even if
+          // the draft predates write-time validation.
+          assertValidPolicyContent(policy.domain, version.content);
+
+          const activatedRows = await activatePolicyVersionQuery(
+            db,
+            scope,
+            version.policyId,
+            policyVersionId,
+            {
+              approvedByUserId: context.actor.userId,
+              activatedAt,
+            },
+          );
+          const activatedVersion = activatedRows[0];
+
+          if (!activatedVersion) {
+            return {
+              outcome: "conflict" as const,
+              reason: "Policy version has already been activated.",
+            };
+          }
+
+          const policyUpdateRows = await updateTenantPolicyStatusQuery(
+            db,
+            scope,
+            version.policyId,
+            { status: "active", updatedAt: activatedAt },
+          );
+          const activePolicy = policyUpdateRows[0]!;
+
+          // Exactly one policy per domain may be active: archive the
+          // superseded predecessors so effective-policy resolution stays
+          // unambiguous.
+          const predecessors = await activePoliciesInDomainQuery(
+            db,
+            scope,
+            policy.domain,
+            policy.policyId,
+          );
+          const archivedPolicyIds: string[] = [];
+
+          for (const predecessor of predecessors) {
+            await updateTenantPolicyStatusQuery(
+              db,
+              scope,
+              predecessor.policyId,
+              {
+                status: "archived",
+                updatedAt: activatedAt,
+              },
+            );
+            archivedPolicyIds.push(predecessor.policyId);
+
+            await recordPolicyAuditEvent(
+              db,
+              scope,
+              context,
+              "policy.archived",
+              {
+                policyId: predecessor.policyId,
+                metadata: {
+                  reason: "superseded",
+                  superseded_by_policy_id: policy.policyId,
+                  superseded_by_policy_version_id: policyVersionId,
+                },
+              },
+            );
+          }
+
+          await recordPolicyAuditEvent(db, scope, context, "policy.activated", {
+            policyId: policy.policyId,
+            metadata: {
+              policy_version_id: policyVersionId,
+              version: version.version,
+              domain: policy.domain,
+              previous_policy_version_id:
+                latestActivated?.policyVersionId ?? null,
+              archived_policy_ids: archivedPolicyIds,
+            },
+          });
+
+          return {
+            outcome: "activated" as const,
+            result: {
+              policy: mapPolicy(activePolicy),
+              policy_version: mapPolicyVersion(activatedVersion),
+              archived_policy_ids: archivedPolicyIds,
+            },
+          };
+        });
+      },
+      async archive(context, policyId) {
+        const scope = { tenantId: context.tenant.tenantId };
+        const archivedAt = new Date();
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const policyRows = await policyByIdQuery(db, scope, policyId);
+          const policy = policyRows[0];
+
+          if (!policy) {
+            return { outcome: "not_found" as const };
+          }
+
+          if (policy.status === "archived") {
+            return { outcome: "conflict" as const };
+          }
+
+          const updatedRows = await updateTenantPolicyStatusQuery(
+            db,
+            scope,
+            policyId,
+            { status: "archived", updatedAt: archivedAt },
+          );
+
+          await recordPolicyAuditEvent(db, scope, context, "policy.archived", {
+            policyId,
+            metadata: {
+              reason: "manual",
+              previous_status: policy.status,
+            },
+          });
+
+          return {
+            outcome: "archived" as const,
+            policy: mapPolicy(updatedRows[0]!),
           };
         });
       },
@@ -1716,12 +2075,66 @@ function toDateOrNull(
   return value === null ? null : new Date(value);
 }
 
+/**
+ * Domain-aware policy content validation (Milestone 16). Only `automation`
+ * content has a platform-enforced contract today: the auto-send kill switch
+ * plus a topic allowlist bounded by the closed `AutoSendTopicSchema` ceiling.
+ * Applied at write time AND at activation so nothing outside the ceiling can
+ * ever become the effective automation policy.
+ */
+function assertValidPolicyContent(
+  domain: TenantPolicy["domain"],
+  content: Record<string, unknown>,
+): void {
+  if (domain !== "automation") {
+    return;
+  }
+
+  const parsed = AutomationPolicyContentSchema.safeParse(content);
+
+  if (!parsed.success) {
+    throw new HttpError(
+      400,
+      "VALIDATION_ERROR",
+      "Automation policy content is invalid.",
+      parsed.error.issues,
+    );
+  }
+}
+
+/**
+ * Appends a `policy.*` audit event inside the caller's tenant transaction so
+ * the lifecycle change and its audit trail commit atomically.
+ */
+async function recordPolicyAuditEvent(
+  db: SupportDatabase,
+  scope: TenantScope,
+  context: TenantRequestContext,
+  action: SupportAuditAction,
+  input: {
+    readonly policyId: string;
+    readonly metadata: Record<string, unknown>;
+  },
+): Promise<void> {
+  await createAuditEventQuery(db, scope, {
+    auditEventId: createId("aud"),
+    actorType: "human",
+    actorId: context.actor.userId,
+    entityType: "policy",
+    entityId: input.policyId,
+    action: SupportAuditActionSchema.parse(action),
+    metadata: input.metadata,
+    correlationId: context.correlationId,
+  });
+}
+
 function mapTenant(row: Tenant): TenantResponse {
   return {
     tenant_id: row.tenantId,
     name: row.name,
     status: row.status,
     default_timezone: row.defaultTimezone,
+    retention_policy: row.retentionPolicy,
     created_at: toIsoString(row.createdAt),
     updated_at: toIsoString(row.updatedAt),
   };
@@ -1791,6 +2204,21 @@ function mapPolicy(row: TenantPolicy): PolicyResponse {
     status: row.status,
     created_at: toIsoString(row.createdAt),
     updated_at: toIsoString(row.updatedAt),
+  };
+}
+
+function mapPolicyVersion(row: PolicyVersion): PolicyVersionResponse {
+  return {
+    policy_version_id: row.policyVersionId,
+    tenant_id: row.tenantId,
+    policy_id: row.policyId,
+    version: row.version,
+    content: row.content,
+    schema_version: row.schemaVersion,
+    created_by_user_id: row.createdByUserId,
+    approved_by_user_id: row.approvedByUserId,
+    activated_at: toNullableIsoString(row.activatedAt),
+    created_at: toIsoString(row.createdAt),
   };
 }
 

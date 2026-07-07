@@ -14,6 +14,7 @@ export type ApiPermission =
   | "conversations:read"
   | "messages:read"
   | "policies:read"
+  | "policies:write"
   | "kb_documents:read"
   | "kb_documents:write"
   | "kb:search"
@@ -50,6 +51,7 @@ export const ROLE_PERMISSIONS: Readonly<
     "conversations:read",
     "messages:read",
     "policies:read",
+    "policies:write",
     "kb_documents:read",
     "kb_documents:write",
     "kb:search",
@@ -74,6 +76,10 @@ export const ROLE_PERMISSIONS: Readonly<
     "conversations:read",
     "messages:read",
     "policies:read",
+    // Policy lifecycle writes (Milestone 16) stay admin-only: the automation
+    // domain controls the auto-send allowlist, a safety control agents and
+    // reviewers must not be able to change.
+    "policies:write",
     "kb_documents:read",
     "kb_documents:write",
     "kb:search",

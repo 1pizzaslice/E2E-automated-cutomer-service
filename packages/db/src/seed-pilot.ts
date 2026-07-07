@@ -45,6 +45,14 @@ export interface PilotSeedPlan {
 export interface PilotSeedOptions {
   readonly tenantId?: string;
   readonly now?: () => Date;
+  /**
+   * Optional IdP subject (`sub` claim) per seeded pilot user, keyed by the
+   * user suffix (`ops`/`agent`/`qa`). Links the seeded users to real hosted
+   * IdP identities for production JWT auth (Milestone 16). Inserts are
+   * conflict-safe, so linking an already-seeded user is an ops UPDATE, not a
+   * re-run (SOPS section 1.1).
+   */
+  readonly idpSubjects?: Partial<Record<"ops" | "agent" | "qa", string>>;
 }
 
 export interface PilotSeedResult {
@@ -150,6 +158,8 @@ export function buildPilotSeedPlan(
     email: `pilot-${user.suffix}@pilot.example`,
     displayName: user.displayName,
     status: "active",
+    idpSubject:
+      options.idpSubjects?.[user.suffix as "ops" | "agent" | "qa"] ?? null,
   }));
 
   const userRolesPlan: NewUserRole[] = seedUsers.map((user) => ({

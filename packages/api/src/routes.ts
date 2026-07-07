@@ -38,8 +38,14 @@ import {
   MessageDirectionSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
+  PolicyActivationResponseSchema,
+  PolicyCreateRequestSchema,
+  PolicyCreateResponseSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
+  PolicyVersionCreateRequestSchema,
+  PolicyVersionListResponseSchema,
+  PolicyVersionResourceResponseSchema,
   QaReviewCompleteRequestSchema,
   QaReviewCreateRequestSchema,
   QaReviewEvidenceResponseSchema,
@@ -87,6 +93,10 @@ const MessageParamsSchema = z.object({
 
 const PolicyParamsSchema = z.object({
   policy_id: z.string().min(1),
+});
+
+const PolicyVersionParamsSchema = z.object({
+  policy_version_id: z.string().min(1),
 });
 
 const KbDocumentParamsSchema = z.object({
@@ -474,6 +484,120 @@ export function registerRoutes(
     }
 
     return PolicyResourceResponseSchema.parse({ policy });
+  });
+
+  app.post("/v1/policies", async (request, reply) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "policies:write");
+
+    const input = parseBody(PolicyCreateRequestSchema, request);
+    const result = await services.policies.create(context, input);
+
+    reply.status(201);
+    return PolicyCreateResponseSchema.parse(result);
+  });
+
+  app.get("/v1/policies/:policy_id/versions", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "policies:read");
+
+    const { policy_id: policyId } = parseParams(PolicyParamsSchema, request);
+    const query = parseQuery(ListQuerySchema, request);
+    const versions = await services.policies.listVersions(
+      context,
+      policyId,
+      query,
+    );
+
+    if (!versions) {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Policy was not found.");
+    }
+
+    return PolicyVersionListResponseSchema.parse(versions);
+  });
+
+  app.post("/v1/policies/:policy_id/versions", async (request, reply) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "policies:write");
+
+    const { policy_id: policyId } = parseParams(PolicyParamsSchema, request);
+    const input = parseBody(PolicyVersionCreateRequestSchema, request);
+    const result = await services.policies.createVersion(
+      context,
+      policyId,
+      input,
+    );
+
+    if (result.outcome === "not_found") {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Policy was not found.");
+    }
+
+    if (result.outcome === "archived") {
+      throw new HttpError(
+        409,
+        "CONFLICT",
+        "An archived policy cannot receive new versions.",
+      );
+    }
+
+    reply.status(201);
+    return PolicyVersionResourceResponseSchema.parse({
+      policy_version: result.policyVersion,
+    });
+  });
+
+  app.post(
+    "/v1/policy-versions/:policy_version_id/activate",
+    async (request) => {
+      const context = requireTenantRequestContext(request);
+
+      requirePermission(context.actor, "policies:write");
+
+      const { policy_version_id: policyVersionId } = parseParams(
+        PolicyVersionParamsSchema,
+        request,
+      );
+      const result = await services.policies.activateVersion(
+        context,
+        policyVersionId,
+      );
+
+      if (result.outcome === "not_found") {
+        throw new HttpError(
+          404,
+          "RESOURCE_NOT_FOUND",
+          "Policy version was not found.",
+        );
+      }
+
+      if (result.outcome === "conflict") {
+        throw new HttpError(409, "CONFLICT", result.reason);
+      }
+
+      return PolicyActivationResponseSchema.parse(result.result);
+    },
+  );
+
+  app.post("/v1/policies/:policy_id/archive", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "policies:write");
+
+    const { policy_id: policyId } = parseParams(PolicyParamsSchema, request);
+    const result = await services.policies.archive(context, policyId);
+
+    if (result.outcome === "not_found") {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Policy was not found.");
+    }
+
+    if (result.outcome === "conflict") {
+      throw new HttpError(409, "CONFLICT", "Policy has already been archived.");
+    }
+
+    return PolicyResourceResponseSchema.parse({ policy: result.policy });
   });
 
   app.get("/v1/reports/pilot-weekly", async (request) => {

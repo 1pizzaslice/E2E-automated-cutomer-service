@@ -209,6 +209,10 @@ export const TenantResponseSchema = z.object({
   name: z.string().min(1),
   status: z.enum(["active", "suspended", "archived"]),
   default_timezone: z.string().min(1),
+  // Read-only surface of tenants.retention_policy (Milestone 16, closing the
+  // Milestone 12 follow-up). Changing it stays an ops action; see
+  // TenantRetentionPolicySchema below for the key contract.
+  retention_policy: JsonObjectSchema,
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
 });
@@ -617,6 +621,74 @@ export const PolicyListResponseSchema = z.object({
   page: ListResponsePageSchema,
 });
 
+/**
+ * A policy version row (Milestone 16 policy lifecycle). Versions are
+ * immutable once created; activation stamps `activated_at`/`approved_by`
+ * exactly once. The effective version of a policy is its highest activated
+ * version while the policy header is `active`.
+ */
+export const PolicyVersionResponseSchema = z.object({
+  policy_version_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  policy_id: z.string().min(1),
+  version: z.number().int().positive(),
+  content: JsonObjectSchema,
+  schema_version: z.string().min(1),
+  created_by_user_id: z.string().nullable(),
+  approved_by_user_id: z.string().nullable(),
+  activated_at: z.string().datetime().nullable(),
+  created_at: z.string().datetime(),
+});
+
+export const PolicyVersionResourceResponseSchema = z.object({
+  policy_version: PolicyVersionResponseSchema,
+});
+
+export const PolicyVersionListResponseSchema = z.object({
+  policy_versions: z.array(PolicyVersionResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+/**
+ * Creates a policy with its version-1 draft in one request. `automation`
+ * domain content must satisfy {@link AutomationPolicyContentSchema} at write
+ * time (fail closed — the allowlist ceiling is enforced before anything can
+ * be activated).
+ */
+export const PolicyCreateRequestSchema = z
+  .object({
+    policy_id: z.string().min(1).optional(),
+    policy_version_id: z.string().min(1).optional(),
+    name: z.string().min(1),
+    domain: TenantPolicyDomainSchema,
+    content: JsonObjectSchema,
+    schema_version: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const PolicyVersionCreateRequestSchema = z
+  .object({
+    policy_version_id: z.string().min(1).optional(),
+    content: JsonObjectSchema,
+    schema_version: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const PolicyCreateResponseSchema = z.object({
+  policy: PolicyResponseSchema,
+  policy_version: PolicyVersionResponseSchema,
+});
+
+/**
+ * Activation response: the now-active policy and version, plus any same-
+ * domain predecessor policies that were archived by this activation.
+ */
+export const PolicyActivationResponseSchema = z.object({
+  policy: PolicyResponseSchema,
+  policy_version: PolicyVersionResponseSchema,
+  archived_policy_ids: z.array(z.string().min(1)),
+});
+
 export type TenantPolicyDomain = z.infer<typeof TenantPolicyDomainSchema>;
 export type TenantPolicyStatus = z.infer<typeof TenantPolicyStatusSchema>;
 export type PolicyResponse = z.infer<typeof PolicyResponseSchema>;
@@ -624,6 +696,21 @@ export type PolicyResourceResponse = z.infer<
   typeof PolicyResourceResponseSchema
 >;
 export type PolicyListResponse = z.infer<typeof PolicyListResponseSchema>;
+export type PolicyVersionResponse = z.infer<typeof PolicyVersionResponseSchema>;
+export type PolicyVersionResourceResponse = z.infer<
+  typeof PolicyVersionResourceResponseSchema
+>;
+export type PolicyVersionListResponse = z.infer<
+  typeof PolicyVersionListResponseSchema
+>;
+export type PolicyCreateRequest = z.infer<typeof PolicyCreateRequestSchema>;
+export type PolicyVersionCreateRequest = z.infer<
+  typeof PolicyVersionCreateRequestSchema
+>;
+export type PolicyCreateResponse = z.infer<typeof PolicyCreateResponseSchema>;
+export type PolicyActivationResponse = z.infer<
+  typeof PolicyActivationResponseSchema
+>;
 
 /**
  * The closed set of topics that may ever be allowlisted for auto-send. This

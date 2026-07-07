@@ -566,6 +566,34 @@ export function buildOpenApiDocument() {
             default: { $ref: "#/components/responses/Error" },
           },
         },
+        post: {
+          summary:
+            "Create a policy with its version-1 draft (emits policy.created)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/PolicyCreateRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Created policy and its draft version",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PolicyCreate" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
       },
       "/v1/policies/automation": {
         get: {
@@ -608,6 +636,127 @@ export function buildOpenApiDocument() {
           responses: {
             "200": {
               description: "Policy resource",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PolicyResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/policies/{policy_id}/versions": {
+        get: {
+          summary: "List a policy's versions (newest first)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "policy_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Policy version list",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PolicyVersionList" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+        post: {
+          summary:
+            "Create the next draft version of a policy (emits policy.created)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "policy_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/PolicyVersionCreateRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Created draft version",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/PolicyVersionResource",
+                  },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/policy-versions/{policy_version_id}/activate": {
+        post: {
+          summary:
+            "Activate a draft policy version (immutable once active; archives same-domain predecessors; emits policy.activated)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "policy_version_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Activation result",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PolicyActivation" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/policies/{policy_id}/archive": {
+        post: {
+          summary: "Archive a policy (emits policy.archived)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "policy_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Archived policy resource",
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/PolicyResource" },
@@ -1531,6 +1680,11 @@ export function buildOpenApiDocument() {
         bearerAuth: {
           type: "http",
           scheme: "bearer",
+          bearerFormat: "JWT",
+          description:
+            "IdP-issued JWT verified against the issuer's JWKS " +
+            "(issuer/audience/expiry; Milestone 16). The AI runtime sidecar " +
+            "presents its internal machine token through the same header.",
         },
       },
       parameters: {
@@ -1619,6 +1773,7 @@ export function buildOpenApiDocument() {
             "name",
             "status",
             "default_timezone",
+            "retention_policy",
             "created_at",
             "updated_at",
           ],
@@ -1627,6 +1782,14 @@ export function buildOpenApiDocument() {
             name: { type: "string" },
             status: { enum: ["active", "suspended", "archived"] },
             default_timezone: { type: "string" },
+            retention_policy: {
+              type: "object",
+              description:
+                "Read-only per-tenant retention configuration (whole days; " +
+                "absent keys retain indefinitely). Changing it is an ops " +
+                "action (BACKEND_SPEC section 22).",
+              additionalProperties: true,
+            },
             created_at: { type: "string", format: "date-time" },
             updated_at: { type: "string", format: "date-time" },
           },
@@ -1917,6 +2080,109 @@ export function buildOpenApiDocument() {
               items: { $ref: "#/components/schemas/Policy" },
             },
             page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        PolicyVersion: {
+          type: "object",
+          required: [
+            "policy_version_id",
+            "tenant_id",
+            "policy_id",
+            "version",
+            "content",
+            "schema_version",
+            "created_by_user_id",
+            "approved_by_user_id",
+            "activated_at",
+            "created_at",
+          ],
+          properties: {
+            policy_version_id: { type: "string" },
+            tenant_id: { type: "string" },
+            policy_id: { type: "string" },
+            version: { type: "integer", minimum: 1 },
+            content: { type: "object", additionalProperties: true },
+            schema_version: { type: "string" },
+            created_by_user_id: { type: ["string", "null"] },
+            approved_by_user_id: { type: ["string", "null"] },
+            activated_at: {
+              type: ["string", "null"],
+              format: "date-time",
+              description:
+                "Stamped exactly once at activation; versions are immutable " +
+                "once active.",
+            },
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        PolicyVersionResource: {
+          type: "object",
+          required: ["policy_version"],
+          properties: {
+            policy_version: { $ref: "#/components/schemas/PolicyVersion" },
+          },
+        },
+        PolicyVersionList: {
+          type: "object",
+          required: ["policy_versions", "page"],
+          properties: {
+            policy_versions: {
+              type: "array",
+              items: { $ref: "#/components/schemas/PolicyVersion" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
+          },
+        },
+        PolicyCreateRequest: {
+          type: "object",
+          required: ["name", "domain", "content"],
+          additionalProperties: false,
+          properties: {
+            policy_id: { type: "string", minLength: 1 },
+            policy_version_id: { type: "string", minLength: 1 },
+            name: { type: "string", minLength: 1 },
+            domain: { $ref: "#/components/schemas/TenantPolicyDomain" },
+            content: {
+              type: "object",
+              additionalProperties: true,
+              description:
+                "automation-domain content must satisfy the closed " +
+                "AutomationPolicyContent contract (auto_send_enabled + " +
+                "auto_send_allowed_topics within the platform ceiling).",
+            },
+            schema_version: { type: "string", minLength: 1 },
+          },
+        },
+        PolicyVersionCreateRequest: {
+          type: "object",
+          required: ["content"],
+          additionalProperties: false,
+          properties: {
+            policy_version_id: { type: "string", minLength: 1 },
+            content: { type: "object", additionalProperties: true },
+            schema_version: { type: "string", minLength: 1 },
+          },
+        },
+        PolicyCreate: {
+          type: "object",
+          required: ["policy", "policy_version"],
+          properties: {
+            policy: { $ref: "#/components/schemas/Policy" },
+            policy_version: { $ref: "#/components/schemas/PolicyVersion" },
+          },
+        },
+        PolicyActivation: {
+          type: "object",
+          required: ["policy", "policy_version", "archived_policy_ids"],
+          properties: {
+            policy: { $ref: "#/components/schemas/Policy" },
+            policy_version: { $ref: "#/components/schemas/PolicyVersion" },
+            archived_policy_ids: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Same-domain predecessor policies archived by this activation.",
+            },
           },
         },
         KbDocumentResource: {

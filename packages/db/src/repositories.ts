@@ -9,6 +9,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  ne,
   or,
   sql,
   type AnyColumn,
@@ -45,8 +46,10 @@ import {
   type NewKbChunk,
   type NewKbDocument,
   type NewMessage,
+  type NewPolicyVersion,
   type NewQaReview,
   type NewTenant,
+  type NewTenantPolicy,
   type NewTicket,
   type NewTicketEvent,
   type NewToolCall,
@@ -54,6 +57,7 @@ import {
   type Ticket,
   type ToolCall,
   policyVersions,
+  roles,
   slaPolicies,
   tenantPolicies,
   tenants,
@@ -61,6 +65,8 @@ import {
   tickets,
   toolCalls,
   toolDefinitions,
+  userRoles,
+  users,
 } from "./schema.js";
 
 type ChannelType = Channel["type"];
@@ -160,6 +166,37 @@ export function tenantByIdQuery(
       and(eq(tenants.tenantId, scope.tenantId), eq(tenants.tenantId, tenantId)),
     )
     .limit(1);
+}
+
+/**
+ * Resolves a user by the immutable IdP subject (`sub` claim) of a verified
+ * JWT (Milestone 16). Deliberately unscoped: authentication happens before a
+ * tenant is selected, and platform-level users carry a NULL tenant_id that
+ * RLS would hide from `support_app`. Runs on the owner connection only.
+ */
+export function userByIdpSubjectQuery(db: SupportDatabase, idpSubject: string) {
+  return db
+    .select()
+    .from(users)
+    .where(eq(users.idpSubject, idpSubject))
+    .limit(1);
+}
+
+/**
+ * Loads the role grants for a user (user_roles joined to roles). Unscoped for
+ * the same reason as {@link userByIdpSubjectQuery}: the DB is the role source
+ * of truth consulted during authentication, before tenant selection. The
+ * caller decides which grants apply (global vs home-tenant grants).
+ */
+export function userRoleGrantsQuery(db: SupportDatabase, userId: string) {
+  return db
+    .select({
+      roleName: roles.name,
+      grantTenantId: userRoles.tenantId,
+    })
+    .from(userRoles)
+    .innerJoin(roles, eq(userRoles.roleId, roles.roleId))
+    .where(eq(userRoles.userId, userId));
 }
 
 export function customersListQuery(
@@ -526,6 +563,179 @@ export function policyByIdQuery(
       ),
     )
     .limit(1);
+}
+
+export function createTenantPolicyQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewTenantPolicy, "tenantId">,
+) {
+  return db
+    .insert(tenantPolicies)
+    .values({ ...values, tenantId: scope.tenantId })
+    .returning();
+}
+
+export function createPolicyVersionQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  values: Omit<NewPolicyVersion, "tenantId">,
+) {
+  return db
+    .insert(policyVersions)
+    .values({ ...values, tenantId: scope.tenantId })
+    .returning();
+}
+
+export function policyVersionsListQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  policyId: string,
+  options: ListQueryOptions,
+) {
+  return db
+    .select()
+    .from(policyVersions)
+    .where(
+      and(
+        eq(policyVersions.tenantId, scope.tenantId),
+        eq(policyVersions.policyId, policyId),
+      ),
+    )
+    .orderBy(desc(policyVersions.version))
+    .limit(options.limit);
+}
+
+export function policyVersionByIdQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  policyVersionId: string,
+) {
+  return db
+    .select()
+    .from(policyVersions)
+    .where(
+      and(
+        eq(policyVersions.tenantId, scope.tenantId),
+        eq(policyVersions.policyVersionId, policyVersionId),
+      ),
+    )
+    .limit(1);
+}
+
+/**
+ * The highest version number recorded for a policy (0 when none exist), used
+ * to assign the next draft version inside the creation transaction.
+ */
+export function latestPolicyVersionNumberQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  policyId: string,
+) {
+  return db
+    .select({ maxVersion: sql<number | null>`max(${policyVersions.version})` })
+    .from(policyVersions)
+    .where(
+      and(
+        eq(policyVersions.tenantId, scope.tenantId),
+        eq(policyVersions.policyId, policyId),
+      ),
+    );
+}
+
+/**
+ * The currently effective (highest activated) version of a policy, if any.
+ * Activation must supersede this version, never regress behind it: the
+ * effective-policy read picks the highest activated version.
+ */
+export function latestActivatedPolicyVersionQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  policyId: string,
+) {
+  return db
+    .select()
+    .from(policyVersions)
+    .where(
+      and(
+        eq(policyVersions.tenantId, scope.tenantId),
+        eq(policyVersions.policyId, policyId),
+        isNotNull(policyVersions.activatedAt),
+      ),
+    )
+    .orderBy(desc(policyVersions.version), desc(policyVersions.policyVersionId))
+    .limit(1);
+}
+
+/**
+ * Marks a draft version as activated. The `activated_at is null` guard makes
+ * activation single-shot: an already-activated version returns zero rows and
+ * the caller surfaces a conflict (activation immutability, Milestone 16).
+ */
+export function activatePolicyVersionQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  policyId: string,
+  policyVersionId: string,
+  values: { readonly approvedByUserId: string; readonly activatedAt: Date },
+) {
+  return db
+    .update(policyVersions)
+    .set({
+      approvedByUserId: values.approvedByUserId,
+      activatedAt: values.activatedAt,
+    })
+    .where(
+      and(
+        eq(policyVersions.tenantId, scope.tenantId),
+        eq(policyVersions.policyId, policyId),
+        eq(policyVersions.policyVersionId, policyVersionId),
+        isNull(policyVersions.activatedAt),
+      ),
+    )
+    .returning();
+}
+
+export function updateTenantPolicyStatusQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  policyId: string,
+  values: { readonly status: TenantPolicy["status"]; readonly updatedAt: Date },
+) {
+  return db
+    .update(tenantPolicies)
+    .set(values)
+    .where(
+      and(
+        eq(tenantPolicies.tenantId, scope.tenantId),
+        eq(tenantPolicies.policyId, policyId),
+      ),
+    )
+    .returning();
+}
+
+/**
+ * Other active policies in the same domain. Activating a policy archives
+ * these predecessors so exactly one policy per domain can be active and the
+ * effective-policy resolution stays unambiguous.
+ */
+export function activePoliciesInDomainQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  domain: TenantPolicy["domain"],
+  excludePolicyId: string,
+) {
+  return db
+    .select()
+    .from(tenantPolicies)
+    .where(
+      and(
+        eq(tenantPolicies.tenantId, scope.tenantId),
+        eq(tenantPolicies.domain, domain),
+        eq(tenantPolicies.status, "active"),
+        ne(tenantPolicies.policyId, excludePolicyId),
+      ),
+    );
 }
 
 export function kbDocumentsListQuery(

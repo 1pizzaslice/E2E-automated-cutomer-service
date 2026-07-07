@@ -31,6 +31,7 @@ describe("sql migrations", () => {
       "0003_kb_vector_index",
       "0004_tenant_retention_policy",
       "0005_message_send_status_enums",
+      "0006_user_idp_subject",
     ]);
     expect(migrations[0]?.sql).toContain(
       "create extension if not exists vector",

@@ -160,8 +160,11 @@ Fields:
 - `email`
 - `display_name`
 - `status`
+- `idp_subject` nullable; the immutable subject (`sub` claim) of the user's hosted-IdP identity (Milestone 16, migration `0006`). Unique when set. Tokens carry identity only — a verified subject with no matching active user row cannot authenticate, and roles always come from `user_roles` (the DB stays the role source of truth). Users without an `idp_subject` simply cannot sign in while production JWT auth is on (fail closed).
 - `created_at`
 - `updated_at`
+
+Tenant membership (Milestone 16): a user with `tenant_id` set may operate only on that tenant — selecting any other tenant via `x-tenant-id` is `403 FORBIDDEN`, enforced server-side before route handlers run. A NULL `tenant_id` marks a platform-level user who spans all tenants. Role grants in `user_roles` apply when their `tenant_id` is NULL (global grant) or equals the user's own tenant.
 
 Roles:
 
@@ -547,7 +550,8 @@ Fields:
 
 Rules:
 
-- Active policy versions are immutable.
+- Active policy versions are immutable. Versions never change after creation; activation stamps `activated_at`/`approved_by_user_id` exactly once and re-activation conflicts (Milestone 16, §17.8).
+- Exactly one policy per domain may be active for a tenant: activation archives same-domain predecessors so effective-policy resolution stays unambiguous.
 - Ticket records the policy version used for decisions.
 - AI must cite policy evidence for policy-based answers.
 
@@ -763,9 +767,10 @@ persistence activities (`ticket.created` on workflow ticket creation,
 `approval.requested`, `approval.expired`, `message.send_failed` — Milestone
 13 added the ticket-transition and expiry producers), the API decide service
 (`approval.approved|edited|rejected|escalated`), and the retention job
-(`retention.applied`). Tool calls are audited in the `tool_calls` table
-(§10.2), not in `audit_events`. The taxonomy reserves
-`policy.created|activated|archived`, `integration.credential_changed`, and
+(`retention.applied`), and the policy lifecycle endpoints
+(`policy.created|activated|archived`, live since Milestone 16 — §17.8). Tool
+calls are audited in the `tool_calls` table (§10.2), not in `audit_events`.
+The taxonomy still reserves `integration.credential_changed` and
 `permission.granted|revoked` for the corresponding write paths when they
 land; an audit-completeness test drives every live producer and asserts all
 emitted actions are canonical.
@@ -937,23 +942,26 @@ Endpoint families below include current implementation notes where available; ot
 
 ### 17.0 Common API Contract
 
-Required on every non-health endpoint:
+Authentication (Milestone 16, ADR-0024 — production JWT mode, the default):
 
-- `Authorization: Bearer <token>` placeholder auth header.
-- `x-user-id` placeholder actor identifier.
-- `x-user-email` optional actor email.
-- `x-user-roles` required comma-separated role list. There is no default role: a request without a parseable role is rejected with `401 AUTH_REQUIRED` (deny-by-default, Milestone 12 — an implicit role would let a misconfigured gateway mint access).
+- `Authorization: Bearer <jwt>` carries an IdP-issued JWT (pilot IdP: Clerk). `readAuthContext` verifies it cryptographically against the issuer's JWKS: RS256 signature, `iss` = `SUPPORT_AUTH_ISSUER`, `aud` = `SUPPORT_AUTH_AUDIENCE`, and expiry with a configurable clock tolerance (`SUPPORT_AUTH_CLOCK_TOLERANCE_S`, default 60s; tokens without `exp` never authenticate). The JWKS is cached and refetched (rate-limited) when a token presents an unknown `kid`, so IdP key rotation needs no restart.
+- The verified `sub` maps to `users.idp_subject`; the user must exist and be `active`, roles load from `user_roles` (DB-sourced — tokens carry identity, never authority), and tenant membership is enforced server-side (§3.2). Every verification failure is the same `401 AUTH_REQUIRED`; a valid token for a non-member tenant is `403 FORBIDDEN`.
+- Identity headers (`x-user-id`, `x-user-email`, `x-user-roles`) are IGNORED in JWT mode. The Milestone 1-15 trusted-header contract survives only behind the explicit `SUPPORT_AUTH_MODE=insecure-headers` opt-in for tests/local tooling (default off; a JWT-mode boot missing issuer/audience fails fast rather than degrading to header trust). In that mode the deny-by-default rules are unchanged: no parseable role → `401 AUTH_REQUIRED`, `internal_service` claimed via header → `401`.
+- The AI runtime sidecar's machine token (§17.16) is checked before user auth in every mode and is unaffected by the JWT switch.
+
+Required on every non-health endpoint in both modes:
+
 - `x-request-id` optional request ID. If omitted, the API generates one.
 - `x-correlation-id` optional correlation ID. If omitted, it defaults to the request ID.
 
 Required on `/v1/*` tenant-scoped endpoints:
 
-- `x-tenant-id`
+- `x-tenant-id` — explicit tenant selection remains; under JWT mode membership constrains it (§3.2).
 
 Response rules:
 
 - `x-request-id` and `x-correlation-id` are echoed on responses.
-- Health and readiness do not require auth.
+- Health and readiness do not require auth; provider webhooks stay signature-authenticated over the raw body (§17.14) and never require a bearer token.
 - `GET /openapi.json` requires auth but no tenant context because it is a global contract document.
 - Global tenant administration endpoints (`GET /v1/tenants`, `POST /v1/tenants`, and platform-admin `PATCH /v1/tenants/{tenant_id}`) require auth but do not require `x-tenant-id`.
 - `/v1/tenants/{tenant_id}` read currently requires `{tenant_id}` to match `x-tenant-id`.
@@ -972,6 +980,7 @@ Current skeleton permissions:
 - `conversations:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `messages:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `policies:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
+- `policies:write`: `platform_admin`, `ops_admin`. Grants policy create, draft version create, activation, and archive (Milestone 16). Admin-only because the `automation` domain controls the auto-send allowlist — a safety control agents and reviewers must not be able to change.
 - `kb_documents:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `approvals:read`: `platform_admin`, `ops_admin`, `support_agent`, `qa_reviewer`, `client_viewer`.
 - `approvals:review`: `platform_admin`, `ops_admin`, `support_agent`. Grants the approve/edit/reject/escalate decision endpoints; `qa_reviewer`/`client_viewer` stay read-only.
@@ -988,9 +997,15 @@ Current skeleton permissions:
 The role→permission matrix (`packages/api/src/rbac.ts` `ROLE_PERMISSIONS`) is
 the single source of truth; an RBAC matrix test enumerates every registered
 route via a Fastify `onRoute` collector and asserts each enforces exactly its
-documented permission for all six roles (plus `401` with no role), so a new
-endpoint fails the suite until it is added to the catalog with an explicit
-permission decision.
+documented permission for all six roles, so a new endpoint fails the suite
+until it is added to the catalog with an explicit permission decision. Since
+Milestone 16 the matrix runs under production JWT auth with real signed
+tokens (a per-suite RSA key pair served through a local JWKS endpoint,
+verified by the production verifier) and carries the negative suites:
+absent/expired/forged/wrong-audience/wrong-issuer tokens are `401` on every
+route, a valid token for a non-member tenant is `403` on every tenant-scoped
+route, identity headers are ignored under JWT auth, and internal endpoints
+reject user tokens.
 
 ### 17.1 Health
 
@@ -1099,16 +1114,21 @@ Current implementation:
 - `GET /v1/policies`
 - `POST /v1/policies`
 - `GET /v1/policies/{policy_id}`
+- `GET /v1/policies/{policy_id}/versions`
 - `POST /v1/policies/{policy_id}/versions`
-- `POST /v1/policy-versions/{policy_version_id}/approve`
 - `POST /v1/policy-versions/{policy_version_id}/activate`
+- `POST /v1/policies/{policy_id}/archive`
 
-Current implementation:
+Current implementation (lifecycle writes landed at Milestone 16; reads unchanged):
 
 - `GET /v1/policies` lists tenant-scoped policies with `limit`, `domain`, and `status` query filters.
-- `GET /v1/policies/automation` (permission `policies:read`) resolves the tenant's effective auto-send controls: the highest activated version of an active `automation`-domain policy, with `policy_versions.content` validated against the shared `AutomationPolicyContentSchema` (`auto_send_enabled` kill switch + `auto_send_allowed_topics` constrained to the closed low-risk set `faq | order_status`). No policy, an inactive policy, or malformed content resolves to `configured: false` with the safe defaults (auto-send disabled, empty allowlist) — the controls fail closed. In v1 allowlist changes are an ops action (seed/SQL on `policy_versions`); the policy write/approve/activate endpoints remain future work.
-- `GET /v1/policies/{policy_id}` reads a tenant-scoped policy.
-- Policy create, policy version creation, approval, activation, immutable active-version enforcement, audit events, and workflow side effects remain future endpoints (the audit taxonomy already reserves `policy.created|activated|archived` for them).
+- `GET /v1/policies/automation` (permission `policies:read`) resolves the tenant's effective auto-send controls: the highest activated version of an active `automation`-domain policy, with `policy_versions.content` validated against the shared `AutomationPolicyContentSchema` (`auto_send_enabled` kill switch + `auto_send_allowed_topics` constrained to the closed low-risk set `faq | order_status`). No policy, an inactive policy, or malformed content resolves to `configured: false` with the safe defaults (auto-send disabled, empty allowlist) — the controls fail closed.
+- `GET /v1/policies/{policy_id}` reads a tenant-scoped policy; `GET /v1/policies/{policy_id}/versions` lists its versions newest-first.
+- `POST /v1/policies` (permission `policies:write`) creates a policy header (`status: draft`) together with its version-1 draft in one transaction and audits `policy.created`. `automation`-domain content must satisfy `AutomationPolicyContentSchema` at write time (400 otherwise) — allowlist changes are API-driven now, and nothing outside the closed topic ceiling can even exist as a draft.
+- `POST /v1/policies/{policy_id}/versions` appends the next draft version (`max(version) + 1`, content immutable once created) and audits `policy.created` with the version metadata. Archived policies reject new versions (409).
+- `POST /v1/policy-versions/{policy_version_id}/activate` activates a draft version: stamps `activated_at`/`approved_by_user_id` exactly once (re-activation is 409 — activation immutability, guarded by a conditional `activated_at is null` update), refuses drafts older than the highest activated version (the effective-policy read picks the highest activated version, so a stale activation would silently do nothing), revalidates `automation` content, marks the policy header `active`, archives any other active policy in the same domain (exactly one active policy per domain; each predecessor audits `policy.archived` with `reason: superseded`), and audits `policy.activated`. The planned separate `approve` step is folded into activation for v1 — the activator is recorded as the approver; a two-person rule can reintroduce the split with the Milestone 20 console if pilots need it.
+- `POST /v1/policies/{policy_id}/archive` archives the policy (409 if already archived) and audits `policy.archived` with `reason: manual`. Archiving the active automation policy fails closed: the effective controls return to the safe defaults.
+- All lifecycle audits are `entity_type: policy`, `actor_type: human` with the acting user id, written in the same tenant transaction as the state change.
 
 ### 17.9 KB
 
@@ -1465,8 +1485,9 @@ sweeper, and appends a `retention.applied` audit event. Attachment metadata
 and AI-run traces are counted and reported as planned-but-not-executed
 placeholders until the blob-deletion and anonymization strategies land.
 Missing or malformed retention configuration fails closed (nothing is
-purged). Changing a tenant's retention policy is an ops action; it is not
-exposed on the tenant API contract yet.
+purged). Since Milestone 16 `retention_policy` is surfaced read-only on the
+tenant API contract (`TenantResponseSchema`); changing it remains an ops
+action, not an API write.
 
 ## 23. Backend Acceptance Criteria For V1 Pilot
 
