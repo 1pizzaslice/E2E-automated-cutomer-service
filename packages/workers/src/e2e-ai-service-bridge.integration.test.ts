@@ -51,11 +51,31 @@ import {
  * Run: pnpm --filter @support/workers test:e2e:service
  * (requires `pnpm infra:up`, DATABASE_URL, uv with the ai/ service extra
  * available, and on IPv6-localhost hosts NATS_URL=nats://127.0.0.1:4222)
+ *
+ * Real-model mode (Milestone 15 acceptance): setting E2E_AI_REAL_PROVIDER
+ * (+ E2E_AI_REAL_MODEL and the provider key, e.g. ANTHROPIC_API_KEY) spawns
+ * the sidecar with the configured real provider — the happy path then proves
+ * a real, citation-grounded model draft lands in the approval with real
+ * token/cost provenance on `ai_runs`. Unset keeps the deterministic drive;
+ * the degradation tests never reach a model either way. Costs real tokens:
+ *
+ *   E2E_AI_REAL_PROVIDER=anthropic E2E_AI_REAL_MODEL=claude-sonnet-5 \
+ *     ANTHROPIC_API_KEY=... RUN_AI_SERVICE_E2E_TESTS=true DATABASE_URL=... \
+ *     pnpm --filter @support/workers test:e2e:service
  */
 const describeLive =
   process.env.RUN_AI_SERVICE_E2E_TESTS === "true" && process.env.DATABASE_URL
     ? describe
     : describe.skip;
+
+const REAL_PROVIDER = process.env.E2E_AI_REAL_PROVIDER?.trim() || null;
+const REAL_MODEL = process.env.E2E_AI_REAL_MODEL?.trim() || null;
+
+if (REAL_PROVIDER && !REAL_MODEL) {
+  throw new Error(
+    "E2E_AI_REAL_MODEL is required when E2E_AI_REAL_PROVIDER is set.",
+  );
+}
 
 const prefix = `e2e_svc_${process.pid}_${Date.now()}`;
 const TENANT = `${prefix}_ten`;
@@ -305,6 +325,8 @@ describeLive("live AI runtime service bridge end to end", () => {
         "ai",
         "--extra",
         "service",
+        // The llm extra ships the LangChain provider stack for real-model mode.
+        ...(REAL_PROVIDER ? ["--extra", "llm"] : []),
         "python",
         "-m",
         "uvicorn",
@@ -324,6 +346,14 @@ describeLive("live AI runtime service bridge end to end", () => {
           SUPPORT_AI_SERVICE_TOKEN: AI_SERVICE_TOKEN,
           SUPPORT_API_BASE_URL: apiBaseUrl,
           SUPPORT_INTERNAL_API_TOKEN: INTERNAL_API_TOKEN,
+          // Real-model mode (Milestone 15): the provider key (e.g.
+          // ANTHROPIC_API_KEY) is inherited from process.env above.
+          ...(REAL_PROVIDER
+            ? {
+                SUPPORT_LLM_PROVIDER: REAL_PROVIDER,
+                SUPPORT_LLM_MODEL: REAL_MODEL!,
+              }
+            : {}),
         },
         stdio: ["ignore", "inherit", "inherit"],
       },
@@ -449,14 +479,16 @@ describeLive("live AI runtime service bridge end to end", () => {
     expect(ticketRow.automationMode).toBe("human_approve");
 
     // The persisted AI run came from the sidecar: Python runtime provenance,
-    // runtime-generated ids, and the trace link.
+    // runtime-generated ids, and the trace link. In real-model mode the row
+    // must carry the runtime-reported provider/model instead of the
+    // deterministic constants (Milestone 15).
     const aiRun = (
       await aiRunsListQuery(ownerDb, SCOPE, { limit: 10, ticketId })
     )[0]!;
     expect(aiRun).toMatchObject({
       status: "succeeded",
-      modelProvider: "deterministic",
-      modelId: "deterministic-support-v1",
+      modelProvider: REAL_PROVIDER ?? "deterministic",
+      modelId: REAL_PROVIDER ? REAL_MODEL : "deterministic-support-v1",
       automationRecommendation: "human_approve",
     });
     expect(aiRun.traceId).toMatch(/^trace_/);
@@ -465,6 +497,23 @@ describeLive("live AI runtime service bridge end to end", () => {
     const structuredOutput = aiRun.structuredOutput as Record<string, unknown>;
     const draft = structuredOutput.draft as Record<string, unknown>;
     expect(String(draft.draft_text).length).toBeGreaterThan(0);
+
+    if (REAL_PROVIDER) {
+      // Milestone 15 acceptance evidence: versioned prompt provenance plus
+      // real token and cost capture on the persisted run.
+      expect(aiRun.promptVersion).toContain("support_classifier.v1");
+      expect(aiRun.promptVersion).toContain("support_response_composer.v1");
+      expect(aiRun.inputTokens ?? 0).toBeGreaterThan(0);
+      expect(aiRun.outputTokens ?? 0).toBeGreaterThan(0);
+      expect(Number(aiRun.costEstimate ?? 0)).toBeGreaterThan(0);
+      // Surface the real draft in the test output for the acceptance record.
+      console.info(
+        `[real-model draft] provider=${aiRun.modelProvider} model=${aiRun.modelId} ` +
+          `tokens=${aiRun.inputTokens}/${aiRun.outputTokens} cost=$${aiRun.costEstimate}\n` +
+          `${String(draft.draft_text)}\n` +
+          `[cited evidence] ${JSON.stringify(draft.evidence ?? [])}`,
+      );
+    }
 
     // Retrieval ran over POST /v1/kb/search: the seeded FAQ document surfaced
     // as evidence inside the sidecar's graph state.

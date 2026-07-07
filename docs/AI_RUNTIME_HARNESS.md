@@ -1004,7 +1004,7 @@ The offline suites always run the deterministic model. The opt-in live gate
 (costs real tokens; never part of `pnpm test:py`):
 
 ```
-SUPPORT_LLM_PROVIDER=anthropic SUPPORT_LLM_MODEL=claude-opus-4-8 \
+SUPPORT_LLM_PROVIDER=anthropic SUPPORT_LLM_MODEL=claude-sonnet-5 \
   ANTHROPIC_API_KEY=... PYTHONPATH=ai \
   uv run --frozen --project ai --extra llm python -m evals.live_runner
 ```
@@ -1015,3 +1015,12 @@ cross-tenant leaks, injection pass rate 1.0) and exits non-zero on any
 violation. The same command with `SUPPORT_LLM_PROVIDER=scripted` runs
 offline. Dependencies: `uv sync --project ai --extra llm` (LangChain +
 `langchain-anthropic`/`langchain-openai`; the sidecar image ships them).
+
+The end-to-end acceptance drive is the sidecar e2e's real-model mode:
+`E2E_AI_REAL_PROVIDER=anthropic E2E_AI_REAL_MODEL=claude-sonnet-5` (plus the
+provider key) on `pnpm --filter @support/workers test:e2e:service` proves a
+real, citation-grounded model draft lands in the approval with real
+token/cost provenance persisted on `ai_runs`. Recorded pass (2026-07-07):
+both models clear every hard-fail gate — `claude-sonnet-5` (pilot default:
+golden topic 0.960/routing 1.0, injection 1.0) and `claude-opus-4-8`
+(config-only upgrade; slightly more conservative routing).

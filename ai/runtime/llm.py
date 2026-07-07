@@ -312,6 +312,58 @@ _OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+def _clamp_confidence(value: Any) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    return min(1.0, max(0.0, confidence))
+
+
+def normalize_model_output(prompt_id: str, request_input: Mapping[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic post-parse normalization of real-model output.
+
+    Provider tool-calling does not hard-enforce nested schema enums, so the
+    adapter enforces the invariants that matter deterministically instead of
+    trusting the model: composer citations may only reference evidence that
+    was actually provided (a hallucinated ref_id is dropped, never surfaced),
+    their `type` is derived from the cited document's real `document_type`
+    rather than the model's claim, and confidences are clamped to [0, 1] so a
+    numeric excursion degrades to a validation-safe value instead of failing
+    the run. A conforming output passes through unchanged.
+    """
+
+    normalized = dict(parsed)
+    normalized["confidence"] = _clamp_confidence(parsed.get("confidence"))
+
+    if prompt_id != PROMPT_COMPOSER:
+        return normalized
+
+    provided: dict[str, str] = {}
+    for item in request_input.get("evidence") or []:
+        if isinstance(item, Mapping):
+            ref_id = str(item.get("ref_id") or "")
+            if ref_id:
+                provided[ref_id] = str(item.get("document_type") or "")
+
+    citations: list[dict[str, Any]] = []
+    for item in parsed.get("evidence") or []:
+        if not isinstance(item, Mapping):
+            continue
+        ref_id = str(item.get("ref_id") or "")
+        if ref_id not in provided:
+            continue  # only provided evidence may be cited
+        declared = item.get("type")
+        if declared not in ("kb_chunk", "policy"):
+            declared = "policy" if provided[ref_id] == "policy" else "kb_chunk"
+        citations.append(
+            {"type": declared, "ref_id": ref_id, "summary": str(item.get("summary") or "")}
+        )
+    normalized["evidence"] = citations
+
+    return normalized
+
+
 def render_input_block(payload: Mapping[str, Any]) -> str:
     """Render the machine-readable input block appended to every prompt.
 
@@ -465,6 +517,8 @@ class LangChainSupportModel:
             raise LlmOutputError(
                 f"model output failed structured-output parsing for {request.prompt_id}: {last_error}"
             )
+
+        parsed = normalize_model_output(request.prompt_id, request.input, parsed)
 
         latency_ms = int((time.monotonic() - started) * 1000)
         metadata = ModelMetadata(

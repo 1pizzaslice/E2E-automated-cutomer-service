@@ -310,6 +310,77 @@ class BuildModelProviderTest(unittest.TestCase):
         self.assertEqual(provider.provider_name, SCRIPTED_PROVIDER)
 
 
+class NormalizeModelOutputTest(unittest.TestCase):
+    """Deterministic post-parse enforcement of real-model output invariants
+    (provider tool-calling does not hard-enforce nested schema enums)."""
+
+    _INPUT = {
+        "topic": "faq",
+        "brand_name": "Acme",
+        "tone": "helpful_professional",
+        "evidence": [
+            {"ref_id": "kbc_faq_1", "document_type": "faq"},
+            {"ref_id": "kbc_policy_1", "document_type": "policy"},
+        ],
+        "tool_results": [],
+    }
+
+    def test_out_of_enum_citation_type_is_derived_from_document_type(self) -> None:
+        from runtime.llm import normalize_model_output
+
+        parsed = {
+            "draft_text": "x",
+            "confidence": 0.9,
+            "evidence": [
+                {"type": "faq", "ref_id": "kbc_faq_1", "summary": "s"},
+                {"type": "weird", "ref_id": "kbc_policy_1", "summary": "p"},
+            ],
+        }
+        out = normalize_model_output(PROMPT_COMPOSER, self._INPUT, parsed)
+        self.assertEqual(
+            out["evidence"],
+            [
+                {"type": "kb_chunk", "ref_id": "kbc_faq_1", "summary": "s"},
+                {"type": "policy", "ref_id": "kbc_policy_1", "summary": "p"},
+            ],
+        )
+
+    def test_hallucinated_ref_ids_are_dropped(self) -> None:
+        from runtime.llm import normalize_model_output
+
+        parsed = {
+            "draft_text": "x",
+            "confidence": 0.9,
+            "evidence": [{"type": "kb_chunk", "ref_id": "kbc_invented", "summary": "s"}],
+        }
+        out = normalize_model_output(PROMPT_COMPOSER, self._INPUT, parsed)
+        self.assertEqual(out["evidence"], [])
+
+    def test_conforming_citations_pass_through_unchanged(self) -> None:
+        from runtime.llm import normalize_model_output
+
+        parsed = {
+            "draft_text": "x",
+            "confidence": 0.8,
+            "evidence": [{"type": "policy", "ref_id": "kbc_policy_1", "summary": "p"}],
+        }
+        out = normalize_model_output(PROMPT_COMPOSER, self._INPUT, parsed)
+        self.assertEqual(out["evidence"], parsed["evidence"])
+        self.assertEqual(out["confidence"], 0.8)
+
+    def test_confidence_is_clamped_for_both_prompts(self) -> None:
+        from runtime.llm import normalize_model_output
+
+        classifier = normalize_model_output(
+            PROMPT_CLASSIFIER, {"text": "hi"}, {"topic": "faq", "confidence": 1.7}
+        )
+        self.assertEqual(classifier["confidence"], 1.0)
+        composer = normalize_model_output(
+            PROMPT_COMPOSER, self._INPUT, {"draft_text": "x", "confidence": "not-a-number"}
+        )
+        self.assertEqual(composer["confidence"], 0.5)
+
+
 class SchemaVocabularyTest(unittest.TestCase):
     def test_classifier_priority_enum_is_platform_vocabulary_without_p0(self) -> None:
         enum = CLASSIFIER_OUTPUT_SCHEMA["properties"]["priority"]["enum"]

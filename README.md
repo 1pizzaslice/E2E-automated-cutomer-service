@@ -128,7 +128,7 @@ closed (HTTP 409) on a mismatch — an embedding swap means re-ingesting the KB
 (SOPS §11.2). Any provider/model/prompt change must pass the live eval gate:
 
 ```bash
-SUPPORT_LLM_PROVIDER=anthropic SUPPORT_LLM_MODEL=claude-opus-4-8 \
+SUPPORT_LLM_PROVIDER=anthropic SUPPORT_LLM_MODEL=claude-sonnet-5 \
   PYTHONPATH=ai uv run --frozen --project ai --extra llm \
   python -m evals.live_runner
 ```
