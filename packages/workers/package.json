@@ -11,6 +11,7 @@
     "test:integration": "RUN_WORKER_INTEGRATION_TESTS=true vitest run src/event-bus.integration.test.ts src/activities/ticket-lifecycle-persistence.integration.test.ts",
     "test:e2e": "RUN_E2E_TICKET_LIFECYCLE_TESTS=true vitest run src/e2e-ticket-lifecycle.integration.test.ts",
     "test:e2e:service": "RUN_AI_SERVICE_E2E_TESTS=true vitest run src/e2e-ai-service-bridge.integration.test.ts",
+    "test:jobs": "RUN_SCHEDULED_JOBS_LIVE_TESTS=true vitest run src/scheduled-jobs.integration.test.ts",
     "test:workflow": "RUN_TEMPORAL_WORKFLOW_TESTS=true vitest run src/ticket-lifecycle-workflow.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

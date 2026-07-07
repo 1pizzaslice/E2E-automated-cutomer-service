@@ -301,6 +301,41 @@ Current Milestone 5 Temporal foundation coverage:
 - Milestone 10 filled in the real channel send: `packages/workers/src/activities/ticket-lifecycle-persistence.test.ts` covers the production `createApproval`/`sendOutboundMessage`/`recordAuditEvent` activity implementations (approval persistence + `approval.requested` audit + retry dedup, outbound send-once + idempotent replay + provider-failure recording + fail-fast validation, audit append + retry dedup) over the in-memory store, and `packages/api/src/app.integration.test.ts` covers the API approval decision → `approval_completed` signal boundary with a recording signaler (approve/edit/reject/escalate, 409 double-decide, cross-tenant 404, read-only-role 403).
 - Next-response/resolution SLA timer tests, a live-PostgreSQL workers test for `createDatabaseTicketLifecyclePersistenceStore`, and a live workflow test composing the persistence activities into a running worker remain pending.
 
+Current Milestone 17 scheduled jobs coverage:
+
+- `packages/workers/src/job-schedules.test.ts` covers the schedule
+  bootstrap: config loading (defaults, UTC time parsing, explicit disable,
+  fail-fast aggregation of every problem), per-tenant schedule creation
+  (ids, workflow types, task queue, args, calendar spec),
+  create-if-missing idempotency (`ScheduleAlreadyRunning` → reported as
+  existing, never recreated), propagation of non-duplicate failures, and
+  the entrypoint composition (`bootstrapJobSchedules` with an injected
+  tenant lister and schedule client, disabled short-circuit).
+- `packages/workers/src/blob-sweeper.test.ts` covers the filesystem blob
+  sweeper: deletes `file://` refs under the base directory, idempotent
+  already-missing success, fail-closed refusal of refs outside the base
+  directory (including path traversal) and of foreign schemes, and mixed
+  partial batches.
+- `packages/workers/src/retention.test.ts` covers the executed retention
+  classes: sweep-before-clear with fail-closed sweep failures (rows kept
+  for retry), attachment purge (local blobs swept, provider refs
+  metadata-only, blocked message kept intact on sweep failure), AI-run
+  anonymization (once, fresh/already-anonymized rows untouched),
+  multi-class runs with audited per-class counts, legacy no-sweeper mode,
+  idempotent re-runs, fail-closed empty policy, and batch-limit reporting.
+- `packages/workers/src/scheduled-jobs.integration.test.ts` is the opt-in
+  live suite (`pnpm test:jobs`, requires `pnpm infra:up` + `DATABASE_URL`):
+  against real local Temporal/PostgreSQL/NATS it bootstraps both per-tenant
+  schedules idempotently through the production entrypoint path, triggers
+  them so real Schedule actions start the job workflows on the production
+  worker composition, and asserts the retention run cleared the raw-payload
+  ref, deleted both blobs from disk, purged the expired attachments (fresh
+  rows untouched), anonymized the expired AI run (metadata retained), and
+  audited `retention.applied` with per-class counts; QA sampling queued
+  the mandatory reviews and the `support.qa.review_created.v1` envelope
+  landed in JetStream; a second trigger of each schedule completed as a
+  no-op (no new audits, reviews, or purges).
+
 Current Milestone 6 Channel Intake coverage:
 
 - `packages/shared-schemas/src/index.test.ts` validates the normalized inbound message contract: it accepts the canonical email fixture, accepts a WhatsApp html-only message, accepts a media-only message with an empty body and a null attachment size, and rejects unsupported channels, messages with no text/html/attachments, a missing `external_message_id` (the dedup key), and unknown top-level keys.
@@ -702,6 +737,22 @@ Current coverage (Milestone 11):
   scrape from the Prometheus endpoint (`:8889`) under the documented
   names (`infra/observability/README.md`); alert definitions for the
   critical failure modes live in `infra/observability/alerts.yaml`.
+
+Current coverage (Milestone 17 scheduled jobs):
+
+- `@support/observability` metric tests cover the new job instruments
+  (`support.job.executions`/`support.job.duration_ms` with
+  job/outcome/tenant attributes, `support.retention.purged_items` per
+  retention class, zero-count purge suppression) across the recording and
+  OTel implementations.
+- `packages/workers/src/activities/scheduled-jobs-activities.test.ts`
+  asserts every job activity run records exactly one job metric with the
+  correct outcome (`succeeded`/`skipped`/`failed`), that failures rethrow
+  (Temporal retries preserved), and that unswept blobs record the
+  `retention_sweep_failed` critical-failure mode without failing the run.
+- Alert rules `SupportScheduledJobFailures` and
+  `SupportRetentionSweepFailures` live in `infra/observability/alerts.yaml`;
+  the overview dashboard adds job-run and retention-purge panels.
 
 ## 13. Test Review Checklist
 

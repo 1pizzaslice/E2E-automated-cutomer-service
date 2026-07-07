@@ -94,8 +94,9 @@ Concrete steps with the current codebase (Milestone 16):
    `GET /v1/policies/automation` must return `auto_send_enabled: false`.
 7. Confirm reporting works: `GET /v1/reports/pilot-weekly` returns the SOPS
    §14 metrics (zeros for a fresh tenant).
-8. Schedule the QA sampling job (§10) and the retention job (§16) per
-   tenant.
+8. Restart the worker once (`pnpm worker:start`) so the schedule bootstrap
+   creates the tenant's daily QA sampling and retention Temporal Schedules
+   (§10/§16, Milestone 17) — then confirm both appear in the Temporal UI.
 
 ## 2. KB Ingestion SOP
 
@@ -323,8 +324,25 @@ Sampling job (Milestone 11):
   approvals with the original AI draft and human edit), and
   `POST /v1/qa-reviews/{id}/complete` with the dimension scores (0-5) and
   defect taxonomy above.
-- Until a scheduler exists, run the job from a worker process or an
-  operational script per tenant on a daily cadence during pilot.
+  Scheduling (Milestone 17, ADR-0025): the job runs unattended, daily per
+  tenant, on Temporal Schedules:
+
+- Schedule id `support-qa-sampling-{tenant_id}`, fire time
+  `SUPPORT_QA_SAMPLING_SCHEDULE_UTC` (default 02:00 UTC, up to 5 minutes of
+  jitter), overlap SKIP, action = start `qaSamplingJobWorkflow` on the
+  worker task queue. The workflow drains the tenant's backlog in bounded
+  batches within one run.
+- The worker entrypoint (`pnpm worker:start`) ensures the schedule exists
+  for every active tenant on every start (create-if-missing; operator edits
+  such as pauses or time changes survive restarts). Onboarding a new tenant:
+  seed it, then restart the worker once — the bootstrap picks it up.
+- Operate schedules through the Temporal UI (`localhost:8080` locally) or
+  CLI: pause/unpause per tenant, "Trigger" for an immediate manual run,
+  delete + worker restart to recreate from configuration.
+- Verify runs: `support.job.executions{job="qa_sampling"}` counts runs per
+  tenant/outcome, worker logs carry `qa sampling job run completed`, and
+  each new review still emits `support.qa.review_created.v1`. Failed runs
+  fire the `SupportScheduledJobFailures` alert.
 
 ## 11. Prompt And AI Release SOP
 
@@ -508,7 +526,7 @@ Rules:
 - Limit trace access to authorized roles.
 - Do not paste secrets into prompts.
 
-Current implementation (Milestone 12):
+Current implementation (Milestones 12 + 17):
 
 - Log redaction is two-layered in `@support/observability`: secret-bearing
   keys (`authorization`, `api_key`, `secret`, `token`, `password`,
@@ -518,11 +536,25 @@ Current implementation (Milestone 12):
   (`[REDACTED_EMAIL]`/`[REDACTED_PHONE]`/`[REDACTED_NUMBER]`). Key-based
   redaction cannot be disabled.
 - Tenant retention settings live on `tenants.retention_policy`
-  (BACKEND_SPEC §22). Run the retention job per tenant on a daily cadence:
-  `runTenantRetentionJob` clears expired raw-payload references in bounded
-  batches, reports planned attachment/AI-run purges, returns the cleared
-  refs for the storage sweeper, and audits `retention.applied`. No
-  configuration means nothing is purged.
+  (BACKEND_SPEC §22). Retention runs unattended: a per-tenant Temporal
+  Schedule (`support-retention-{tenant_id}`, daily at
+  `SUPPORT_RETENTION_SCHEDULE_UTC`, default 02:30 UTC) starts
+  `retentionJobWorkflow`, which drains every configured class in bounded
+  batches — raw-payload blobs are deleted through the blob sweeper before
+  the database refs clear (fail-closed: an undeletable blob keeps its row
+  and retries next run), expired attachment metadata is purged (local
+  `file://` blobs swept first), and expired AI runs are anonymized in place
+  (`structured_output`/`guardrail_results` cleared, `anonymized_at`
+  stamped, run metrics retained). Every applied run audits
+  `retention.applied` with per-class counts. No configuration means nothing
+  is purged; `audit_event_days` is deliberately unenforced (append-only
+  compliance ledger, ADR-0025).
+- Operating the retention schedule mirrors the QA sampling runbook (§10):
+  worker-start bootstrap create-if-missing, pause/trigger via the Temporal
+  UI/CLI, verify via `support.job.executions{job="retention"}` and
+  `support.retention.purged_items`, failures alert via
+  `SupportScheduledJobFailures` and unswept blobs via
+  `SupportRetentionSweepFailures`.
 - Integration secrets are environment-variable references validated by the
   shared `SecretResolver` (`packages/integrations`); config rows never hold
   secret values.

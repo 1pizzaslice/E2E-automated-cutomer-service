@@ -23,11 +23,24 @@ import {
   type TicketLifecyclePersistenceStore,
 } from "./activities/ticket-lifecycle-persistence.js";
 import { createTicketLifecycleActivities } from "./activities/ticket-lifecycle-activities.js";
+import { createScheduledJobsActivities } from "./activities/scheduled-jobs-activities.js";
 import {
   createDatabaseAutomationPolicyStore,
   type AutomationPolicyStore,
 } from "./automation-policy.js";
+import {
+  createFilesystemBlobSweeper,
+  type BlobSweeper,
+} from "./blob-sweeper.js";
 import { connectNatsEventBus, loadNatsEventBusConfig } from "./event-bus.js";
+import {
+  createDatabaseQaSamplingStore,
+  type QaSamplingStore,
+} from "./qa-sampling.js";
+import {
+  createDatabaseRetentionStore,
+  type RetentionStore,
+} from "./retention.js";
 import { createWorkersLogger } from "./telemetry.js";
 import {
   createTicketLifecycleWorker,
@@ -190,6 +203,10 @@ export interface TicketLifecycleWorkerRuntimeOverrides {
   readonly automationPolicyStore?: AutomationPolicyStore;
   readonly aiGraphContextStore?: AiGraphContextStore;
   readonly fetchImpl?: typeof fetch;
+  /** Scheduled-job dependencies, injectable for tests (Milestone 17). */
+  readonly retentionStore?: RetentionStore;
+  readonly qaSamplingStore?: QaSamplingStore;
+  readonly blobSweeper?: BlobSweeper;
 }
 
 export interface RunningTicketLifecycleWorkerRuntime {
@@ -264,9 +281,27 @@ export async function startTicketLifecycleWorkerRuntime(
     }),
     { metrics, logger },
   );
+  // Milestone 17: the scheduled QA sampling and retention job workflows run
+  // on the same task queue, so their activities register alongside the
+  // lifecycle ones. Both jobs self-instrument (job.* spans + support.job.*
+  // metrics).
+  const retentionStore =
+    overrides.retentionStore ?? createDatabaseRetentionStore();
+  const qaSamplingStore =
+    overrides.qaSamplingStore ?? createDatabaseQaSamplingStore();
+  const blobSweeper = overrides.blobSweeper ?? createFilesystemBlobSweeper();
+  const scheduledJobsActivities = createScheduledJobsActivities({
+    retentionStore,
+    qaSamplingStore,
+    blobSweeper,
+    domainEventPublisher: eventBus.publisher,
+    metrics,
+    logger,
+    ...(overrides.now ? { now: overrides.now } : {}),
+  });
   const worker = await createTicketLifecycleWorker({
     config: config.temporal,
-    activities,
+    activities: { ...activities, ...scheduledJobsActivities },
   });
 
   logger.info("ticket lifecycle worker starting", {
@@ -290,6 +325,8 @@ export async function startTicketLifecycleWorkerRuntime(
     await worker.close();
     await automationPolicyStore?.close?.();
     await aiGraphContextStore?.close?.();
+    await retentionStore.close?.();
+    await qaSamplingStore.close?.();
     await store.close?.();
     await eventBus.close();
   }

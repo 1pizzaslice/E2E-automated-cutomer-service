@@ -16,8 +16,10 @@ import {
   approvalsRequestedCountQuery,
   auditActionCountQuery,
   clearMessageRawPayloadRefsQuery,
-  expiredAiRunsCountQuery,
-  expiredAttachmentMessagesCountQuery,
+  anonymizeAiRunsQuery,
+  clearMessageAttachmentsQuery,
+  expiredAiRunsForAnonymizationQuery,
+  expiredAttachmentMessagesQuery,
   expiredRawPayloadMessagesQuery,
   firstResponseMinutesAvgQuery,
   outboundMessageCountsQuery,
@@ -1122,23 +1124,70 @@ describe("milestone 12 security and pilot readiness queries", () => {
     expect(compiled.params).toContain("msg_b");
   });
 
-  it("counts retention placeholders for attachments and ai runs", () => {
-    const cutoff = new Date("2026-04-01T00:00:00.000Z");
-    const attachments = expiredAttachmentMessagesCountQuery(
+  it("selects expired attachment messages in bounded batches", () => {
+    const query = expiredAttachmentMessagesQuery(
       makeDb(),
       { tenantId: "ten_a" },
-      cutoff,
-    ).toSQL();
-    const aiRunsCount = expiredAiRunsCountQuery(
-      makeDb(),
-      { tenantId: "ten_a" },
-      cutoff,
-    ).toSQL();
+      { cutoff: new Date("2026-04-01T00:00:00.000Z"), limit: 100 },
+    );
+    const compiled = query.toSQL();
 
-    expect(attachments.sql).toContain("jsonb_array_length");
-    expect(attachments.sql).toContain('"messages"."created_at" < ');
-    expect(aiRunsCount.sql).toContain('from "ai_runs"');
-    expect(aiRunsCount.sql).toContain('"ai_runs"."created_at" < ');
+    expect(compiled.sql).toContain("jsonb_array_length");
+    expect(compiled.sql).toContain('"messages"."created_at" < ');
+    expect(compiled.sql).toContain("limit");
+    expect(compiled.params).toContain("ten_a");
+  });
+
+  it("clears attachment metadata only for the given tenant-scoped messages", () => {
+    const query = clearMessageAttachmentsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      ["msg_a", "msg_b"],
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "messages"');
+    expect(compiled.sql).toContain('"attachments" = ');
+    expect(compiled.sql).toContain('"messages"."message_id" in (');
+    expect(compiled.sql).toContain("jsonb_array_length");
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("msg_a");
+    expect(compiled.params).toContain("msg_b");
+  });
+
+  it("selects only non-anonymized expired ai runs in bounded batches", () => {
+    const query = expiredAiRunsForAnonymizationQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      { cutoff: new Date("2026-04-01T00:00:00.000Z"), limit: 100 },
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('from "ai_runs"');
+    expect(compiled.sql).toContain('"ai_runs"."anonymized_at" is null');
+    expect(compiled.sql).toContain('"ai_runs"."created_at" < ');
+    expect(compiled.sql).toContain("limit");
+    expect(compiled.params).toContain("ten_a");
+  });
+
+  it("anonymizes ai runs by clearing content columns and stamping anonymized_at", () => {
+    const query = anonymizeAiRunsQuery(
+      makeDb(),
+      { tenantId: "ten_a" },
+      ["run_a", "run_b"],
+      new Date("2026-04-01T00:00:00.000Z"),
+    );
+    const compiled = query.toSQL();
+
+    expect(compiled.sql).toContain('update "ai_runs"');
+    expect(compiled.sql).toContain('"structured_output" = ');
+    expect(compiled.sql).toContain('"guardrail_results" = ');
+    expect(compiled.sql).toContain('"anonymized_at" = ');
+    expect(compiled.sql).toContain('"ai_runs"."ai_run_id" in (');
+    expect(compiled.sql).toContain('"ai_runs"."anonymized_at" is null');
+    expect(compiled.params).toContain("ten_a");
+    expect(compiled.params).toContain("run_a");
+    expect(compiled.params).toContain("run_b");
   });
 
   it("builds the weekly report ticket aggregates", () => {
