@@ -17,7 +17,7 @@ from typing import Any, Callable, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from runtime.providers import DeterministicSupportModel
+from runtime.llm import build_model_provider
 from runtime.runner import run_support_graph
 from runtime.schemas import RuntimeRequest, RuntimeValidationError
 from runtime.tracing import GRAPH_VERSION
@@ -45,6 +45,12 @@ def create_app(
         config = load_service_config()
     logger = create_service_logger(config.environment)
 
+    # The model provider is resolved once at startup (Milestone 15): the
+    # deterministic offline model unless SUPPORT_LLM_PROVIDER selects a real
+    # (or scripted) provider. Chat-model clients are reusable across requests;
+    # a per-request ports_factory (tests, eval parity) still takes precedence.
+    model_provider = build_model_provider(config.llm)
+
     app = FastAPI(title="ai-runtime", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/health")
@@ -54,6 +60,7 @@ def create_app(
             "service": "ai-runtime",
             "mode": config.mode,
             "graph_version": GRAPH_VERSION,
+            "model_provider": config.llm.provider or "deterministic",
         }
 
     @app.post("/internal/ai/run")
@@ -104,7 +111,7 @@ def create_app(
             if ports_factory is not None:
                 model, retrieval, tool_executor = ports_factory(runtime_request)
             elif config.mode == "service":
-                model = DeterministicSupportModel()
+                model = model_provider
                 retrieval = HttpRetrieval(
                     config.api_base_url,
                     config.api_token,
@@ -120,7 +127,7 @@ def create_app(
                     logger=logger,
                 )
             else:  # local mode: run_support_graph uses its in-memory defaults
-                model = DeterministicSupportModel()
+                model = model_provider
                 retrieval = None
                 tool_executor = None
 

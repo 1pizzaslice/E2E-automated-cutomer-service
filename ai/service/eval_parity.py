@@ -91,6 +91,7 @@ def result_from_wire(payload: dict[str, Any]) -> RuntimeResult:
             final_recommendation=payload["final_recommendation"],
             approval_package=payload["approval_package"],
             eval_signals=payload["eval_signals"],
+            model=payload.get("model"),
         )
     return RuntimeResult(
         status="failed",
@@ -101,6 +102,7 @@ def result_from_wire(payload: dict[str, Any]) -> RuntimeResult:
         retryable=payload["retryable"],
         reason_codes=tuple(payload["reason_codes"]),
         eval_signals=payload["eval_signals"],
+        model=payload.get("model"),
     )
 
 

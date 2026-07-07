@@ -277,9 +277,10 @@ export function createHttpRunAiGraph(
  * already mirror each other (the Python runtime was written against this
  * boundary); the two deliberate differences are documented here:
  * `routing_decision.priority` keeps the workflow-owned ticket priority (the
- * runtime's own `p1`-`p4` vocabulary stays inside `classification`), and
- * `approval_package` is not part of the activity contract (the workflow builds
- * approval metadata itself) so it is dropped.
+ * runtime's classification priority — platform `p0`-`p3` since Milestone 15 —
+ * stays visible inside `classification`), and `approval_package` is not part
+ * of the activity contract (the workflow builds approval metadata itself) so
+ * it is dropped.
  */
 function mapRuntimeResult(
   input: RunAiGraphActivityInput,
@@ -296,6 +297,7 @@ function mapRuntimeResult(
       retryable: result.retryable,
       reason_codes: result.reason_codes,
       eval_signals: result.eval_signals,
+      model: result.model ?? null,
     };
   }
 
@@ -325,6 +327,7 @@ function mapRuntimeResult(
     guardrails: result.guardrails,
     final_recommendation: result.final_recommendation,
     eval_signals: result.eval_signals,
+    model: result.model ?? null,
   };
 }
 

@@ -114,7 +114,26 @@ at the host API for tool execution and KB retrieval). Setting
 `AI_RUNTIME_SERVICE_URL` (plus `SUPPORT_AI_SERVICE_TOKEN`) on the worker moves
 the AI decision into the sidecar; unset, the worker keeps the in-process
 deterministic stand-in. The API's internal tool endpoint authenticates the
-sidecar with `SUPPORT_INTERNAL_API_TOKEN`. The sidecar live end-to-end test
+sidecar with `SUPPORT_INTERNAL_API_TOKEN`.
+
+Real model providers (Milestone 15, ADR-0023) are config-only swaps behind
+the same sidecar: set `SUPPORT_LLM_PROVIDER`/`SUPPORT_LLM_MODEL` plus the
+provider key (pilot default: `anthropic` + Claude with `ANTHROPIC_API_KEY`);
+unset keeps the deterministic offline model, and `scripted` runs the offline
+provider-agnosticism stand-in. Embeddings are likewise env-selected
+(`SUPPORT_EMBEDDING_PROVIDER=openai`, pilot default `text-embedding-3-small`
+with `OPENAI_API_KEY`); one shared embedder serves KB ingestion and
+retrieval, chunk rows record their embedding model, and retrieval fails
+closed (HTTP 409) on a mismatch — an embedding swap means re-ingesting the KB
+(SOPS §11.2). Any provider/model/prompt change must pass the live eval gate:
+
+```bash
+SUPPORT_LLM_PROVIDER=anthropic SUPPORT_LLM_MODEL=claude-opus-4-8 \
+  PYTHONPATH=ai uv run --frozen --project ai --extra llm \
+  python -m evals.live_runner
+```
+
+The sidecar live end-to-end test
 spawns the sidecar via uv, listens the API on a real port, and drives the
 happy path plus sidecar-down/sidecar-500 degradation:
 
@@ -179,7 +198,7 @@ Attachment binary storage/oversize rejection, HTML sanitization to `body_html_re
 
 ## Current AI Runtime
 
-`ai/` holds the Milestone 9 Python AI runtime: the v1 support agent graph. Per ADR-0016 it is a self-contained, dependency-free package that mirrors LangGraph's node model behind pluggable ports (`ModelProvider`, `RetrievalPort`, `ToolExecutor`), so it runs offline and reproducibly under the stdlib-only local harness; the real LangGraph library and a model/provider SDK plug in behind those ports later. The graph is `normalize → classifier → retrieval planner → retrieval → policy → tool planner → tool execution → (conditional) composer → guardrail critic → escalation → finalize`. Classification and drafting go through the model port; policy and guardrail logic is deterministic governance that defaults to human approval, forces `human_only` for legal/chargeback/fraud/safety/prompt-injection, never auto-sends without grounding, and derives the runtime's tool permissions from policy. The tool-execution node speaks the Milestone 8 `ToolCallRequest`/`ToolCallResult` envelope; `RuntimeResult` mirrors the Temporal `RunAiGraphActivityResult` boundary. `ai/evals/` holds an initial golden dataset and an offline eval runner that enforces hard-fail safety gates (zero unsafe auto-send, zero cross-tenant leakage, prompt-injection fully neutralized). Run the tests with `pnpm test:py` and the eval report with `PYTHONPATH=ai python3 -m evals.runner`. See `docs/AI_RUNTIME_HARNESS.md` §19. Since Milestone 14 the runtime also ships as an HTTP sidecar under `ai/service/` (FastAPI via the uv `service` extra): `POST /internal/ai/run` runs the same graph behind bearer-token auth, with HTTP port adapters calling the API's governed tool registry and KB search in service mode; `python -m service.eval_parity` proves service-path runs byte-identical to in-process runs. See `docs/AI_RUNTIME_HARNESS.md` §20.
+`ai/` holds the Milestone 9 Python AI runtime: the v1 support agent graph. Per ADR-0016 it is a self-contained, dependency-free package that mirrors LangGraph's node model behind pluggable ports (`ModelProvider`, `RetrievalPort`, `ToolExecutor`), so it runs offline and reproducibly under the stdlib-only local harness; the real LangGraph library and a model/provider SDK plug in behind those ports later. The graph is `normalize → classifier → retrieval planner → retrieval → policy → tool planner → tool execution → (conditional) composer → guardrail critic → escalation → finalize`. Classification and drafting go through the model port; policy and guardrail logic is deterministic governance that defaults to human approval, forces `human_only` for legal/chargeback/fraud/safety/prompt-injection, never auto-sends without grounding, and derives the runtime's tool permissions from policy. The tool-execution node speaks the Milestone 8 `ToolCallRequest`/`ToolCallResult` envelope; `RuntimeResult` mirrors the Temporal `RunAiGraphActivityResult` boundary. `ai/evals/` holds an initial golden dataset and an offline eval runner that enforces hard-fail safety gates (zero unsafe auto-send, zero cross-tenant leakage, prompt-injection fully neutralized). Run the tests with `pnpm test:py` and the eval report with `PYTHONPATH=ai python3 -m evals.runner`. See `docs/AI_RUNTIME_HARNESS.md` §19. Since Milestone 14 the runtime also ships as an HTTP sidecar under `ai/service/` (FastAPI via the uv `service` extra): `POST /internal/ai/run` runs the same graph behind bearer-token auth, with HTTP port adapters calling the API's governed tool registry and KB search in service mode; `python -m service.eval_parity` proves service-path runs byte-identical to in-process runs. See `docs/AI_RUNTIME_HARNESS.md` §20. Since Milestone 15 the real model is a config-selected LangChain adapter behind the same `ModelProvider` port (`runtime/llm.py`, versioned prompt files under `runtime/prompts/`, structured outputs, usage/cost capture onto `ai_runs`); `python -m evals.live_runner` is the opt-in live gate against a configured provider. See `docs/AI_RUNTIME_HARNESS.md` §21.
 
 ## Current Observability
 

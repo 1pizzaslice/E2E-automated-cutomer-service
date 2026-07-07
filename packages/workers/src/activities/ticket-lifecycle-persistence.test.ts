@@ -551,6 +551,71 @@ describe("createPersistedRunAiGraph", () => {
     expect(metrics.aiRuns[0]?.status).toBe("failed");
   });
 
+  it("prefers runtime-reported model usage over static provenance", async () => {
+    const store = createInMemoryTicketLifecyclePersistenceStore(makeFixtures());
+    const runAiGraph = createPersistedRunAiGraph(
+      async () => ({
+        ...succeededResult,
+        model: {
+          provider: "anthropic",
+          model_id: "claude-opus-4-8",
+          prompt_versions: {
+            "support_response_composer.v1": "v1",
+            "support_classifier.v1": "v1",
+          },
+          calls: 2,
+          input_tokens: 1200,
+          output_tokens: 340,
+          latency_ms: 2100,
+          cost_estimate: 0.0145,
+        },
+      }),
+      {
+        store,
+        provenance: {
+          promptVersion: "support_graph.v1",
+          modelProvider: "deterministic",
+          modelId: "deterministic-support-v1",
+        },
+      },
+    );
+
+    await runAiGraph(runInput);
+
+    expect(store.listAiRuns()[0]).toMatchObject({
+      modelProvider: "anthropic",
+      modelId: "claude-opus-4-8",
+      // Sorted prompt ids (they carry their own versions) in one column.
+      promptVersion: "support_classifier.v1,support_response_composer.v1",
+      inputTokens: 1200,
+      outputTokens: 340,
+      costEstimate: 0.0145,
+    });
+  });
+
+  it("falls back to composition provenance when the result has no model usage", async () => {
+    const store = createInMemoryTicketLifecyclePersistenceStore(makeFixtures());
+    const runAiGraph = createPersistedRunAiGraph(async () => succeededResult, {
+      store,
+      provenance: {
+        promptVersion: "support_graph.v1",
+        modelProvider: "deterministic",
+        modelId: "deterministic-support-v1",
+      },
+    });
+
+    await runAiGraph(runInput);
+
+    expect(store.listAiRuns()[0]).toMatchObject({
+      modelProvider: "deterministic",
+      modelId: "deterministic-support-v1",
+      promptVersion: "support_graph.v1",
+      inputTokens: null,
+      outputTokens: null,
+      costEstimate: null,
+    });
+  });
+
   it("dedupes retried persistence on the same deterministic run id", async () => {
     const store = createInMemoryTicketLifecyclePersistenceStore(makeFixtures());
     const runAiGraph = createPersistedRunAiGraph(async () => succeededResult, {

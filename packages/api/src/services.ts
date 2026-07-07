@@ -119,6 +119,7 @@ import type {
   TicketUpdateRequest,
   ToolCallResponse,
 } from "@support/shared-schemas";
+import { createEmbedderFromEnv, type Embedder } from "@support/integrations";
 import {
   createTemporalApprovalWorkflowSignaler,
   type ApprovalWorkflowSignaler,
@@ -131,6 +132,7 @@ import {
 import {
   createDatabaseKbRetrievalService,
   DEFAULT_KB_SEARCH_LIMIT,
+  EmbeddingModelMismatchError,
   type KbRetrievalService,
 } from "./kb-retrieval.js";
 import type {
@@ -426,6 +428,13 @@ export interface ApiServices {
 export interface DatabaseApiServicesDeps {
   readonly kbIngestion?: KbIngestionService;
   readonly kbRetrieval?: KbRetrievalService;
+  /**
+   * The shared embedder instance wired into BOTH KB ingestion and retrieval
+   * (Milestone 15, ADR-0014): chunk and query vectors must share one
+   * embedding space. Defaults to the env-selected factory
+   * (`SUPPORT_EMBEDDING_PROVIDER`; deterministic unless configured).
+   */
+  readonly embedder?: Embedder;
   readonly approvalSignaler?: ApprovalWorkflowSignaler;
   readonly metrics?: SupportMetrics;
 }
@@ -434,8 +443,17 @@ export function createDatabaseApiServices(
   deps: DatabaseApiServicesDeps = {},
 ): ApiServices {
   let database: ReturnType<typeof createDatabaseFromEnv> | undefined;
-  const kbIngestion = deps.kbIngestion ?? createDatabaseKbIngestionService();
-  const kbRetrieval = deps.kbRetrieval ?? createDatabaseKbRetrievalService();
+  const embedder =
+    deps.embedder ??
+    (deps.kbIngestion && deps.kbRetrieval
+      ? undefined
+      : createEmbedderFromEnv());
+  const kbIngestion =
+    deps.kbIngestion ??
+    createDatabaseKbIngestionService(embedder ? { embedder } : {});
+  const kbRetrieval =
+    deps.kbRetrieval ??
+    createDatabaseKbRetrievalService(embedder ? { embedder } : {});
   const approvalSignaler =
     deps.approvalSignaler ?? createTemporalApprovalWorkflowSignaler();
   const metrics = deps.metrics ?? createNoopSupportMetrics();
@@ -981,13 +999,26 @@ export function createDatabaseApiServices(
         });
       },
       async search(context, input) {
-        const results = await kbRetrieval.search({
-          tenantId: context.tenant.tenantId,
-          query: input.query,
-          limit: input.limit,
-          documentType: input.document_type,
-          sourceType: input.source_type,
-        });
+        let results;
+
+        try {
+          results = await kbRetrieval.search({
+            tenantId: context.tenant.tenantId,
+            query: input.query,
+            limit: input.limit,
+            documentType: input.document_type,
+            sourceType: input.source_type,
+          });
+        } catch (error) {
+          // Embedding-space mismatch is an operator problem (provider swap
+          // without a re-embed), surfaced as a clear conflict instead of a
+          // generic 500; consumers (incl. the AI sidecar) fail safe on it.
+          if (error instanceof EmbeddingModelMismatchError) {
+            throw new HttpError(409, "CONFLICT", error.message);
+          }
+
+          throw error;
+        }
 
         return {
           results,

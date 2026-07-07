@@ -12,7 +12,22 @@
 
 export const EMBEDDING_DIMENSIONS = 1536;
 
+/**
+ * Stable identifier of the deterministic embedder's embedding space. Chunks
+ * ingested before model-id recording existed (Milestone 15) carry no id and
+ * are treated as this one — every pre-existing chunk was produced by the
+ * deterministic embedder.
+ */
+export const DETERMINISTIC_EMBEDDER_MODEL_ID = "deterministic-fnv1a-1536";
+
 export interface Embedder {
+  /**
+   * Stable identifier of the embedding space this embedder produces (e.g.
+   * `openai:text-embedding-3-small`). Recorded on every ingested chunk and
+   * enforced at query time: cosine distance between vectors from different
+   * models is meaningless, so ingestion and retrieval must match (ADR-0014).
+   */
+  readonly modelId: string;
   /** Vector dimensionality; must match the `kb_chunks.embedding` column. */
   readonly dimensions: number;
   /** Embed a batch of texts, preserving input order. */
@@ -89,6 +104,7 @@ export function createDeterministicEmbedder(
   }
 
   return {
+    modelId: DETERMINISTIC_EMBEDDER_MODEL_ID,
     dimensions,
     async embed(texts) {
       return texts.map((text) => embedOne(text));

@@ -51,7 +51,12 @@ SENSITIVE_FLAGS: tuple[str, ...] = HARD_SENSITIVE_FLAGS + SOFT_SENSITIVE_FLAGS
 
 SENTIMENTS: tuple[str, ...] = ("positive", "neutral", "frustrated", "angry")
 URGENCIES: tuple[str, ...] = ("low", "normal", "high")
-PRIORITIES: tuple[str, ...] = ("p1", "p2", "p3", "p4")
+# The platform ticket priority vocabulary (`TicketPrioritySchema` in
+# @support/shared-schemas): p0 is the most urgent and is reserved for
+# operator-declared incidents, so classifiers emit p1 (sensitive/urgent)
+# through p3 (routine). Unified with the platform at Milestone 15 — the
+# runtime previously spoke its own p1-p4 scale.
+PRIORITIES: tuple[str, ...] = ("p0", "p1", "p2", "p3")
 AUTOMATION_MODES: tuple[str, ...] = ("auto_send", "human_approve", "human_only")
 RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high")
 
@@ -524,6 +529,11 @@ class RuntimeResult:
     final_recommendation: Optional[dict[str, Any]] = None
     approval_package: Optional[dict[str, Any]] = None
     eval_signals: dict[str, Any] = field(default_factory=dict)
+    # Aggregated model provenance/usage for the run (Milestone 15): provider,
+    # model id, prompt versions, token/latency/cost totals. Present on both
+    # succeeded and failed runs once any model call happened; the worker
+    # persists it onto `ai_runs`.
+    model: Optional[dict[str, Any]] = None
     # failed fields
     error_code: Optional[str] = None
     error_message: Optional[str] = None
@@ -544,6 +554,7 @@ class RuntimeResult:
                 "final_recommendation": self.final_recommendation,
                 "approval_package": self.approval_package,
                 "eval_signals": self.eval_signals,
+                "model": self.model,
             }
         return {
             "status": "failed",
@@ -554,4 +565,5 @@ class RuntimeResult:
             "retryable": self.retryable,
             "reason_codes": list(self.reason_codes),
             "eval_signals": self.eval_signals,
+            "model": self.model,
         }

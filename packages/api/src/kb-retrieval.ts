@@ -8,12 +8,53 @@ import {
 } from "@support/db";
 import {
   createDeterministicEmbedder,
+  DETERMINISTIC_EMBEDDER_MODEL_ID,
   type Embedder,
 } from "@support/integrations";
 import type { KbSearchResult } from "@support/shared-schemas";
 
 /** Default number of chunks a retrieval call returns when none is requested. */
 export const DEFAULT_KB_SEARCH_LIMIT = 8;
+
+/**
+ * Default similarity floor: 0 keeps every non-negative-scoring hit, which is
+ * the safe default for the deterministic lexical embedder. Real embedding
+ * providers should configure a floor per environment (SUPPORT_KB_MIN_SIMILARITY;
+ * `.env.example` documents the pilot value) so barely-related chunks never
+ * reach the AI runtime as "evidence".
+ */
+export const DEFAULT_KB_MIN_SIMILARITY = 0;
+
+/**
+ * Default cumulative content budget (in characters) across the returned hits
+ * — a max-context cap applied before results enter the AI runtime
+ * (ADR-0015 follow-up). Generous enough that the default 8-chunk page is
+ * unaffected for typical KB chunks; tighten per environment with
+ * SUPPORT_KB_MAX_CONTEXT_CHARS.
+ */
+export const DEFAULT_KB_MAX_CONTEXT_CHARS = 24_000;
+
+/**
+ * Thrown when retrieval encounters chunks embedded by a different model than
+ * the active embedder (Milestone 15). Cosine distance across embedding spaces
+ * is meaningless, so this fails closed: the operator must re-ingest the KB
+ * with the active provider (or restore the previous provider config) instead
+ * of serving garbage rankings. Chunks ingested before model-id recording are
+ * treated as deterministic-embedder chunks.
+ */
+export class EmbeddingModelMismatchError extends Error {
+  constructor(
+    readonly expectedModelId: string,
+    readonly foundModelId: string,
+  ) {
+    super(
+      `KB chunks were embedded with "${foundModelId}" but the active embedder is ` +
+        `"${expectedModelId}". Re-ingest the knowledge base with the active embedding ` +
+        "provider before searching (provider swap = full re-embed).",
+    );
+    this.name = "EmbeddingModelMismatchError";
+  }
+}
 
 export interface KbRetrievalSearchParams {
   /** Query embedding; produced by the same `Embedder` used at ingestion. */
@@ -84,6 +125,54 @@ export interface KbRetrievalServiceDeps {
   readonly store: KbRetrievalStore;
   readonly embedder?: Embedder;
   readonly defaultLimit?: number;
+  /** Hits scoring below this cosine similarity are dropped (floor). */
+  readonly minScore?: number;
+  /** Cumulative content budget (chars) across returned hits (context cap). */
+  readonly maxContextChars?: number;
+}
+
+/**
+ * Env-driven retrieval bounds (Milestone 15): the similarity floor and the
+ * max-context cap applied before results enter the AI runtime.
+ */
+export interface KbRetrievalEnvConfig {
+  readonly minScore: number;
+  readonly maxContextChars: number;
+}
+
+export function loadKbRetrievalEnvConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): KbRetrievalEnvConfig {
+  return {
+    minScore: parseNumberEnv(
+      env.SUPPORT_KB_MIN_SIMILARITY,
+      "SUPPORT_KB_MIN_SIMILARITY",
+      DEFAULT_KB_MIN_SIMILARITY,
+    ),
+    maxContextChars: parseNumberEnv(
+      env.SUPPORT_KB_MAX_CONTEXT_CHARS,
+      "SUPPORT_KB_MAX_CONTEXT_CHARS",
+      DEFAULT_KB_MAX_CONTEXT_CHARS,
+    ),
+  };
+}
+
+function parseNumberEnv(
+  raw: string | undefined,
+  name: string,
+  fallback: number,
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+
+  const value = Number(raw);
+
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative number (got "${raw}").`);
+  }
+
+  return value;
 }
 
 function mapHit(hit: KbChunkSearchHit): KbSearchResult {
@@ -109,6 +198,8 @@ export function createKbRetrievalService(
 ): KbRetrievalService {
   const embedder = deps.embedder ?? createDeterministicEmbedder();
   const defaultLimit = deps.defaultLimit ?? DEFAULT_KB_SEARCH_LIMIT;
+  const minScore = deps.minScore ?? DEFAULT_KB_MIN_SIMILARITY;
+  const maxContextChars = deps.maxContextChars ?? DEFAULT_KB_MAX_CONTEXT_CHARS;
 
   return {
     async search({ tenantId, query, limit, documentType, sourceType }) {
@@ -125,7 +216,42 @@ export function createKbRetrievalService(
         sourceType,
       });
 
-      return hits.map(mapHit);
+      // Ingestion/retrieval embedding-space match is enforced at query time
+      // (Milestone 15): a chunk embedded by a different model makes the whole
+      // search fail closed instead of ranking across incompatible spaces.
+      // Pre-Milestone-15 chunks carry no id and were deterministic-embedded.
+      for (const hit of hits) {
+        const recorded =
+          typeof hit.metadata["embedding_model_id"] === "string"
+            ? (hit.metadata["embedding_model_id"] as string)
+            : DETERMINISTIC_EMBEDDER_MODEL_ID;
+
+        if (recorded !== embedder.modelId) {
+          throw new EmbeddingModelMismatchError(embedder.modelId, recorded);
+        }
+      }
+
+      // Similarity floor, then the max-context cap: keep hits (highest score
+      // first, the store's order) until the cumulative content budget is
+      // spent. The top hit is always kept so a single long chunk can never
+      // starve retrieval entirely.
+      const results: KbSearchResult[] = [];
+      let budget = maxContextChars;
+
+      for (const hit of hits) {
+        if (hit.score < minScore) {
+          continue;
+        }
+
+        if (results.length > 0 && hit.content.length > budget) {
+          break;
+        }
+
+        results.push(mapHit(hit));
+        budget -= hit.content.length;
+      }
+
+      return results;
     },
     async close() {
       await deps.store.close?.();
@@ -181,14 +307,33 @@ export function createDatabaseKbRetrievalStore(
   };
 }
 
+export interface DatabaseKbRetrievalServiceOptions {
+  /**
+   * The shared production embedder (Milestone 15) — the SAME instance wired
+   * into ingestion, so query and chunk vectors share an embedding space.
+   * Defaults to the deterministic embedder.
+   */
+  readonly embedder?: Embedder;
+  readonly minScore?: number;
+  readonly maxContextChars?: number;
+}
+
 /**
- * Default production KB retrieval service: a lazily-connected PostgreSQL store
- * and the deterministic embedder. Constructing it opens no connections. In
- * production the same hosted-model `Embedder` used for ingestion must be wired
- * here so query and chunk vectors share an embedding space.
+ * Default production KB retrieval service: a lazily-connected PostgreSQL
+ * store, the supplied (default deterministic) embedder, and the env-driven
+ * similarity floor / max-context cap. Constructing it opens no connections.
  */
-export function createDatabaseKbRetrievalService(): KbRetrievalService {
-  return createKbRetrievalService({ store: createDatabaseKbRetrievalStore() });
+export function createDatabaseKbRetrievalService(
+  options: DatabaseKbRetrievalServiceOptions = {},
+): KbRetrievalService {
+  const envConfig = loadKbRetrievalEnvConfig();
+
+  return createKbRetrievalService({
+    store: createDatabaseKbRetrievalStore(),
+    ...(options.embedder ? { embedder: options.embedder } : {}),
+    minScore: options.minScore ?? envConfig.minScore,
+    maxContextChars: options.maxContextChars ?? envConfig.maxContextChars,
+  });
 }
 
 /** Minimal read model the in-memory retrieval store needs from a chunk row. */

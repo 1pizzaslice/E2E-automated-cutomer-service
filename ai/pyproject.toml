@@ -9,14 +9,19 @@ requires-python = ">=3.12"
 # reproducible regardless of the system `python3` (which is 3.14).
 dependencies = []
 
-# The real AI stack, proven to install on managed CPython 3.12 via uv. A session
-# migrating a port to a real model/graph pulls these with `uv sync --extra llm`
-# and swaps the adapter behind ModelProvider / RetrievalPort / ToolExecutor.
+# The real AI stack, proven to install on managed CPython 3.12 via uv. Pull
+# with `uv sync --extra llm`. Milestone 15 wires the real model behind the
+# ModelProvider port via LangChain's init_chat_model (runtime/llm.py):
+# `langchain` provides init_chat_model, and the provider packages back the
+# pilot default (Anthropic Claude) plus the second-provider proof (OpenAI).
 [project.optional-dependencies]
 llm = [
   "pydantic>=2",
   "langgraph>=0.2",
   "langchain-core>=0.3",
+  "langchain>=0.3",
+  "langchain-anthropic>=0.3",
+  "langchain-openai>=0.3",
 ]
 
 # The Milestone 14 service bridge: a FastAPI sidecar exposing the runtime as

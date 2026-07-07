@@ -1854,10 +1854,11 @@ export const AiRuntimeRunRequestSchema = z
  * Wire result of `POST /internal/ai/run` — the JSON emitted by the Python
  * runtime's `RuntimeResult.to_dict()`. A `succeeded` run carries the full
  * graph output; a `failed` run carries the structured error that routes the
- * ticket to a human. `routing_decision.priority` is the runtime's own
- * priority vocabulary (`p1`-`p4`), deliberately looser than the platform
- * `TicketPrioritySchema`: the workflow-owned ticket priority remains the
- * platform truth and the activity maps accordingly.
+ * ticket to a human. `routing_decision.priority` speaks the platform
+ * `TicketPrioritySchema` vocabulary since Milestone 15 (the runtime's former
+ * `p1`-`p4` scale was unified to `p0`-`p3`); it stays a plain string on the
+ * wire because the workflow-owned ticket priority remains the platform truth
+ * and the activity maps accordingly.
  */
 export const AiRuntimeRoutingDecisionSchema = z.object({
   topic: z.string().nullable(),
@@ -1900,6 +1901,24 @@ export const AiRuntimeFinalRecommendationSchema = z.object({
   reason_codes: z.array(z.string()),
 });
 
+/**
+ * Aggregated model provenance/usage for one AI run (Milestone 15): which
+ * provider and model produced the run, the versioned prompts used, and the
+ * token/latency/cost totals across all model calls. Optional/nullable on the
+ * wire so older sidecars remain compatible; when present the worker persists
+ * it onto `ai_runs` in place of the static composition-time provenance.
+ */
+export const AiRuntimeModelUsageSchema = z.object({
+  provider: z.string().min(1),
+  model_id: z.string().min(1),
+  prompt_versions: z.record(z.string(), z.string()),
+  calls: z.number().int().min(0),
+  input_tokens: z.number().int().min(0),
+  output_tokens: z.number().int().min(0),
+  latency_ms: z.number().int().min(0),
+  cost_estimate: z.number().min(0),
+});
+
 export const AiRuntimeRunResultSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("succeeded"),
@@ -1913,6 +1932,7 @@ export const AiRuntimeRunResultSchema = z.discriminatedUnion("status", [
     final_recommendation: AiRuntimeFinalRecommendationSchema,
     approval_package: JsonObjectSchema.nullable().optional(),
     eval_signals: JsonObjectSchema,
+    model: AiRuntimeModelUsageSchema.nullable().optional(),
   }),
   z.object({
     status: z.literal("failed"),
@@ -1923,11 +1943,13 @@ export const AiRuntimeRunResultSchema = z.discriminatedUnion("status", [
     retryable: z.boolean(),
     reason_codes: z.array(z.string()),
     eval_signals: JsonObjectSchema,
+    model: AiRuntimeModelUsageSchema.nullable().optional(),
   }),
 ]);
 
 export type AiRiskLevel = z.infer<typeof AiRiskLevelSchema>;
 export type AiRuntimeMessage = z.infer<typeof AiRuntimeMessageSchema>;
+export type AiRuntimeModelUsage = z.infer<typeof AiRuntimeModelUsageSchema>;
 export type AiRuntimeRunRequest = z.infer<typeof AiRuntimeRunRequestSchema>;
 export type AiRuntimeRoutingDecision = z.infer<
   typeof AiRuntimeRoutingDecisionSchema

@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Optional
+
+from runtime.llm import LlmConfig, collect_llm_config
 
 # Mirror of SECRET_REF_PATTERN in packages/integrations/src/secrets.ts: a secret
 # reference must be a plausible environment variable name.
@@ -36,6 +38,12 @@ class ServiceConfig:
     api_token: Optional[str]
     http_timeout_s: float
     environment: str
+    # Model provider selection (Milestone 15, runtime/llm.py): unset keeps the
+    # deterministic offline model; a real provider activates only by explicit
+    # SUPPORT_LLM_PROVIDER / SUPPORT_LLM_MODEL configuration.
+    llm: LlmConfig = field(
+        default_factory=lambda: LlmConfig(provider=None, model=None, api_key=None)
+    )
 
 
 def _resolve_secret(
@@ -107,6 +115,8 @@ def load_service_config(env: Mapping[str, str] = os.environ) -> ServiceConfig:
 
     environment = env.get("SUPPORT_ENVIRONMENT", "local")
 
+    llm = collect_llm_config(env, errors)
+
     if errors:
         raise ValueError(
             "invalid AI runtime service configuration:\n"
@@ -121,4 +131,5 @@ def load_service_config(env: Mapping[str, str] = os.environ) -> ServiceConfig:
         api_token=api_token,
         http_timeout_s=http_timeout_s,
         environment=environment,
+        llm=llm,
     )

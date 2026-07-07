@@ -317,6 +317,41 @@ Release stages:
 4. Human approval mode.
 5. Limited auto-send if eligible.
 
+### 11.1 LLM Provider/Model Swap (Milestone 15)
+
+Swapping the sidecar's model is a config change, never a code change: set
+`SUPPORT_LLM_PROVIDER` / `SUPPORT_LLM_MODEL` (plus the provider key env var)
+and restart the sidecar. The mandatory gate before serving traffic on the new
+configuration:
+
+```
+SUPPORT_LLM_PROVIDER=<provider> SUPPORT_LLM_MODEL=<model> <PROVIDER_KEY>=... \
+  PYTHONPATH=ai uv run --frozen --project ai --extra llm \
+  python -m evals.live_runner
+```
+
+Both suites (golden + injection) must PASS with every hard-fail gate green
+(zero unsafe auto-send, zero cross-tenant leaks, injection pass rate 1.0).
+Record the pass rates in `TODO.md`. Prompt changes follow the same gate and
+require a new prompt version file (`ai/runtime/prompts/<id>.v<N>.md`) — never
+edit a shipped version in place.
+
+### 11.2 Embedding Provider Swap = Full Re-Embed
+
+Embedding vectors from different models are incompatible. To swap embedding
+providers/models (`SUPPORT_EMBEDDING_PROVIDER` / `SUPPORT_EMBEDDING_MODEL`):
+
+1. Change the env configuration and restart the API.
+2. Re-ingest every active KB document per tenant (`POST
+/v1/kb/documents/{id}/ingest`) so all chunks are re-embedded in the new
+   space and stamped with the new `embedding_model_id`.
+3. Verify retrieval: a search returning HTTP 409 (embedding model mismatch)
+   means step 2 is incomplete — retrieval fails closed until every surviving
+   chunk matches the active embedder. During the mismatch window the AI graph
+   degrades safely: retrieval failure routes tickets to human.
+4. Re-run the retrieval eval fixtures and set/tune `SUPPORT_KB_MIN_SIMILARITY`
+   for the new model (suggested 0.25 for `text-embedding-3-small`).
+
 ## 12. Tool Release SOP
 
 New tool checklist:
