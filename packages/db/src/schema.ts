@@ -277,12 +277,18 @@ export const users = pgTable(
     email: text("email").notNull(),
     displayName: text("display_name").notNull(),
     status: userStatusEnum("status").notNull().default("active"),
+    // Immutable subject (`sub`) of the hosted-IdP identity (Milestone 16).
+    // Tokens carry identity only; roles stay DB-sourced via user_roles.
+    idpSubject: text("idp_subject"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (table) => [
     index("users_tenant_id_idx").on(table.tenantId),
     uniqueIndex("users_email_idx").on(table.email),
+    uniqueIndex("users_idp_subject_idx")
+      .on(table.idpSubject)
+      .where(sql`${table.idpSubject} is not null`),
   ],
 );
 

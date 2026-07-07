@@ -119,9 +119,14 @@ function makeStubServices(): ApiServices {
 
 function makeApp(options: { readonly internalAuthDisabled?: boolean } = {}) {
   const fixture = makeToolExecutorFixture();
+  // Machine-token auth behaves identically in both user-auth modes (it is
+  // checked before user auth); header mode keeps the user-role fixtures
+  // simple. JWT-mode rejection of user tokens on the internal route is
+  // covered by rbac-matrix.test.ts.
   const app = buildApp({
     services: makeStubServices(),
     toolExecutor: fixture.executor,
+    auth: { mode: "insecure-headers" },
     internalAuth: options.internalAuthDisabled
       ? null
       : { token: INTERNAL_TOKEN },

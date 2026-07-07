@@ -46,7 +46,7 @@ Required onboarding artifacts:
 
 ### 1.1 Pilot Onboarding (v1 Implementation)
 
-Concrete steps with the current codebase (Milestone 12):
+Concrete steps with the current codebase (Milestone 16):
 
 1. Start infrastructure (`pnpm infra:up`) and apply migrations
    (`pnpm db:migrate`).
@@ -63,6 +63,24 @@ Concrete steps with the current codebase (Milestone 12):
    pilot default is human approval for everything), and the six global
    first-party `tool_definitions`. For a second pilot, call
    `buildPilotSeedPlan({ tenantId })` with a different tenant id.
+   Provision real user sign-in (Milestone 16, ADR-0024) in the same step:
+   the API verifies IdP-issued JWTs (pilot IdP: Clerk) — no passwords live
+   in this platform. One-time IdP application setup: create the Clerk
+   application, set `SUPPORT_AUTH_ISSUER` (the instance's Frontend API URL)
+   and `SUPPORT_AUTH_AUDIENCE=support-platform-api` in the API environment,
+   and add the session-token customization
+   `{"aud": "support-platform-api", "email": "{{user.primary_email_address}}"}`
+   in Dashboard -> Sessions -> Customize session token (default Clerk v2
+   tokens carry neither claim; verify with a decoded test token). Per user:
+   create the person in the Clerk dashboard, then link their Clerk user id
+   to the platform user row — seed-time via
+   `PILOT_SEED_OPS_IDP_SUBJECT`/`PILOT_SEED_AGENT_IDP_SUBJECT`/`PILOT_SEED_QA_IDP_SUBJECT`
+   before `pnpm db:seed:pilot`, or for an existing row
+   `update users set idp_subject = 'user_...' where user_id = '...'`.
+   A user without `idp_subject` (or not `active`) cannot sign in — fail
+   closed. Roles stay DB-sourced (`user_roles`); tokens never carry
+   authority. Optional live check:
+   `RUN_CLERK_LIVE_TESTS=true CLERK_SECRET_KEY=... pnpm --filter @support/api exec vitest run src/auth.clerk-live.integration.test.ts`.
 3. Configure the provider webhook to
    `POST /v1/webhooks/email/mailgun?channel_id=chn_pilot_email` and confirm
    signature verification with a test delivery.
@@ -125,6 +143,18 @@ Rules:
 - Draft policies can be used in sandbox evals only.
 - Every activation creates an audit event.
 - Policy changes require eval run for affected topics.
+
+v1 implementation (Milestone 16): the lifecycle runs over the API —
+`POST /v1/policies` (create + version-1 draft), `POST
+/v1/policies/{id}/versions` (next draft), `POST
+/v1/policy-versions/{id}/activate` (single-shot; archives same-domain
+predecessors; the activator is recorded as the approver), `POST
+/v1/policies/{id}/archive`. All transitions emit
+`policy.created|activated|archived` audit events; `policies:write` is
+admin-only (`platform_admin`/`ops_admin`) because the `automation` domain
+controls the auto-send allowlist, and automation content is validated
+against the closed topic ceiling at write time and again at activation.
+Archiving the active automation policy fails closed to auto-send disabled.
 
 ## 4. Ticket Handling SOP
 

@@ -108,9 +108,13 @@ describeLive("live PostgreSQL-backed API resource reads", () => {
     await migrateDatabase(client);
     await seedFixtures(db);
 
+    // Live-PostgreSQL API behavior under the explicit insecure-header mode;
+    // JWT-mode behavior against the live DB is covered by the dedicated
+    // Milestone 16 suite in auth.integration.test.ts.
     app = buildApp({
       services: createDatabaseApiServices({ approvalSignaler, metrics }),
       metrics,
+      auth: { mode: "insecure-headers" },
     });
   });
 

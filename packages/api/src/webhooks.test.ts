@@ -76,7 +76,12 @@ function setup(
     entries: Map<string, unknown>;
   } = createInMemoryRawPayloadStore();
 
-  app = buildApp({ webhooks: { intake, rawPayloadStore } });
+  // Webhook routes authenticate by signature, not bearer token; the explicit
+  // insecure-header mode just keeps app construction independent of JWT env.
+  app = buildApp({
+    webhooks: { intake, rawPayloadStore },
+    auth: { mode: "insecure-headers" },
+  });
 
   return { launcher, rawPayloadStore };
 }

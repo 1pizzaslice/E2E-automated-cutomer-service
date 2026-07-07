@@ -39,8 +39,12 @@ import {
   MessageResourceResponseSchema,
   NormalizedInboundMessageSchema,
   NormalizedOutboundMessageSchema,
+  PolicyActivationResponseSchema,
+  PolicyCreateRequestSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
+  PolicyVersionCreateRequestSchema,
+  PolicyVersionListResponseSchema,
   QaReviewCompleteRequestSchema,
   QaReviewCreateRequestSchema,
   QaReviewEvidenceResponseSchema,
@@ -259,6 +263,7 @@ describe("shared API contract schemas", () => {
             name: "Test Tenant",
             status: "active",
             default_timezone: "UTC",
+            retention_policy: { raw_payload_days: 90 },
             created_at: now,
             updated_at: now,
           },
@@ -387,6 +392,26 @@ describe("shared API contract schemas", () => {
         page: { count: 1, limit: 50 },
       }),
     ).toMatchObject({ policies: [{ policy_id: "pol_test" }] });
+
+    expect(
+      PolicyVersionListResponseSchema.parse({
+        policy_versions: [
+          {
+            policy_version_id: "polv_test_1",
+            tenant_id: "ten_test",
+            policy_id: "pol_test",
+            version: 1,
+            content: { rules: "ship within 3 days" },
+            schema_version: "shipping.v1",
+            created_by_user_id: "usr_test",
+            approved_by_user_id: null,
+            activated_at: null,
+            created_at: now,
+          },
+        ],
+        page: { count: 1, limit: 50 },
+      }),
+    ).toMatchObject({ policy_versions: [{ version: 1 }] });
 
     expect(
       KbDocumentListResponseSchema.parse({
@@ -1344,6 +1369,59 @@ describe("security and pilot readiness schemas", () => {
         kill_switch: true,
       }),
     ).toThrow();
+  });
+
+  it("validates the policy lifecycle request and response contracts", () => {
+    const now = "2026-07-04T00:00:00.000Z";
+
+    expect(
+      PolicyCreateRequestSchema.parse({
+        name: "Refund Policy",
+        domain: "refunds",
+        content: { refund_window_days: 30 },
+      }),
+    ).toMatchObject({ domain: "refunds" });
+    expect(() =>
+      PolicyCreateRequestSchema.parse({
+        name: "Refund Policy",
+        domain: "refunds",
+        content: {},
+        status: "active",
+      }),
+    ).toThrow();
+
+    expect(
+      PolicyVersionCreateRequestSchema.parse({
+        content: { refund_window_days: 14 },
+        schema_version: "refunds.v2",
+      }),
+    ).toMatchObject({ schema_version: "refunds.v2" });
+
+    const activation = PolicyActivationResponseSchema.parse({
+      policy: {
+        policy_id: "pol_test",
+        tenant_id: "ten_test",
+        name: "Refund Policy",
+        domain: "refunds",
+        status: "active",
+        created_at: now,
+        updated_at: now,
+      },
+      policy_version: {
+        policy_version_id: "polv_test_2",
+        tenant_id: "ten_test",
+        policy_id: "pol_test",
+        version: 2,
+        content: {},
+        schema_version: "refunds.v1",
+        created_by_user_id: "usr_test",
+        approved_by_user_id: "usr_admin",
+        activated_at: now,
+        created_at: now,
+      },
+      archived_policy_ids: ["pol_predecessor"],
+    });
+    expect(activation.archived_policy_ids).toEqual(["pol_predecessor"]);
   });
 
   it("resolves an effective automation policy response", () => {

@@ -137,14 +137,48 @@ mechanical RBAC verification — it registers the real routes with stub services
 and a Fastify `onRoute` collector, asserts every registered `/v1`/OpenAPI route
 appears in a permission catalog (a new endpoint without a catalog entry fails),
 then injects every catalogued route as all six roles asserting `403` exactly
-when the role lacks the documented permission, plus `401` for role-less
-requests (deny-by-default — the implicit `support_agent` fallback was removed;
-`app.test.ts` regression-tests missing/blank `x-user-roles` → 401). Matrix
-invariants (tenant provisioning is platform_admin-only, approvals:review is
-limited to operational roles, client_viewer is read-only, integration_admin is
-`openapi:read`-only) are asserted directly against the exported
-`ROLE_PERMISSIONS`. Cross-tenant negative coverage remains in
+when the role lacks the documented permission. Matrix invariants (tenant
+provisioning is platform_admin-only, approvals:review is limited to
+operational roles, policies:write is admin-only, client_viewer is read-only,
+integration_admin is `openapi:read`-only) are asserted directly against the
+exported `ROLE_PERMISSIONS`. Cross-tenant negative coverage remains in
 `app.integration.test.ts` against live PostgreSQL RLS.
+
+Milestone 16 real-auth coverage (ADR-0024, BACKEND_SPEC §17.0):
+
+- `packages/api/src/rbac-matrix.test.ts` now runs the full route×role matrix
+  under production JWT auth with REAL signed tokens: a per-suite RSA key pair
+  served through a local JWKS HTTP server, verified by the production
+  `createJwksTokenVerifier`, with an in-memory user directory holding one
+  user per role. Negative suites: absent/expired/forged (wrong
+  key)/wrong-audience tokens → `401` on every catalogued route;
+  wrong-issuer/expiry-less/unknown-subject tokens → `401`; valid token +
+  non-member tenant → `403` on every tenant-scoped route; platform-level
+  (NULL-tenant) users span tenants; identity headers are ignored under JWT
+  auth; user tokens are rejected on `/internal/tools/execute`.
+- `packages/api/src/auth.test.ts` unit-covers `loadAuthConfig` (JWT default,
+  fail-fast on missing issuer/audience, explicit `insecure-headers` opt-in,
+  clock-tolerance validation), the JWKS verifier (subject+email extraction,
+  clock-tolerance acceptance, uniform 401 on every failure incl. missing
+  `exp`/`sub`), and the request flow (directory-resolved actor, membership
+  403, no-roles → 403 not 401, unprovisioned subject → 401, health public).
+- `packages/api/src/auth.integration.test.ts` (live PostgreSQL, part of
+  `test:integration`) drives real tokens through the DATABASE user directory:
+  `users.idp_subject` resolution with DB-sourced `user_roles`, suspended and
+  unprovisioned subjects → 401, membership 403 both directions,
+  NULL-tenant platform users, `retention_policy` on the tenant contract, and
+  the policy lifecycle end to end (create/version/activate/archive with
+  `policy.*` audits, activation immutability 409s, same-domain predecessor
+  archival, fail-closed effective-automation resolution).
+- `packages/api/src/auth.clerk-live.integration.test.ts` (opt-in,
+  `RUN_CLERK_LIVE_TESTS=true` + `CLERK_SECRET_KEY`) mints a real Clerk
+  session token via the Backend API and verifies it through the production
+  JWKS path — proving the dashboard `aud`/`email` token customization and
+  key fetch against the real IdP; tampered tokens → 401.
+- Business-logic suites (`app.test.ts`, `app.integration.test.ts`,
+  `internal-routes.test.ts`, `webhooks.test.ts`, workers e2e) opt into the
+  explicit `SUPPORT_AUTH_MODE=insecure-headers` mode, which survives only
+  behind that flag (default off; `auth.test.ts` proves the default).
 
 ### 3.3 Webhooks And Channel Intake
 
@@ -204,6 +238,20 @@ Required tests:
 - VIP rule forces human approval.
 - Refund above threshold forces human approval.
 - Legal rule forces human-only.
+
+Milestone 16 policy-lifecycle coverage (BACKEND_SPEC §17.8, ADR-0024):
+`packages/api/src/app.test.ts` covers the endpoint contracts (create 201 with
+version-1 draft, non-admin 403, version list, draft-on-archived 409,
+activation with archived-predecessor reporting, re-activation 409, archive +
+already-archived 409, `retention_policy` on the tenant read);
+`packages/api/src/auth.integration.test.ts` proves the live lifecycle against
+PostgreSQL — activation immutability via the conditional update, stale-draft
+rejection, exactly-one-active-per-domain, the `policy.created|activated|archived`
+audit trail attributed to the acting user, write-time + activation-time
+automation-content validation, and the fail-closed effective-automation
+fallback after archive. Draft policies never affect decisions by
+construction: the effective read (`GET /v1/policies/automation`) only
+resolves activated versions of active policies.
 
 ### 3.7 KB/RAG
 

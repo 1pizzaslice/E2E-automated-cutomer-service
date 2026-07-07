@@ -28,8 +28,12 @@ import {
   KbSearchResponseSchema,
   MessageListResponseSchema,
   MessageResourceResponseSchema,
+  PolicyActivationResponseSchema,
+  PolicyCreateResponseSchema,
   PolicyListResponseSchema,
   PolicyResourceResponseSchema,
+  PolicyVersionListResponseSchema,
+  PolicyVersionResourceResponseSchema,
   QaReviewEvidenceResponseSchema,
   QaReviewListResponseSchema,
   QaReviewResourceResponseSchema,
@@ -41,6 +45,12 @@ import {
 import { buildApp } from "./app.js";
 import type { TenantRequestContext } from "./request-context.js";
 import type { ApiServices } from "./services.js";
+
+// These suites exercise route/service behavior, not user authentication, so
+// they opt into the explicit insecure header mode (Milestone 16). Production
+// JWT verification is covered by auth.test.ts and rbac-matrix.test.ts under
+// real signed-token fixtures.
+process.env.SUPPORT_AUTH_MODE = "insecure-headers";
 
 const now = "2026-06-19T00:00:00.000Z";
 const authHeaders = {
@@ -186,6 +196,11 @@ describe("api request context and contract errors", () => {
     );
     expect(body.paths).toHaveProperty("/v1/policies");
     expect(body.paths).toHaveProperty("/v1/policies/{policy_id}");
+    expect(body.paths).toHaveProperty("/v1/policies/{policy_id}/versions");
+    expect(body.paths).toHaveProperty("/v1/policies/{policy_id}/archive");
+    expect(body.paths).toHaveProperty(
+      "/v1/policy-versions/{policy_version_id}/activate",
+    );
     expect(body.paths).toHaveProperty("/v1/kb/documents");
     expect(body.paths).toHaveProperty("/v1/kb/documents/{kb_document_id}");
     expect(body.paths).toHaveProperty(
@@ -506,6 +521,168 @@ describe("api tenant-scoped resource contracts", () => {
 
     expect(response.statusCode).toBe(403);
     expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("creates a policy with its version-1 draft", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/policies",
+      headers: tenantAdminHeaders,
+      payload: {
+        name: "Refund Policy",
+        domain: "refunds",
+        content: { refund_window_days: 30 },
+      },
+    });
+    const body = PolicyCreateResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(201);
+    expect(body.policy).toMatchObject({
+      policy_id: "pol_created",
+      status: "draft",
+      domain: "refunds",
+    });
+    expect(body.policy_version).toMatchObject({
+      version: 1,
+      activated_at: null,
+      schema_version: "refunds.v1",
+    });
+  });
+
+  it("rejects policy writes for non-admin roles", async () => {
+    app = buildApp({ services: makeServices() });
+
+    for (const headers of [authHeaders, clientViewerHeaders]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/policies",
+        headers,
+        payload: {
+          name: "Refund Policy",
+          domain: "refunds",
+          content: {},
+        },
+      });
+      const body = ApiErrorResponseSchema.parse(response.json());
+
+      expect(response.statusCode).toBe(403);
+      expect(body.error.code).toBe("FORBIDDEN");
+    }
+  });
+
+  it("lists policy versions through the shared response schema", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/policies/pol_test/versions",
+      headers: authHeaders,
+    });
+    const body = PolicyVersionListResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.policy_versions).toHaveLength(1);
+    expect(body.policy_versions[0]!).toMatchObject({
+      policy_version_id: "polv_test_1",
+      version: 1,
+    });
+  });
+
+  it("creates a draft policy version and 409s on archived policies", async () => {
+    app = buildApp({ services: makeServices() });
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/policies/pol_test/versions",
+      headers: tenantAdminHeaders,
+      payload: { content: { rules: "ship within 2 days" } },
+    });
+    const createdBody = PolicyVersionResourceResponseSchema.parse(
+      created.json(),
+    );
+
+    expect(created.statusCode).toBe(201);
+    expect(createdBody.policy_version).toMatchObject({
+      version: 2,
+      activated_at: null,
+    });
+
+    const archived = await app.inject({
+      method: "POST",
+      url: "/v1/policies/pol_archived/versions",
+      headers: tenantAdminHeaders,
+      payload: { content: {} },
+    });
+    const archivedBody = ApiErrorResponseSchema.parse(archived.json());
+
+    expect(archived.statusCode).toBe(409);
+    expect(archivedBody.error.code).toBe("CONFLICT");
+  });
+
+  it("activates a policy version and reports archived predecessors", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/policy-versions/polv_test_2/activate",
+      headers: tenantAdminHeaders,
+    });
+    const body = PolicyActivationResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.policy.status).toBe("active");
+    expect(body.policy_version.activated_at).toBe(now);
+    expect(body.archived_policy_ids).toEqual(["pol_predecessor"]);
+  });
+
+  it("409s when re-activating an already-activated version", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/policy-versions/polv_already_active/activate",
+      headers: tenantAdminHeaders,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(409);
+    expect(body.error.code).toBe("CONFLICT");
+  });
+
+  it("archives a policy and 409s when it is already archived", async () => {
+    app = buildApp({ services: makeServices() });
+    const archived = await app.inject({
+      method: "POST",
+      url: "/v1/policies/pol_test/archive",
+      headers: tenantAdminHeaders,
+    });
+    const archivedBody = PolicyResourceResponseSchema.parse(archived.json());
+
+    expect(archived.statusCode).toBe(200);
+    expect(archivedBody.policy.status).toBe("archived");
+
+    const conflict = await app.inject({
+      method: "POST",
+      url: "/v1/policies/pol_archived/archive",
+      headers: tenantAdminHeaders,
+    });
+    const conflictBody = ApiErrorResponseSchema.parse(conflict.json());
+
+    expect(conflict.statusCode).toBe(409);
+    expect(conflictBody.error.code).toBe("CONFLICT");
+  });
+
+  it("surfaces retention_policy on the tenant contract", async () => {
+    app = buildApp({ services: makeServices() });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tenants/ten_test",
+      headers: tenantAdminHeaders,
+    });
+    const body = TenantResourceResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(200);
+    expect(body.tenant.retention_policy).toEqual({
+      raw_payload_days: 90,
+      ai_run_days: 365,
+    });
   });
 
   it("lists KB document resources through the shared response schema", async () => {
@@ -1481,6 +1658,7 @@ function makeServices(
               name: "Test Tenant",
               status: "active",
               default_timezone: "UTC",
+              retention_policy: { raw_payload_days: 90 },
               created_at: now,
               updated_at: now,
             },
@@ -1497,6 +1675,7 @@ function makeServices(
           name: input.name,
           status: input.status ?? "active",
           default_timezone: input.default_timezone ?? "UTC",
+          retention_policy: {},
           created_at: now,
           updated_at: now,
         };
@@ -1513,6 +1692,7 @@ function makeServices(
           name: "Test Tenant",
           status: "active",
           default_timezone: "UTC",
+          retention_policy: { raw_payload_days: 90, ai_run_days: 365 },
           created_at: now,
           updated_at: now,
         };
@@ -1529,6 +1709,7 @@ function makeServices(
           name: input.name ?? "Test Tenant",
           status: input.status ?? "active",
           default_timezone: input.default_timezone ?? "UTC",
+          retention_policy: {},
           created_at: now,
           updated_at: now,
         };
@@ -1781,6 +1962,154 @@ function makeServices(
           activated_at: now,
           auto_send_enabled: false,
           auto_send_allowed_topics: [],
+        };
+      },
+      async create(context, input) {
+        expectTenantContext(context);
+
+        return {
+          policy: {
+            policy_id: input.policy_id ?? "pol_created",
+            tenant_id: context.tenant.tenantId,
+            name: input.name,
+            domain: input.domain,
+            status: "draft",
+            created_at: now,
+            updated_at: now,
+          },
+          policy_version: {
+            policy_version_id: input.policy_version_id ?? "polv_created_1",
+            tenant_id: context.tenant.tenantId,
+            policy_id: input.policy_id ?? "pol_created",
+            version: 1,
+            content: input.content,
+            schema_version: input.schema_version ?? `${input.domain}.v1`,
+            created_by_user_id: context.actor.userId,
+            approved_by_user_id: null,
+            activated_at: null,
+            created_at: now,
+          },
+        };
+      },
+      async listVersions(context, policyId, options) {
+        expectTenantContext(context);
+
+        if (policyId !== "pol_test") {
+          return null;
+        }
+
+        return {
+          policy_versions: [
+            {
+              policy_version_id: "polv_test_1",
+              tenant_id: context.tenant.tenantId,
+              policy_id: policyId,
+              version: 1,
+              content: { rules: "ship within 3 days" },
+              schema_version: "shipping.v1",
+              created_by_user_id: "usr_test",
+              approved_by_user_id: "usr_test",
+              activated_at: now,
+              created_at: now,
+            },
+          ],
+          page: {
+            count: 1,
+            limit: options.limit,
+          },
+        };
+      },
+      async createVersion(context, policyId, input) {
+        expectTenantContext(context);
+
+        if (policyId === "pol_missing") {
+          return { outcome: "not_found" };
+        }
+
+        if (policyId === "pol_archived") {
+          return { outcome: "archived" };
+        }
+
+        return {
+          outcome: "created",
+          policyVersion: {
+            policy_version_id: input.policy_version_id ?? "polv_test_2",
+            tenant_id: context.tenant.tenantId,
+            policy_id: policyId,
+            version: 2,
+            content: input.content,
+            schema_version: input.schema_version ?? "shipping.v1",
+            created_by_user_id: context.actor.userId,
+            approved_by_user_id: null,
+            activated_at: null,
+            created_at: now,
+          },
+        };
+      },
+      async activateVersion(context, policyVersionId) {
+        expectTenantContext(context);
+
+        if (policyVersionId === "polv_missing") {
+          return { outcome: "not_found" };
+        }
+
+        if (policyVersionId === "polv_already_active") {
+          return {
+            outcome: "conflict",
+            reason: "Policy version has already been activated.",
+          };
+        }
+
+        return {
+          outcome: "activated",
+          result: {
+            policy: {
+              policy_id: "pol_test",
+              tenant_id: context.tenant.tenantId,
+              name: "Shipping Policy",
+              domain: "shipping",
+              status: "active",
+              created_at: now,
+              updated_at: now,
+            },
+            policy_version: {
+              policy_version_id: policyVersionId,
+              tenant_id: context.tenant.tenantId,
+              policy_id: "pol_test",
+              version: 2,
+              content: { rules: "ship within 2 days" },
+              schema_version: "shipping.v1",
+              created_by_user_id: "usr_test",
+              approved_by_user_id: context.actor.userId,
+              activated_at: now,
+              created_at: now,
+            },
+            archived_policy_ids: ["pol_predecessor"],
+          },
+        };
+      },
+      async archive(context, policyId) {
+        expectTenantContext(context);
+
+        if (policyId === "pol_missing") {
+          return { outcome: "not_found" };
+        }
+
+        if (policyId === "pol_archived") {
+          return { outcome: "conflict" };
+        }
+
+        return {
+          outcome: "archived",
+          policy: {
+            policy_id: policyId,
+            tenant_id: context.tenant.tenantId,
+            name: "Shipping Policy",
+            domain: "shipping",
+            status: "archived",
+            created_at: now,
+            updated_at: now,
+          },
         };
       },
     },

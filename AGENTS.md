@@ -66,7 +66,7 @@ If a change contradicts these defaults, update `docs/DECISIONS.md` in the same c
 Use these commands from the repository root:
 
 - Install TypeScript dependencies: `pnpm install`
-- Run API in watch mode: `pnpm dev`
+- Run API in watch mode: `pnpm dev` (Milestone 16: the API defaults to production JWT auth and requires `SUPPORT_AUTH_ISSUER`/`SUPPORT_AUTH_AUDIENCE`; for header-driven local work set `SUPPORT_AUTH_MODE=insecure-headers` explicitly)
 - Start local infrastructure: `pnpm infra:up`
 - Stop local infrastructure: `pnpm infra:down`
 - Apply database migrations: `pnpm db:migrate`

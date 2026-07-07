@@ -44,6 +44,9 @@ importers:
       fastify:
         specifier: ^5.0.0
         version: 5.8.5
+      jose:
+        specifier: ^6.2.3
+        version: 6.2.3
       zod:
         specifier: ^4.0.0
         version: 4.4.3
@@ -1626,6 +1629,9 @@ packages:
   jest-worker@27.5.1:
     resolution: {integrity: sha512-7vuh85V5cdDofPyxn58nrPjBktZo0u9x1g8WtjQol+jZDaE+fhN+cIvTj11GndBnMnyfrUOG1sZQxCdjKh+DKg==}
     engines: {node: '>= 10.13.0'}
+
+  jose@6.2.3:
+    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
 
   json-schema-ref-resolver@3.0.0:
     resolution: {integrity: sha512-hOrZIVL5jyYFjzk7+y7n5JDzGlU8rfWDuYyHwGa2WA8/pcmMHezp2xsVwxrebD/Q9t8Nc5DboieySDpCp4WG4A==}
@@ -3459,6 +3465,8 @@ snapshots:
       '@types/node': 24.13.2
       merge-stream: 2.0.0
       supports-color: 8.1.1
+
+  jose@6.2.3: {}
 
   json-schema-ref-resolver@3.0.0:
     dependencies:
