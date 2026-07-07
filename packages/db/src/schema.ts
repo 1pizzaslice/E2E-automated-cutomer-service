@@ -773,6 +773,12 @@ export const aiRuns = pgTable(
     traceId: text("trace_id"),
     createdAt: createdAt(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    /**
+     * Stamped by the retention job when the PII-bearing columns
+     * (structured_output, guardrail_results) were cleared for this run
+     * (Milestone 17, BACKEND_SPEC section 22). Null = not anonymized.
+     */
+    anonymizedAt: timestamp("anonymized_at", { withTimezone: true }),
   },
   (table) => [
     index("ai_runs_tenant_id_idx").on(table.tenantId),

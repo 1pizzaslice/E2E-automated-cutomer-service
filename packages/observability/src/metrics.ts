@@ -37,6 +37,22 @@ export interface ApprovalDecisionMetric {
   latencyMs: number | null;
 }
 
+/** One scheduled job run (Milestone 17): QA sampling or retention. */
+export interface JobRunMetric {
+  job: "qa_sampling" | "retention";
+  /** `skipped` = the job ran but had nothing applicable (e.g. no policy). */
+  outcome: "succeeded" | "failed" | "skipped";
+  tenantId: string;
+  durationMs: number;
+}
+
+/** Items actually purged by one retention run, per retention class. */
+export interface RetentionPurgeMetric {
+  retentionClass: "raw_payload" | "attachment" | "ai_run";
+  tenantId: string;
+  count: number;
+}
+
 /**
  * Typed domain metrics port. Production wires the OTel-backed
  * implementation; tests use the recording one; everything defaults to
@@ -50,6 +66,8 @@ export interface SupportMetrics {
   recordApprovalRequested(approvalType: string): void;
   recordApprovalDecision(metric: ApprovalDecisionMetric): void;
   recordCriticalFailure(mode: SupportCriticalFailureMode): void;
+  recordJobRun(metric: JobRunMetric): void;
+  recordRetentionPurge(metric: RetentionPurgeMetric): void;
 }
 
 export function createNoopSupportMetrics(): SupportMetrics {
@@ -61,6 +79,8 @@ export function createNoopSupportMetrics(): SupportMetrics {
     recordApprovalRequested: () => {},
     recordApprovalDecision: () => {},
     recordCriticalFailure: () => {},
+    recordJobRun: () => {},
+    recordRetentionPurge: () => {},
   };
 }
 
@@ -72,6 +92,8 @@ export interface RecordingSupportMetrics extends SupportMetrics {
   approvalRequests: string[];
   approvalDecisions: ApprovalDecisionMetric[];
   criticalFailures: SupportCriticalFailureMode[];
+  jobRuns: JobRunMetric[];
+  retentionPurges: RetentionPurgeMetric[];
 }
 
 export function createRecordingSupportMetrics(): RecordingSupportMetrics {
@@ -83,6 +105,8 @@ export function createRecordingSupportMetrics(): RecordingSupportMetrics {
     approvalRequests: [],
     approvalDecisions: [],
     criticalFailures: [],
+    jobRuns: [],
+    retentionPurges: [],
     recordApiRequest: (metric) => {
       recording.apiRequests.push(metric);
     },
@@ -103,6 +127,12 @@ export function createRecordingSupportMetrics(): RecordingSupportMetrics {
     },
     recordCriticalFailure: (mode) => {
       recording.criticalFailures.push(mode);
+    },
+    recordJobRun: (metric) => {
+      recording.jobRuns.push(metric);
+    },
+    recordRetentionPurge: (metric) => {
+      recording.retentionPurges.push(metric);
     },
   };
   return recording;
@@ -164,6 +194,18 @@ export function createOtelSupportMetrics(meter?: Meter): SupportMetrics {
     SUPPORT_METRIC_NAMES.criticalFailures,
     { description: "Critical failure events by failure mode" },
   );
+  const jobExecutions = resolved.createCounter(
+    SUPPORT_METRIC_NAMES.jobExecutions,
+    { description: "Scheduled job runs by job, tenant, and outcome" },
+  );
+  const jobDuration = resolved.createHistogram(
+    SUPPORT_METRIC_NAMES.jobDurationMs,
+    { description: "Scheduled job run duration", unit: "ms" },
+  );
+  const retentionPurgedItems = resolved.createCounter(
+    SUPPORT_METRIC_NAMES.retentionPurgedItems,
+    { description: "Items purged by the retention job per retention class" },
+  );
 
   return {
     recordApiRequest: (metric) => {
@@ -216,6 +258,26 @@ export function createOtelSupportMetrics(meter?: Meter): SupportMetrics {
     },
     recordCriticalFailure: (mode) => {
       criticalFailures.add(1, { failure_mode: mode });
+    },
+    recordJobRun: (metric) => {
+      const attributes = {
+        job: metric.job,
+        outcome: metric.outcome,
+        tenant_id: metric.tenantId,
+      };
+      jobExecutions.add(1, attributes);
+      jobDuration.record(metric.durationMs, {
+        job: metric.job,
+        outcome: metric.outcome,
+      });
+    },
+    recordRetentionPurge: (metric) => {
+      if (metric.count > 0) {
+        retentionPurgedItems.add(metric.count, {
+          retention_class: metric.retentionClass,
+          tenant_id: metric.tenantId,
+        });
+      }
     },
   };
 }

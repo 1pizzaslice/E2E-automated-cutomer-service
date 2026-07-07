@@ -2,6 +2,7 @@ import { NativeConnection, Worker } from "@temporalio/worker";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { TicketLifecycleActivities } from "./activities/ticket-lifecycle-activities.js";
+import type { ScheduledJobsActivities } from "./workflows/scheduled-jobs-types.js";
 import { TICKET_LIFECYCLE_TASK_QUEUE } from "./workflows/ticket-lifecycle-types.js";
 
 export const DEFAULT_TEMPORAL_ADDRESS = "localhost:7233";
@@ -16,7 +17,14 @@ export interface TemporalWorkerConfig {
 export interface TicketLifecycleWorkerOptions {
   readonly config?: Partial<TemporalWorkerConfig>;
   readonly connection?: NativeConnection;
-  readonly activities: TicketLifecycleActivities;
+  /**
+   * The lifecycle activities, optionally merged with the scheduled-job
+   * activities (Milestone 17) — the production runtime registers both on
+   * the shared task queue; workflow-focused tests may register only the
+   * lifecycle set.
+   */
+  readonly activities: TicketLifecycleActivities &
+    Partial<ScheduledJobsActivities>;
 }
 
 export interface TicketLifecycleWorkerRuntime {

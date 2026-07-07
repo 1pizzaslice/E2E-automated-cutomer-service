@@ -66,6 +66,38 @@ groups:
             Review the breached tickets (ticket.sla_breached audit events)
             and queue staffing/automation rates.
 
+  - name: support-scheduled-jobs
+    rules:
+      - alert: SupportScheduledJobFailures
+        expr: increase(support_job_executions{outcome="failed"}[30m]) > 0
+        for: 0m
+        labels:
+          severity: high
+        annotations:
+          summary: A scheduled job run failed
+          description: >-
+            A QA sampling or retention job run failed after exhausting its
+            Temporal activity retries (job and tenant_id labels identify
+            which). The schedule keeps firing daily, but the tenant's
+            sampling/retention backlog is not being drained. Check worker
+            logs for `job run failed` entries and the Temporal UI for the
+            failed workflow.
+
+      - alert: SupportRetentionSweepFailures
+        expr: increase(support_critical_failures{failure_mode="retention_sweep_failed"}[24h]) > 0
+        for: 0m
+        labels:
+          severity: high
+        annotations:
+          summary: Retention could not delete blobs
+          description: >-
+            A retention run failed to delete one or more blobs behind
+            expired refs. The affected rows were kept (fail-closed) and will
+            be retried on the next daily run, but the tenant's retention
+            window is not being honored until the sweep succeeds. Check
+            `retention job run left unswept blobs` warnings in worker logs
+            for the failing refs and reasons.
+
   - name: support-service-health
     rules:
       - alert: SupportApiServerErrorRate

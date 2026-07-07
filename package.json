@@ -19,6 +19,7 @@
     "lint": "pnpm -r lint && uv run --frozen --project ai python -m compileall -q ai/runtime ai/evals ai/service",
     "test": "pnpm -r test && pnpm test:py",
     "test:e2e": "pnpm --filter @support/workers test:e2e",
+    "test:jobs": "pnpm --filter @support/workers test:jobs",
     "test:integration": "pnpm --filter @support/db test:integration && pnpm --filter @support/api test:integration && pnpm --filter @support/workers test:integration",
     "worker:start": "pnpm --filter @support/workers start",
     "test:py": "uv run --frozen --project ai --extra service python -m unittest discover -s ai -p '*_test.py'",

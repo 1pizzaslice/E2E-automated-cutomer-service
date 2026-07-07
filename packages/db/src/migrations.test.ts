@@ -32,6 +32,7 @@ describe("sql migrations", () => {
       "0004_tenant_retention_policy",
       "0005_message_send_status_enums",
       "0006_user_idp_subject",
+      "0007_ai_run_anonymization",
     ]);
     expect(migrations[0]?.sql).toContain(
       "create extension if not exists vector",
@@ -80,6 +81,18 @@ describe("sql migrations", () => {
     );
     expect(migration?.sql).toContain(
       "alter column sent_by_type type message_sent_by_type",
+    );
+  });
+
+  it("adds the ai run anonymization marker column", async () => {
+    const migrations = await loadSqlMigrations();
+    const migration = migrations.find(
+      (candidate) => candidate.id === "0007_ai_run_anonymization",
+    );
+
+    expect(migration).toBeDefined();
+    expect(migration?.sql).toContain(
+      "add column if not exists anonymized_at timestamptz",
     );
   });
 

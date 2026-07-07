@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import {
+  anonymizeAiRunsQuery,
+  clearMessageAttachmentsQuery,
   clearMessageRawPayloadRefsQuery,
   createAuditEventQuery,
   createDatabaseFromEnv,
-  expiredAiRunsCountQuery,
-  expiredAttachmentMessagesCountQuery,
+  expiredAiRunsForAnonymizationQuery,
+  expiredAttachmentMessagesQuery,
   expiredRawPayloadMessagesQuery,
   tenantByIdQuery,
   withTenantTransaction,
@@ -13,15 +15,29 @@ import {
   TenantRetentionPolicySchema,
   type TenantRetentionPolicy,
 } from "@support/shared-schemas";
+import type { BlobSweeper, BlobSweepFailure } from "./blob-sweeper.js";
 
 /**
- * Data retention policy hooks (Milestone 12, BACKEND_SPEC section 22). The
- * job reads the tenant's `retention_policy`, computes cutoffs, and applies
- * the safe subset: clearing expired `messages.raw_payload_ref` references in
- * bounded batches (the cleared refs are returned so an operator or storage
- * sweeper can delete the underlying blobs). Attachment metadata and AI-run
- * traces are counted and reported as planned-but-not-executed placeholders —
- * purging them waits on the blob-deletion and anonymization strategies.
+ * Data retention execution (Milestones 12 + 17, BACKEND_SPEC section 22).
+ * The job reads the tenant's `retention_policy`, computes per-class cutoffs,
+ * and purges every configured class in bounded batches:
+ *
+ * - `raw_payload_days`: expired `messages.raw_payload_ref` blobs are deleted
+ *   through the injected {@link BlobSweeper} and the database refs cleared.
+ *   Sweep-before-clear fails closed: a ref whose blob could not be deleted
+ *   keeps its database row and is retried on the next run, so no blob is
+ *   ever orphaned silently.
+ * - `attachment_days`: locally stored attachment blobs (`file://` refs) are
+ *   swept the same way, then the message's attachment metadata is cleared.
+ *   Provider-side refs (e.g. WhatsApp media ids) have no local bytes — for
+ *   them clearing the metadata IS the purge.
+ * - `ai_run_days`: the PII-bearing `ai_runs` columns (`structured_output`,
+ *   `guardrail_results`) are cleared and `anonymized_at` stamped; run
+ *   metadata (status, tokens, latency, provenance) is retained for
+ *   reporting.
+ *
+ * Without an injected sweeper (legacy/manual mode) the job clears database
+ * state and returns the refs so an operator can sweep the blobs externally.
  * Every applied run appends a `retention.applied` audit event. Missing or
  * malformed retention configuration fails closed: nothing is purged.
  */
@@ -47,9 +63,24 @@ export function computeRetentionCutoffs(
   };
 }
 
+/**
+ * Refs written by our own stores use the `file://` scheme in v1 (the
+ * filesystem raw-payload store); anything else on an attachment is a
+ * provider-side pointer with no locally stored bytes. Milestone 18's object
+ * store extends this to `s3://`.
+ */
+export function isLocallyStoredRef(ref: string): boolean {
+  return ref.startsWith("file://");
+}
+
 export interface ExpiredRawPayloadMessage {
   readonly messageId: string;
   readonly rawPayloadRef: string | null;
+}
+
+export interface ExpiredAttachmentMessage {
+  readonly messageId: string;
+  readonly attachmentRefs: readonly string[];
 }
 
 export interface RetentionStore {
@@ -65,11 +96,25 @@ export interface RetentionStore {
     tenantId: string,
     messageIds: readonly string[],
   ): Promise<number>;
-  countExpiredAttachmentMessages(
+  listExpiredAttachmentMessages(
     tenantId: string,
     cutoff: Date,
+    limit: number,
+  ): Promise<readonly ExpiredAttachmentMessage[]>;
+  clearMessageAttachments(
+    tenantId: string,
+    messageIds: readonly string[],
   ): Promise<number>;
-  countExpiredAiRuns(tenantId: string, cutoff: Date): Promise<number>;
+  listExpiredAiRunIds(
+    tenantId: string,
+    cutoff: Date,
+    limit: number,
+  ): Promise<readonly string[]>;
+  anonymizeAiRuns(
+    tenantId: string,
+    aiRunIds: readonly string[],
+    anonymizedAt: Date,
+  ): Promise<number>;
   recordRetentionAudit(
     tenantId: string,
     metadata: Record<string, unknown>,
@@ -83,6 +128,12 @@ export interface RetentionJobLogger {
 
 export interface RetentionJobDeps {
   readonly store: RetentionStore;
+  /**
+   * Deletes the blobs behind purged refs. Optional for the legacy/manual
+   * mode where the returned refs are swept externally; production always
+   * wires one so purges fail closed on undeletable blobs.
+   */
+  readonly blobSweeper?: BlobSweeper;
   readonly now?: () => Date;
   readonly logger?: RetentionJobLogger;
 }
@@ -97,8 +148,16 @@ export interface TenantRetentionResult {
   readonly applied: boolean;
   readonly rawPayloadsCleared: number;
   readonly clearedRawPayloadRefs: readonly string[];
-  readonly plannedAttachmentMessages: number;
-  readonly plannedAiRuns: number;
+  readonly attachmentMessagesPurged: number;
+  readonly purgedAttachmentRefs: readonly string[];
+  readonly aiRunsAnonymized: number;
+  /** Refs whose blobs could not be deleted; their rows were NOT purged. */
+  readonly blobSweepFailures: readonly BlobSweepFailure[];
+  /**
+   * True when any class filled its batch — the scheduler should run the job
+   * again to keep draining the backlog.
+   */
+  readonly batchLimitHit: boolean;
   readonly skippedReason: "tenant_not_found" | "no_retention_configured" | null;
 }
 
@@ -109,6 +168,24 @@ function sha24(parts: readonly string[]): string {
     .update(parts.join("|"))
     .digest("hex")
     .slice(0, 24);
+}
+
+function emptyResult(
+  tenantId: string,
+  skippedReason: TenantRetentionResult["skippedReason"],
+): TenantRetentionResult {
+  return {
+    tenantId,
+    applied: false,
+    rawPayloadsCleared: 0,
+    clearedRawPayloadRefs: [],
+    attachmentMessagesPurged: 0,
+    purgedAttachmentRefs: [],
+    aiRunsAnonymized: 0,
+    blobSweepFailures: [],
+    batchLimitHit: false,
+    skippedReason,
+  };
 }
 
 export async function runTenantRetentionJob(
@@ -122,15 +199,7 @@ export async function runTenantRetentionJob(
   const policy = await deps.store.getTenantRetentionPolicy(tenantId);
 
   if (policy === null) {
-    return {
-      tenantId,
-      applied: false,
-      rawPayloadsCleared: 0,
-      clearedRawPayloadRefs: [],
-      plannedAttachmentMessages: 0,
-      plannedAiRuns: 0,
-      skippedReason: "tenant_not_found",
-    };
+    return emptyResult(tenantId, "tenant_not_found");
   }
 
   const cutoffs = computeRetentionCutoffs(policy, now);
@@ -140,17 +209,14 @@ export async function runTenantRetentionJob(
     cutoffs.attachmentCutoff === null &&
     cutoffs.aiRunCutoff === null
   ) {
-    return {
-      tenantId,
-      applied: false,
-      rawPayloadsCleared: 0,
-      clearedRawPayloadRefs: [],
-      plannedAttachmentMessages: 0,
-      plannedAiRuns: 0,
-      skippedReason: "no_retention_configured",
-    };
+    return emptyResult(tenantId, "no_retention_configured");
   }
 
+  const blobSweepFailures: BlobSweepFailure[] = [];
+  let batchLimitHit = false;
+
+  // Raw payload refs: every ref was written by our own store, so all of
+  // them go through the sweeper. Sweep first, clear only what is gone.
   let clearedRefs: string[] = [];
   if (cutoffs.rawPayloadCutoff) {
     const expired = await deps.store.listExpiredRawPayloadMessages(
@@ -158,51 +224,141 @@ export async function runTenantRetentionJob(
       cutoffs.rawPayloadCutoff,
       batchLimit,
     );
+    batchLimitHit ||= expired.length === batchLimit;
 
     if (expired.length > 0) {
-      await deps.store.clearRawPayloadRefs(
+      let clearable = expired;
+
+      if (deps.blobSweeper) {
+        const refs = expired.flatMap((message) =>
+          message.rawPayloadRef ? [message.rawPayloadRef] : [],
+        );
+        const sweep = await deps.blobSweeper.sweep(refs);
+        blobSweepFailures.push(...sweep.failed);
+        const sweptRefs = new Set(sweep.swept);
+        clearable = expired.filter(
+          (message) =>
+            message.rawPayloadRef !== null &&
+            sweptRefs.has(message.rawPayloadRef),
+        );
+      }
+
+      if (clearable.length > 0) {
+        await deps.store.clearRawPayloadRefs(
+          tenantId,
+          clearable.map((message) => message.messageId),
+        );
+        clearedRefs = clearable.flatMap((message) =>
+          message.rawPayloadRef ? [message.rawPayloadRef] : [],
+        );
+      }
+    }
+  }
+
+  // Attachments: locally stored blobs must sweep before the metadata
+  // clears; provider-side refs have no local bytes, so clearing the
+  // metadata is the purge.
+  let purgedAttachmentRefs: string[] = [];
+  let attachmentMessagesPurged = 0;
+  if (cutoffs.attachmentCutoff) {
+    const expired = await deps.store.listExpiredAttachmentMessages(
+      tenantId,
+      cutoffs.attachmentCutoff,
+      batchLimit,
+    );
+    batchLimitHit ||= expired.length === batchLimit;
+
+    if (expired.length > 0) {
+      let purgeable = expired;
+
+      if (deps.blobSweeper) {
+        const localRefs = [
+          ...new Set(
+            expired.flatMap((message) =>
+              message.attachmentRefs.filter(isLocallyStoredRef),
+            ),
+          ),
+        ];
+        const sweep =
+          localRefs.length > 0
+            ? await deps.blobSweeper.sweep(localRefs)
+            : { swept: [], failed: [] };
+        blobSweepFailures.push(...sweep.failed);
+        const sweptRefs = new Set(sweep.swept);
+        purgeable = expired.filter((message) =>
+          message.attachmentRefs
+            .filter(isLocallyStoredRef)
+            .every((ref) => sweptRefs.has(ref)),
+        );
+      }
+
+      if (purgeable.length > 0) {
+        attachmentMessagesPurged = await deps.store.clearMessageAttachments(
+          tenantId,
+          purgeable.map((message) => message.messageId),
+        );
+        purgedAttachmentRefs = purgeable.flatMap(
+          (message) => message.attachmentRefs,
+        );
+      }
+    }
+  }
+
+  // AI runs: anonymize in place — no blobs involved.
+  let aiRunsAnonymized = 0;
+  if (cutoffs.aiRunCutoff) {
+    const expiredIds = await deps.store.listExpiredAiRunIds(
+      tenantId,
+      cutoffs.aiRunCutoff,
+      batchLimit,
+    );
+    batchLimitHit ||= expiredIds.length === batchLimit;
+
+    if (expiredIds.length > 0) {
+      aiRunsAnonymized = await deps.store.anonymizeAiRuns(
         tenantId,
-        expired.map((message) => message.messageId),
-      );
-      clearedRefs = expired.flatMap((message) =>
-        message.rawPayloadRef ? [message.rawPayloadRef] : [],
+        expiredIds,
+        now,
       );
     }
   }
 
-  const plannedAttachmentMessages = cutoffs.attachmentCutoff
-    ? await deps.store.countExpiredAttachmentMessages(
-        tenantId,
-        cutoffs.attachmentCutoff,
-      )
-    : 0;
-  const plannedAiRuns = cutoffs.aiRunCutoff
-    ? await deps.store.countExpiredAiRuns(tenantId, cutoffs.aiRunCutoff)
-    : 0;
+  const applied =
+    clearedRefs.length > 0 ||
+    attachmentMessagesPurged > 0 ||
+    aiRunsAnonymized > 0;
 
-  if (clearedRefs.length > 0) {
+  if (applied) {
     await deps.store.recordRetentionAudit(tenantId, {
       raw_payloads_cleared: clearedRefs.length,
+      attachment_messages_purged: attachmentMessagesPurged,
+      ai_runs_anonymized: aiRunsAnonymized,
+      blob_sweep_failures: blobSweepFailures.length,
       raw_payload_cutoff: cutoffs.rawPayloadCutoff?.toISOString() ?? null,
-      planned_attachment_messages: plannedAttachmentMessages,
-      planned_ai_runs: plannedAiRuns,
+      attachment_cutoff: cutoffs.attachmentCutoff?.toISOString() ?? null,
+      ai_run_cutoff: cutoffs.aiRunCutoff?.toISOString() ?? null,
     });
   }
 
   deps.logger?.info("retention job completed", {
     tenant_id: tenantId,
     raw_payloads_cleared: clearedRefs.length,
-    planned_attachment_messages: plannedAttachmentMessages,
-    planned_ai_runs: plannedAiRuns,
+    attachment_messages_purged: attachmentMessagesPurged,
+    ai_runs_anonymized: aiRunsAnonymized,
+    blob_sweep_failures: blobSweepFailures.length,
+    batch_limit_hit: batchLimitHit,
   });
 
   return {
     tenantId,
-    applied: clearedRefs.length > 0,
+    applied,
     rawPayloadsCleared: clearedRefs.length,
     clearedRawPayloadRefs: clearedRefs,
-    plannedAttachmentMessages,
-    plannedAiRuns,
+    attachmentMessagesPurged,
+    purgedAttachmentRefs,
+    aiRunsAnonymized,
+    blobSweepFailures,
+    batchLimitHit,
     skippedReason: null,
   };
 }
@@ -272,25 +428,63 @@ export function createDatabaseRetentionStore(): RetentionStore {
       });
     },
 
-    async countExpiredAttachmentMessages(tenantId, cutoff) {
+    async listExpiredAttachmentMessages(tenantId, cutoff, limit) {
       const scope = { tenantId };
 
       return withTenantTransaction(getDatabase().client, scope, async (db) => {
-        const rows = await expiredAttachmentMessagesCountQuery(
-          db,
-          scope,
+        const rows = await expiredAttachmentMessagesQuery(db, scope, {
           cutoff,
-        );
-        return rows[0]?.count ?? 0;
+          limit,
+        });
+
+        return rows.map((row) => ({
+          messageId: row.messageId,
+          attachmentRefs: extractAttachmentRefs(row.attachments),
+        }));
       });
     },
 
-    async countExpiredAiRuns(tenantId, cutoff) {
+    async clearMessageAttachments(tenantId, messageIds) {
+      if (messageIds.length === 0) {
+        return 0;
+      }
+
       const scope = { tenantId };
 
       return withTenantTransaction(getDatabase().client, scope, async (db) => {
-        const rows = await expiredAiRunsCountQuery(db, scope, cutoff);
-        return rows[0]?.count ?? 0;
+        const rows = await clearMessageAttachmentsQuery(db, scope, messageIds);
+        return rows.length;
+      });
+    },
+
+    async listExpiredAiRunIds(tenantId, cutoff, limit) {
+      const scope = { tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        const rows = await expiredAiRunsForAnonymizationQuery(db, scope, {
+          cutoff,
+          limit,
+        });
+
+        return rows.map((row) => row.aiRunId);
+      });
+    },
+
+    async anonymizeAiRuns(tenantId, aiRunIds, anonymizedAt) {
+      if (aiRunIds.length === 0) {
+        return 0;
+      }
+
+      const scope = { tenantId };
+
+      return withTenantTransaction(getDatabase().client, scope, async (db) => {
+        const rows = await anonymizeAiRunsQuery(
+          db,
+          scope,
+          aiRunIds,
+          anonymizedAt,
+        );
+        return rows.length;
       });
     },
 
@@ -321,22 +515,49 @@ export function createDatabaseRetentionStore(): RetentionStore {
   };
 }
 
+/** Attachment metadata rows carry `object_ref` per the normalized contract. */
+function extractAttachmentRefs(attachments: unknown): readonly string[] {
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+
+  return attachments.flatMap((attachment) => {
+    if (
+      typeof attachment === "object" &&
+      attachment !== null &&
+      "object_ref" in attachment &&
+      typeof (attachment as { object_ref: unknown }).object_ref === "string"
+    ) {
+      return [(attachment as { object_ref: string }).object_ref];
+    }
+
+    return [];
+  });
+}
+
 export interface InMemoryRetentionMessage {
   readonly messageId: string;
   readonly rawPayloadRef: string | null;
-  readonly attachmentCount: number;
+  readonly attachmentRefs: readonly string[];
   readonly createdAt: Date;
+}
+
+export interface InMemoryRetentionAiRun {
+  readonly aiRunId: string;
+  readonly createdAt: Date;
+  readonly anonymizedAt?: Date | null;
 }
 
 export interface InMemoryRetentionFixtures {
   readonly retentionPolicy?: TenantRetentionPolicy;
   readonly tenantExists?: boolean;
   readonly messages?: readonly InMemoryRetentionMessage[];
-  readonly aiRunCreatedAts?: readonly Date[];
+  readonly aiRuns?: readonly InMemoryRetentionAiRun[];
 }
 
 export interface InMemoryRetentionStore extends RetentionStore {
   listMessages(): readonly InMemoryRetentionMessage[];
+  listAiRuns(): readonly InMemoryRetentionAiRun[];
   listAuditEvents(): readonly {
     tenantId: string;
     action: string;
@@ -350,7 +571,10 @@ export function createInMemoryRetentionStore(
   const tenantExists = fixtures.tenantExists ?? true;
   const retentionPolicy = fixtures.retentionPolicy ?? {};
   let messages = [...(fixtures.messages ?? [])];
-  const aiRunCreatedAts = [...(fixtures.aiRunCreatedAts ?? [])];
+  let aiRuns = (fixtures.aiRuns ?? []).map((run) => ({
+    ...run,
+    anonymizedAt: run.anonymizedAt ?? null,
+  }));
   const auditEvents: {
     tenantId: string;
     action: string;
@@ -390,14 +614,51 @@ export function createInMemoryRetentionStore(
       return cleared;
     },
 
-    async countExpiredAttachmentMessages(_tenantId, cutoff) {
-      return messages.filter(
-        (message) => message.attachmentCount > 0 && message.createdAt < cutoff,
-      ).length;
+    async listExpiredAttachmentMessages(_tenantId, cutoff, limit) {
+      return messages
+        .filter(
+          (message) =>
+            message.attachmentRefs.length > 0 && message.createdAt < cutoff,
+        )
+        .slice(0, limit)
+        .map((message) => ({
+          messageId: message.messageId,
+          attachmentRefs: message.attachmentRefs,
+        }));
     },
 
-    async countExpiredAiRuns(_tenantId, cutoff) {
-      return aiRunCreatedAts.filter((createdAt) => createdAt < cutoff).length;
+    async clearMessageAttachments(_tenantId, messageIds) {
+      let cleared = 0;
+      messages = messages.map((message) => {
+        if (
+          messageIds.includes(message.messageId) &&
+          message.attachmentRefs.length > 0
+        ) {
+          cleared += 1;
+          return { ...message, attachmentRefs: [] };
+        }
+        return message;
+      });
+      return cleared;
+    },
+
+    async listExpiredAiRunIds(_tenantId, cutoff, limit) {
+      return aiRuns
+        .filter((run) => run.anonymizedAt === null && run.createdAt < cutoff)
+        .slice(0, limit)
+        .map((run) => run.aiRunId);
+    },
+
+    async anonymizeAiRuns(_tenantId, aiRunIds, anonymizedAt) {
+      let anonymized = 0;
+      aiRuns = aiRuns.map((run) => {
+        if (aiRunIds.includes(run.aiRunId) && run.anonymizedAt === null) {
+          anonymized += 1;
+          return { ...run, anonymizedAt };
+        }
+        return run;
+      });
+      return anonymized;
     },
 
     async recordRetentionAudit(tenantId, metadata) {
@@ -406,6 +667,10 @@ export function createInMemoryRetentionStore(
 
     listMessages() {
       return messages;
+    },
+
+    listAiRuns() {
+      return aiRuns;
     },
 
     listAuditEvents() {

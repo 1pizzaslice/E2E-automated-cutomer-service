@@ -1415,6 +1415,46 @@ Responsibilities:
 - Wait until resolution deadline.
 - Emit breach events and escalation tasks.
 
+### 19.4 Scheduled Job Workflows (Milestone 17, ADR-0025)
+
+The QA sampling and retention jobs run unattended as short-lived Temporal
+workflows started by per-tenant Temporal Schedules (daily, UTC, jittered up
+to 5 minutes):
+
+- `qaSamplingJobWorkflow` / `retentionJobWorkflow`
+  (`packages/workers/src/workflows/scheduled-jobs-workflow.ts`): thin
+  deterministic drivers that loop one activity (`runQaSamplingJob` /
+  `runRetentionJob`) in bounded batches (500 rows/class) until the tenant's
+  backlog drains, a batch makes no progress, or the safety bound
+  (`SCHEDULED_JOBS_MAX_BATCHES` = 50) is hit. All database, event bus, and
+  blob work happens inside the activities
+  (`packages/workers/src/activities/scheduled-jobs-activities.ts`), which run
+  on the same task queue and worker process as the ticket lifecycle.
+- Schedules are named `support-qa-sampling-{tenant_id}` and
+  `support-retention-{tenant_id}`, fire daily at
+  `SUPPORT_QA_SAMPLING_SCHEDULE_UTC` (default 02:00) /
+  `SUPPORT_RETENTION_SCHEDULE_UTC` (default 02:30), use overlap policy SKIP
+  (a still-draining run is never doubled) and a 6h catch-up window, and start
+  the workflow with `{ tenant_id }`.
+- The worker entrypoint (`packages/workers/src/main.ts`) bootstraps the
+  schedules create-if-missing on every start (`bootstrapJobSchedules` in
+  `packages/workers/src/job-schedules.ts`): active tenants are discovered on
+  the owner connection, existing schedules (including operator edits made
+  via the Temporal UI/CLI) are left untouched, and bootstrap failure is
+  fatal — a worker that cannot guarantee its schedules must not run without
+  them. Tenants onboarded later get schedules on the next worker start.
+  `SUPPORT_JOB_SCHEDULES=disabled` skips the bootstrap (local debugging
+  only).
+- Job observability: every activity run wraps in a `job.qa_sampling` /
+  `job.retention` span and records `support.job.executions` +
+  `support.job.duration_ms` (attributes `job`, `outcome`
+  succeeded|failed|skipped, `tenant_id`) plus
+  `support.retention.purged_items` per retention class; failed runs alert
+  via `SupportScheduledJobFailures`, unswept blobs via the
+  `retention_sweep_failed` critical-failure mode
+  (`SupportRetentionSweepFailures`), both in
+  `infra/observability/alerts.yaml`.
+
 ## 20. Error Model
 
 Structured error shape:
@@ -1473,21 +1513,43 @@ V1 placeholders:
 - Audit events retained longer than operational traces.
 - PII deletion/export workflow to be designed before enterprise customers.
 
-Current implementation (Milestone 12): `tenants.retention_policy` (jsonb,
-migration `0004`) holds the per-tenant configuration validated by the shared
-`TenantRetentionPolicySchema` (`raw_payload_days`, `attachment_days`,
-`ai_run_days`, `audit_event_days`; absent/null = retain indefinitely — the
-default). The workers retention job (`runTenantRetentionJob` +
-`createDatabaseRetentionStore`, all under RLS) computes per-class cutoffs and
-applies the safe subset: it clears expired `messages.raw_payload_ref`
-references in bounded batches, returns the cleared refs for the storage
-sweeper, and appends a `retention.applied` audit event. Attachment metadata
-and AI-run traces are counted and reported as planned-but-not-executed
-placeholders until the blob-deletion and anonymization strategies land.
-Missing or malformed retention configuration fails closed (nothing is
-purged). Since Milestone 16 `retention_policy` is surfaced read-only on the
-tenant API contract (`TenantResponseSchema`); changing it remains an ops
-action, not an API write.
+Current implementation (Milestones 12 + 17): `tenants.retention_policy`
+(jsonb, migration `0004`) holds the per-tenant configuration validated by
+the shared `TenantRetentionPolicySchema` (`raw_payload_days`,
+`attachment_days`, `ai_run_days`, `audit_event_days`; absent/null = retain
+indefinitely — the default). The workers retention job
+(`runTenantRetentionJob` + `createDatabaseRetentionStore`, all under RLS)
+computes per-class cutoffs and executes every configured class in bounded
+batches, scheduled daily per tenant on Temporal Schedules (§19.4):
+
+- `raw_payload_days`: the blobs behind expired `messages.raw_payload_ref`
+  are deleted through the injected `BlobSweeper`
+  (`packages/workers/src/blob-sweeper.ts`; the filesystem implementation
+  matches the API's `file://` raw-payload store and only deletes inside
+  `RAW_PAYLOAD_STORE_DIR`), then the database refs are cleared.
+  Sweep-before-clear fails closed: a ref whose blob could not be deleted
+  keeps its row, is counted as a `blob_sweep_failure` (alerted via the
+  `retention_sweep_failed` critical-failure mode), and is retried on the
+  next daily run — no blob is orphaned silently.
+- `attachment_days`: locally stored attachment blobs (`file://`
+  `object_ref`s) are swept the same fail-closed way, then the message's
+  attachment metadata is cleared to `[]`. Provider-side refs (e.g.
+  `whatsapp-media:` ids) have no locally stored bytes; clearing the
+  metadata is the purge.
+- `ai_run_days`: the PII-bearing `ai_runs` columns are anonymized in place —
+  `structured_output` nulled, `guardrail_results` reset to `{}` — and
+  `anonymized_at` (migration `0007`) stamped so re-runs skip completed rows.
+  Run metadata (status, tokens, latency, cost, provenance, trace id) is
+  retained for reporting.
+
+Every applied run appends a `retention.applied` audit event whose metadata
+carries the per-class counts, sweep failures, and cutoffs. Missing or
+malformed retention configuration still fails closed (nothing is purged),
+and `audit_event_days` remains deliberately unenforced — audit events are
+the append-only compliance ledger (ADR-0025). Since Milestone 16
+`retention_policy` is surfaced read-only on the tenant API contract
+(`TenantResponseSchema`); changing it remains an ops action, not an API
+write.
 
 ## 23. Backend Acceptance Criteria For V1 Pilot
 

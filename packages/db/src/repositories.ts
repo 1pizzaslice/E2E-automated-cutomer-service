@@ -1790,39 +1790,112 @@ export function clearMessageRawPayloadRefsQuery(
 }
 
 /**
- * Planned-but-not-executed retention counts (BACKEND_SPEC section 22
- * placeholders): attachment metadata and AI-run traces older than their
- * cutoffs. The v1 retention job reports these; purging them is deferred until
- * the blob-deletion and anonymization strategies land.
+ * Messages whose attachment metadata has outlived the tenant's
+ * `attachment_days` retention window (Milestone 17, BACKEND_SPEC section 22).
+ * Bounded so the retention job works in batches; the attachment JSON is
+ * returned so the job can sweep any locally stored blobs (`object_ref`)
+ * before clearing the metadata.
  */
-export function expiredAttachmentMessagesCountQuery(
+export function expiredAttachmentMessagesQuery(
   db: SupportDatabase,
   scope: TenantScope,
-  cutoff: Date,
+  options: RetentionCutoffQueryOptions,
 ) {
   return db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({
+      messageId: messages.messageId,
+      attachments: messages.attachments,
+      createdAt: messages.createdAt,
+    })
     .from(messages)
     .where(
       and(
         eq(messages.tenantId, scope.tenantId),
         sql`jsonb_array_length(${messages.attachments}) > 0`,
-        lt(messages.createdAt, cutoff),
+        lt(messages.createdAt, options.cutoff),
       ),
-    );
+    )
+    .orderBy(asc(messages.createdAt), asc(messages.messageId))
+    .limit(options.limit);
 }
 
-export function expiredAiRunsCountQuery(
+export function clearMessageAttachmentsQuery(
   db: SupportDatabase,
   scope: TenantScope,
-  cutoff: Date,
+  messageIds: readonly string[],
 ) {
   return db
-    .select({ count: sql<number>`count(*)::int` })
+    .update(messages)
+    .set({ attachments: [] })
+    .where(
+      and(
+        eq(messages.tenantId, scope.tenantId),
+        inArray(messages.messageId, [...messageIds]),
+        sql`jsonb_array_length(${messages.attachments}) > 0`,
+      ),
+    )
+    .returning({
+      messageId: messages.messageId,
+    });
+}
+
+/**
+ * AI runs whose PII-bearing content has outlived the tenant's `ai_run_days`
+ * retention window and has not been anonymized yet (Milestone 17,
+ * BACKEND_SPEC section 22). Bounded so the retention job works in batches;
+ * the `anonymized_at` filter keeps re-runs idempotent.
+ */
+export function expiredAiRunsForAnonymizationQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  options: RetentionCutoffQueryOptions,
+) {
+  return db
+    .select({
+      aiRunId: aiRuns.aiRunId,
+      createdAt: aiRuns.createdAt,
+    })
     .from(aiRuns)
     .where(
-      and(eq(aiRuns.tenantId, scope.tenantId), lt(aiRuns.createdAt, cutoff)),
-    );
+      and(
+        eq(aiRuns.tenantId, scope.tenantId),
+        isNull(aiRuns.anonymizedAt),
+        lt(aiRuns.createdAt, options.cutoff),
+      ),
+    )
+    .orderBy(asc(aiRuns.createdAt), asc(aiRuns.aiRunId))
+    .limit(options.limit);
+}
+
+/**
+ * Anonymize expired AI runs: null the PII-bearing content columns
+ * (`structured_output`; `guardrail_results` resets to its empty-object
+ * default) while keeping run metadata (status, tokens, latency, provenance)
+ * for reporting, and stamp `anonymized_at` so re-runs skip these rows.
+ */
+export function anonymizeAiRunsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+  aiRunIds: readonly string[],
+  anonymizedAt: Date,
+) {
+  return db
+    .update(aiRuns)
+    .set({
+      structuredOutput: null,
+      guardrailResults: {},
+      anonymizedAt,
+    })
+    .where(
+      and(
+        eq(aiRuns.tenantId, scope.tenantId),
+        inArray(aiRuns.aiRunId, [...aiRunIds]),
+        isNull(aiRuns.anonymizedAt),
+      ),
+    )
+    .returning({
+      aiRunId: aiRuns.aiRunId,
+    });
 }
 
 export interface ReportWindow {

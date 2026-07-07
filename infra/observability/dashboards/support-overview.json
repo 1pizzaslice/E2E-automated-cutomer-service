@@ -136,6 +136,30 @@
           "legendFormat": "{{failure_mode}}"
         }
       ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Scheduled job runs by job and outcome",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "targets": [
+        {
+          "expr": "sum by (job, outcome) (increase(support_job_executions[24h]))",
+          "legendFormat": "{{job}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Retention items purged by class",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "targets": [
+        {
+          "expr": "sum by (retention_class) (increase(support_retention_purged_items[24h]))",
+          "legendFormat": "{{retention_class}}"
+        }
+      ]
     }
   ]
 }

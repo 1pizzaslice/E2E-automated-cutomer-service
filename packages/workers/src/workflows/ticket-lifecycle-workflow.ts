@@ -27,6 +27,14 @@ import {
   TICKET_LIFECYCLE_SIDE_EFFECT_ACTIVITY_RETRY_POLICY,
 } from "./ticket-lifecycle-types.js";
 
+// The scheduled job workflows (Milestone 17) ship in the same workflow
+// bundle: this module is the worker's single workflowsPath entry, so every
+// workflow type registered on the task queue must be exported from here.
+export {
+  qaSamplingJobWorkflow,
+  retentionJobWorkflow,
+} from "./scheduled-jobs-workflow.js";
+
 const activities = proxyActivities<TicketLifecycleActivities>({
   startToCloseTimeout: "1 minute",
   retry: TICKET_LIFECYCLE_DEFAULT_ACTIVITY_RETRY_POLICY,

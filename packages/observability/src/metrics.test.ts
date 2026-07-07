@@ -39,6 +39,17 @@ describe("createRecordingSupportMetrics", () => {
     metrics.recordApprovalRequested("ai_response_review");
     metrics.recordApprovalDecision({ decision: "approved", latencyMs: 900 });
     metrics.recordCriticalFailure("outbound_send_failed");
+    metrics.recordJobRun({
+      job: "retention",
+      outcome: "succeeded",
+      tenantId: "ten_a",
+      durationMs: 120,
+    });
+    metrics.recordRetentionPurge({
+      retentionClass: "raw_payload",
+      tenantId: "ten_a",
+      count: 3,
+    });
 
     expect(metrics.apiRequests).toHaveLength(1);
     expect(metrics.workflowActivities).toHaveLength(1);
@@ -49,6 +60,17 @@ describe("createRecordingSupportMetrics", () => {
       { decision: "approved", latencyMs: 900 },
     ]);
     expect(metrics.criticalFailures).toEqual(["outbound_send_failed"]);
+    expect(metrics.jobRuns).toEqual([
+      {
+        job: "retention",
+        outcome: "succeeded",
+        tenantId: "ten_a",
+        durationMs: 120,
+      },
+    ]);
+    expect(metrics.retentionPurges).toEqual([
+      { retentionClass: "raw_payload", tenantId: "ten_a", count: 3 },
+    ]);
   });
 });
 
@@ -89,6 +111,17 @@ describe("createOtelSupportMetrics", () => {
     });
     metrics.recordApprovalDecision({ decision: "approved", latencyMs: 250 });
     metrics.recordCriticalFailure("approval_signal_failed");
+    metrics.recordJobRun({
+      job: "qa_sampling",
+      outcome: "succeeded",
+      tenantId: "ten_a",
+      durationMs: 45,
+    });
+    metrics.recordRetentionPurge({
+      retentionClass: "ai_run",
+      tenantId: "ten_a",
+      count: 2,
+    });
 
     const collected = await telemetry.collectMetrics();
     const metricNames = collected.flatMap((resourceMetrics) =>
@@ -101,6 +134,9 @@ describe("createOtelSupportMetrics", () => {
     expect(metricNames).toContain(SUPPORT_METRIC_NAMES.approvalDecisions);
     expect(metricNames).toContain(SUPPORT_METRIC_NAMES.approvalLatencyMs);
     expect(metricNames).toContain(SUPPORT_METRIC_NAMES.criticalFailures);
+    expect(metricNames).toContain(SUPPORT_METRIC_NAMES.jobExecutions);
+    expect(metricNames).toContain(SUPPORT_METRIC_NAMES.jobDurationMs);
+    expect(metricNames).toContain(SUPPORT_METRIC_NAMES.retentionPurgedItems);
 
     const allMetrics = collected.flatMap((resourceMetrics) =>
       resourceMetrics.scopeMetrics.flatMap((scope) => scope.metrics),
@@ -112,6 +148,35 @@ describe("createOtelSupportMetrics", () => {
     expect(criticalFailureMetric?.dataPoints[0]?.attributes).toEqual({
       failure_mode: "approval_signal_failed",
     });
+
+    const jobExecutionsMetric = allMetrics.find(
+      (metric) => metric.descriptor.name === SUPPORT_METRIC_NAMES.jobExecutions,
+    );
+    expect(jobExecutionsMetric?.dataPoints[0]?.attributes).toEqual({
+      job: "qa_sampling",
+      outcome: "succeeded",
+      tenant_id: "ten_a",
+    });
+  });
+
+  it("skips the retention purge counter when nothing was purged", async () => {
+    telemetry = createInMemoryTelemetry();
+    const metrics = createOtelSupportMetrics(telemetry.meter);
+    metrics.recordRetentionPurge({
+      retentionClass: "attachment",
+      tenantId: "ten_a",
+      count: 0,
+    });
+
+    const collected = await telemetry.collectMetrics();
+    const metricNames = collected.flatMap((resourceMetrics) =>
+      resourceMetrics.scopeMetrics.flatMap((scope) =>
+        scope.metrics.map((metric) => metric.descriptor.name),
+      ),
+    );
+    expect(metricNames).not.toContain(
+      SUPPORT_METRIC_NAMES.retentionPurgedItems,
+    );
   });
 
   it("skips approval latency when latency is unknown", async () => {

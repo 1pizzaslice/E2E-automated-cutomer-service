@@ -22,6 +22,7 @@ export const SUPPORT_ATTR = {
   toolName: "support.tool_name",
   outcome: "support.outcome",
   failureMode: "support.failure_mode",
+  job: "support.job",
 } as const;
 
 export const SUPPORT_METRIC_NAMES = {
@@ -37,6 +38,9 @@ export const SUPPORT_METRIC_NAMES = {
   approvalDecisions: "support.approval.decisions",
   approvalLatencyMs: "support.approval.latency_ms",
   criticalFailures: "support.critical_failures",
+  jobExecutions: "support.job.executions",
+  jobDurationMs: "support.job.duration_ms",
+  retentionPurgedItems: "support.retention.purged_items",
 } as const;
 
 export type SupportMetricName =
@@ -48,6 +52,7 @@ export const SUPPORT_CRITICAL_FAILURE_MODES = [
   "approval_signal_failed",
   "event_dead_letter",
   "sla_breached",
+  "retention_sweep_failed",
 ] as const;
 
 export type SupportCriticalFailureMode =
