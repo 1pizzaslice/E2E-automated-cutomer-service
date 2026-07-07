@@ -1,3 +1,7 @@
+import {
+  DETERMINISTIC_EMBEDDER_MODEL_ID,
+  EMBEDDING_DIMENSIONS,
+} from "@support/integrations";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   KB_EVAL_DOCUMENTS,
@@ -11,6 +15,7 @@ import { createKbIngestionService } from "./kb-ingestion.js";
 import {
   createInMemoryKbRetrievalStore,
   createKbRetrievalService,
+  EmbeddingModelMismatchError,
   type KbRetrievalService,
 } from "./kb-retrieval.js";
 
@@ -214,5 +219,104 @@ describe("createKbRetrievalService", () => {
     expect(injectionHit!.content).toContain("IGNORE ALL PREVIOUS INSTRUCTIONS");
     expect(injectionHit!.kb_chunk_id).toMatch(/^kbc_/);
     expect(injectionHit!.tenant_id).toBe(TENANT_A);
+  });
+
+  it("records the embedding model id on ingested chunk metadata", async () => {
+    await harness.ingestCorpus(TENANT_A);
+
+    const results = await retrieval.search({
+      tenantId: TENANT_A,
+      query: KB_EVAL_QUERIES[0]!.query,
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    for (const result of results) {
+      expect(result.metadata["embedding_model_id"]).toBe(
+        DETERMINISTIC_EMBEDDER_MODEL_ID,
+      );
+    }
+  });
+
+  it("drops hits below the similarity floor", async () => {
+    await harness.ingestCorpus(TENANT_A);
+
+    const unbounded = await retrieval.search({
+      tenantId: TENANT_A,
+      query: KB_EVAL_QUERIES[0]!.query,
+    });
+    expect(unbounded.length).toBeGreaterThan(1);
+
+    const floored = createKbRetrievalService({
+      store: createInMemoryKbRetrievalStore(harness.store),
+      // Floor just under the top hit's score: only the best match survives.
+      minScore: unbounded[0]!.score - 1e-9,
+    });
+
+    const results = await floored.search({
+      tenantId: TENANT_A,
+      query: KB_EVAL_QUERIES[0]!.query,
+    });
+
+    expect(results.map((result) => result.kb_chunk_id)).toEqual([
+      unbounded[0]!.kb_chunk_id,
+    ]);
+  });
+
+  it("caps cumulative content at the max-context budget but always keeps the top hit", async () => {
+    await harness.ingestCorpus(TENANT_A);
+
+    const unbounded = await retrieval.search({
+      tenantId: TENANT_A,
+      query: KB_EVAL_QUERIES[0]!.query,
+    });
+    expect(unbounded.length).toBeGreaterThan(1);
+
+    const capped = createKbRetrievalService({
+      store: createInMemoryKbRetrievalStore(harness.store),
+      // A budget smaller than any single chunk: only the top hit survives.
+      maxContextChars: 1,
+    });
+
+    const results = await capped.search({
+      tenantId: TENANT_A,
+      query: KB_EVAL_QUERIES[0]!.query,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.kb_chunk_id).toBe(unbounded[0]!.kb_chunk_id);
+  });
+
+  it("fails closed when chunks were embedded by a different model", async () => {
+    await harness.ingestCorpus(TENANT_A);
+
+    const mismatched = createKbRetrievalService({
+      store: createInMemoryKbRetrievalStore(harness.store),
+      embedder: {
+        modelId: "openai:text-embedding-3-small",
+        dimensions: EMBEDDING_DIMENSIONS,
+        embed: async (texts) =>
+          texts.map(() => new Array<number>(EMBEDDING_DIMENSIONS).fill(0.01)),
+      },
+    });
+
+    await expect(
+      mismatched.search({ tenantId: TENANT_A, query: "refund policy" }),
+    ).rejects.toThrow(EmbeddingModelMismatchError);
+  });
+
+  it("treats chunks without a recorded model id as deterministic-embedded", async () => {
+    await harness.ingestCorpus(TENANT_A);
+
+    // Simulate pre-Milestone-15 rows: strip the recorded id.
+    for (const chunk of harness.store.chunks) {
+      delete (chunk.metadata as Record<string, unknown>)["embedding_model_id"];
+    }
+
+    const results = await retrieval.search({
+      tenantId: TENANT_A,
+      query: KB_EVAL_QUERIES[0]!.query,
+    });
+
+    expect(results.length).toBeGreaterThan(0);
   });
 });

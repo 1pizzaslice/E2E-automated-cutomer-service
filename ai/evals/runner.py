@@ -90,6 +90,7 @@ def run_eval(
     documents: list[KbDocumentFixture] | None = None,
     *,
     invoke=None,
+    model_factory=DeterministicSupportModel,
 ) -> EvalReport:
     # ``documents`` optionally overrides the KB corpus (e.g. the adversarial
     # corpus in evals.injection_suite); the default preserves the golden setup.
@@ -98,6 +99,12 @@ def run_eval(
     else:
         retrieval = InMemoryRetrieval(list(documents))
         tool_executor = InMemoryToolExecutor(build_commerce(), retrieval)
+
+    # ``model_factory`` selects the ModelProvider (Milestone 15): the offline
+    # deterministic model by default, or a real/scripted provider factory for
+    # the live opt-in runs (evals.live_runner). One instance serves all cases
+    # so real chat-model clients are reused.
+    model = model_factory()
 
     # ``invoke`` optionally replaces the in-process run_support_graph call —
     # e.g. service.eval_parity routes every case through the Milestone 14
@@ -130,7 +137,7 @@ def run_eval(
         request = _build_request(case)
         result = invoke(
             request,
-            model=DeterministicSupportModel(),
+            model=model,
             retrieval=retrieval,
             tool_executor=tool_executor,
         )

@@ -82,7 +82,7 @@ function sidecarSuccessPayload(): Record<string, unknown> {
       language: "en",
       sentiment: "frustrated",
       urgency: "normal",
-      priority: "p4",
+      priority: "p3",
       risk_level: "medium",
       confidence: 0.82,
       automation_mode: "human_approve",
@@ -112,6 +112,19 @@ function sidecarSuccessPayload(): Record<string, unknown> {
     },
     approval_package: { suggested_action: "human_approve" },
     eval_signals: { topic: "refund", escalated: true },
+    model: {
+      provider: "anthropic",
+      model_id: "claude-opus-4-8",
+      prompt_versions: {
+        "support_classifier.v1": "v1",
+        "support_response_composer.v1": "v1",
+      },
+      calls: 2,
+      input_tokens: 1500,
+      output_tokens: 420,
+      latency_ms: 1800,
+      cost_estimate: 0.018,
+    },
   };
 }
 
@@ -185,8 +198,9 @@ describe("createHttpRunAiGraph", () => {
 
     expect(result.ai_run_id).toBe("air_sidecar_1");
     expect(result.trace_id).toBe("trace_sidecar_1");
-    // The platform ticket priority stays authoritative; the runtime's own
-    // p1-p4 vocabulary remains visible in `classification`.
+    // The platform ticket priority stays authoritative; the runtime's
+    // classification priority (platform p0-p3 since Milestone 15) remains
+    // visible in `classification`.
     expect(result.routing_decision.priority).toBe("p2");
     expect(result.classification["priority"]).toBe("p2");
     expect(result.routing_decision.risk_level).toBe("medium");
@@ -197,6 +211,14 @@ describe("createHttpRunAiGraph", () => {
     expect(result.eval_signals["topic"]).toBe("refund");
     // approval_package is not part of the activity contract.
     expect("approval_package" in result).toBe(false);
+    // The runtime-reported model usage passes through for ai_runs persistence.
+    expect(result.model).toMatchObject({
+      provider: "anthropic",
+      model_id: "claude-opus-4-8",
+      input_tokens: 1500,
+      output_tokens: 420,
+      cost_estimate: 0.018,
+    });
   });
 
   it("sends the sidecar request with auth, correlation, and policy context", async () => {

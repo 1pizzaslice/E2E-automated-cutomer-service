@@ -121,6 +121,7 @@ def classifier_node(state: AgentState, deps: GraphDependencies) -> None:
     )
     deps.trace.record_prompt(PROMPT_CLASSIFIER, "v1")
     deps.trace.record_model(response.metadata.model_id)
+    deps.trace.record_usage(response.metadata)
 
     out = response.output
     classification = Classification(
@@ -339,6 +340,7 @@ def composer_node(state: AgentState, deps: GraphDependencies) -> None:
     )
     deps.trace.record_prompt(PROMPT_COMPOSER, "v1")
     deps.trace.record_model(response.metadata.model_id)
+    deps.trace.record_usage(response.metadata)
 
     out = response.output
     review_reasons = list(policy.reason_codes)

@@ -28,6 +28,7 @@ _SUCCEEDED_KEYS = {
     "final_recommendation",
     "approval_package",
     "eval_signals",
+    "model",
 }
 _FAILED_KEYS = {
     "status",
@@ -38,6 +39,7 @@ _FAILED_KEYS = {
     "retryable",
     "reason_codes",
     "eval_signals",
+    "model",
 }
 
 
@@ -113,6 +115,7 @@ class AppTest(unittest.TestCase):
                 "service": "ai-runtime",
                 "mode": "local",
                 "graph_version": "support_graph.v1",
+                "model_provider": "deterministic",
             },
         )
 

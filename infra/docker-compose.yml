@@ -106,6 +106,13 @@ services:
       SUPPORT_API_BASE_URL: ${SUPPORT_API_BASE_URL:-http://host.docker.internal:3000}
       SUPPORT_INTERNAL_API_TOKEN: ${SUPPORT_INTERNAL_API_TOKEN:-local-internal-api-token}
       SUPPORT_ENVIRONMENT: local
+      # Real model providers (Milestone 15): unset keeps the deterministic
+      # offline model; set SUPPORT_LLM_PROVIDER/SUPPORT_LLM_MODEL plus the
+      # provider key to activate (pilot default: anthropic + Claude).
+      SUPPORT_LLM_PROVIDER: ${SUPPORT_LLM_PROVIDER:-}
+      SUPPORT_LLM_MODEL: ${SUPPORT_LLM_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

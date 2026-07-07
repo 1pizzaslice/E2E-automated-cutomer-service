@@ -71,6 +71,7 @@ def run_support_graph(
                 retryable=False,
                 reason_codes=("input_invalid", "route_to_human"),
                 eval_signals={"stage": "input_validation"},
+                model=trace.model_usage(),
             ),
             trace,
         )
@@ -91,7 +92,7 @@ def run_support_graph(
     try:
         compiled = build_support_graph(deps)
         compiled.invoke(state, trace)
-        result = _assemble_result(state)
+        result = _assemble_result(state, trace)
     except Exception as exc:  # any node/output failure → structured failure
         return (
             RuntimeResult(
@@ -103,6 +104,7 @@ def run_support_graph(
                 retryable=False,
                 reason_codes=("runtime_error", "route_to_human"),
                 eval_signals={"stage": "graph_execution"},
+                model=trace.model_usage(),
             ),
             trace,
         )
@@ -110,7 +112,7 @@ def run_support_graph(
     return result, trace
 
 
-def _assemble_result(state: AgentState) -> RuntimeResult:
+def _assemble_result(state: AgentState, trace: RunTrace) -> RuntimeResult:
     classification = state.classification
     guardrail = state.guardrail_result
     assert classification is not None and guardrail is not None
@@ -152,4 +154,5 @@ def _assemble_result(state: AgentState) -> RuntimeResult:
         final_recommendation=final.to_dict(),
         approval_package=state.approval_package.to_dict() if state.approval_package else None,
         eval_signals=state.eval_signals,
+        model=trace.model_usage(),
     )

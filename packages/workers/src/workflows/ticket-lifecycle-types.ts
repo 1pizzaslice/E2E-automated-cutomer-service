@@ -186,6 +186,23 @@ export interface TicketLifecycleAiFinalRecommendation {
   readonly reason_codes: readonly string[];
 }
 
+/**
+ * Aggregated model provenance/usage for the run (Milestone 15): the provider
+ * and model that produced it, the versioned prompts used, and token/latency/
+ * cost totals. Optional so pre-Milestone-15 histories replay unchanged; when
+ * present the persistence wrapper records it onto `ai_runs`.
+ */
+export interface TicketLifecycleAiModelUsage {
+  readonly provider: string;
+  readonly model_id: string;
+  readonly prompt_versions: Readonly<Record<string, string>>;
+  readonly calls: number;
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly latency_ms: number;
+  readonly cost_estimate: number;
+}
+
 export type RunAiGraphActivityResult =
   | RunAiGraphSucceededActivityResult
   | RunAiGraphFailedActivityResult;
@@ -201,6 +218,7 @@ export interface RunAiGraphSucceededActivityResult {
   readonly guardrails: Record<string, unknown>;
   readonly final_recommendation: TicketLifecycleAiFinalRecommendation;
   readonly eval_signals: Record<string, unknown>;
+  readonly model?: TicketLifecycleAiModelUsage | null;
 }
 
 export interface RunAiGraphFailedActivityResult {
@@ -212,6 +230,7 @@ export interface RunAiGraphFailedActivityResult {
   readonly retryable: boolean;
   readonly reason_codes: readonly string[];
   readonly eval_signals: Record<string, unknown>;
+  readonly model?: TicketLifecycleAiModelUsage | null;
 }
 
 export interface CreateApprovalActivityInput {

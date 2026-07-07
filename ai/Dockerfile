@@ -12,9 +12,11 @@ ENV UV_LINK_MODE=copy \
 
 # Dependency layer first so source edits do not re-resolve the environment.
 # The project itself is unpackaged (stdlib core, ADR-0016) and is imported via
-# PYTHONPATH, so only locked dependencies are installed.
+# PYTHONPATH, so only locked dependencies are installed. The llm extra ships
+# the LangChain provider stack (Milestone 15) so a real model activates by
+# configuration alone — no image rebuild.
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-install-project --extra service
+RUN uv sync --frozen --no-install-project --extra service --extra llm
 
 COPY runtime ./runtime
 COPY service ./service
@@ -22,4 +24,4 @@ COPY evals ./evals
 
 EXPOSE 8090
 
-CMD ["uv", "run", "--frozen", "--no-sync", "--extra", "service", "python", "-m", "uvicorn", "--factory", "service.app:create_app", "--host", "0.0.0.0", "--port", "8090"]
+CMD ["uv", "run", "--frozen", "--no-sync", "--extra", "service", "--extra", "llm", "python", "-m", "uvicorn", "--factory", "service.app:create_app", "--host", "0.0.0.0", "--port", "8090"]

@@ -148,6 +148,10 @@ export function createKbIngestionService(
         metadata: {
           document_type: document.documentType,
           source_type: document.sourceType,
+          // Which embedding space produced this vector (Milestone 15).
+          // Retrieval enforces a match at query time: a provider swap means
+          // re-ingesting every document, never mixing spaces (ADR-0014).
+          embedding_model_id: embedder.modelId,
         },
         status: "active" as const,
       }));
@@ -179,14 +183,27 @@ export function createKbIngestionService(
   };
 }
 
+export interface DatabaseKbIngestionServiceOptions {
+  /**
+   * The shared production embedder (Milestone 15): the SAME instance must be
+   * wired into retrieval so chunk and query vectors share an embedding space.
+   * Defaults to the deterministic embedder.
+   */
+  readonly embedder?: Embedder;
+}
+
 /**
  * Default production KB ingestion service: a lazily-connected PostgreSQL store,
- * a filesystem content store, and the deterministic embedder. Constructing this
- * opens no connections; the database connects on the first write.
+ * a filesystem content store, and the supplied (default deterministic)
+ * embedder. Constructing this opens no connections; the database connects on
+ * the first write.
  */
-export function createDatabaseKbIngestionService(): KbIngestionService {
+export function createDatabaseKbIngestionService(
+  options: DatabaseKbIngestionServiceOptions = {},
+): KbIngestionService {
   return createKbIngestionService({
     store: createDatabaseKbIngestionStore(),
     contentStore: createFilesystemKbContentStore(),
+    ...(options.embedder ? { embedder: options.embedder } : {}),
   });
 }

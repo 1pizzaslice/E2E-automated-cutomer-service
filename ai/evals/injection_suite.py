@@ -216,10 +216,19 @@ KB_INJECTION_CASES: tuple[EvalCase, ...] = (
 ALL_INJECTION_SUITE_CASES: tuple[EvalCase, ...] = INJECTION_CASES + KB_INJECTION_CASES
 
 
-def run_injection_suite() -> EvalReport:
-    """Run the full injection suite against the adversarial KB corpus."""
+def run_injection_suite(*, model_factory=None) -> EvalReport:
+    """Run the full injection suite against the adversarial KB corpus.
 
-    return run_eval(cases=ALL_INJECTION_SUITE_CASES, documents=build_adversarial_documents())
+    ``model_factory`` optionally selects the ModelProvider (Milestone 15) —
+    the live opt-in runs drive this suite against the configured real model.
+    """
+
+    kwargs = {} if model_factory is None else {"model_factory": model_factory}
+    return run_eval(
+        cases=ALL_INJECTION_SUITE_CASES,
+        documents=build_adversarial_documents(),
+        **kwargs,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

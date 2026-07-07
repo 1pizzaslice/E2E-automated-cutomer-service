@@ -486,21 +486,30 @@ Use when:
 
 ## 8. Prompt Versioning
 
-Prompt files should eventually live in the AI runtime package with stable IDs.
-
-Prompt ID format:
+Prompt files live in the AI runtime package with stable IDs (realized at
+Milestone 15): `ai/runtime/prompts/<prompt_id>.md`, where the prompt id
+carries the version (`support_classifier.v1.md`). Each file declares its
+`prompt_id` and `version` in a frontmatter block that the registry
+(`runtime/prompts/load_prompt`) validates at load time, so a renamed or
+mislabeled file fails loudly. The two model call sites are file-backed:
 
 - `support_classifier.v1`
-- `support_retrieval_planner.v1`
-- `support_policy_decider.v1`
-- `support_tool_planner.v1`
 - `support_response_composer.v1`
-- `support_guardrail_critic.v1`
+
+(The other decision points — retrieval planning, policy, tool planning,
+guardrails — are deterministic Python by design, ADR-0016/ADR-0023, so they
+have no prompts.) The real-model provider renders the file body as system
+instructions and appends the run input as a fenced JSON block — customer text
+is always data inside that block, never interpolated into instructions. The
+prompt versions used are recorded on every AI run (`RuntimeResult.model.
+prompt_versions` → `ai_runs.prompt_version`).
 
 Prompt changes require:
 
-- Version increment if behavior changes materially.
-- Eval run against golden dataset.
+- A NEW version file (`support_classifier.v2.md`) if behavior changes
+  materially — shipped versions are never edited in place.
+- Eval run against golden dataset (`python -m evals.live_runner` for real
+  models; SOPS §11.1).
 - `docs/AI_RUNTIME_HARNESS.md` update.
 - `TODO.md` verification entry.
 
@@ -519,6 +528,13 @@ Required provider metadata:
 - Error code.
 
 No business logic should depend on provider-specific raw response shapes.
+
+Implementation (Milestone 15, ADR-0023): `runtime/llm.py` implements the
+`ModelProvider` port over LangChain's `init_chat_model` with env-driven
+selection — see section 21. The metadata above is captured per call into
+`ModelMetadata`, aggregated on the run trace, surfaced as the
+`RuntimeResult.model` section, and persisted to `ai_runs` (model id, prompt
+versions, latency, tokens, cost) end to end.
 
 ## 10. Retrieval Rules
 
@@ -831,8 +847,8 @@ writes those replies, so no AI draft is produced.
 - Offline evals: `PYTHONPATH=ai python3 -m evals.runner` (prints metrics + gates).
 
 Prompt IDs are realized as `support_classifier.v1` and
-`support_response_composer.v1` (section 8); versioned prompt files land when a
-real model provider is wired.
+`support_response_composer.v1` (section 8), backed by versioned prompt files
+under `ai/runtime/prompts/` since Milestone 15.
 
 ## 20. Service Bridge (Milestone 14)
 
@@ -874,8 +890,9 @@ HTTP adapters.
   carry `x-correlation-id`. Tool transport/contract failures degrade to
   `failed` tool results (visible in the approval package, section 6.7);
   retrieval failures raise and become a structured failed run that routes to
-  human (section 6.4). The model provider stays `DeterministicSupportModel`
-  until Milestone 15.
+  human (section 6.4). In both modes the model provider is resolved once at
+  app startup from `SUPPORT_LLM_PROVIDER` (section 21); unset keeps the
+  deterministic model.
 
 ### 20.3 Worker-Side Activity
 
@@ -927,3 +944,83 @@ message content, drafts, or secrets (ADR-0018 attribute correlation).
 - Live drive: `pnpm --filter @support/workers test:e2e:service` (Compose +
   spawned sidecar; happy path with retrieval/tools over the network, plus
   sidecar-down and sidecar-500 degradation).
+
+## 21. Real Model Providers (Milestone 15)
+
+Per ADR-0020/ADR-0023 the real LLM is a config-selected LangChain adapter
+behind the unchanged `ModelProvider` port (`runtime/llm.py`). The graph,
+ports, governance, and service bridge of sections 19-20 are unchanged — only
+the model behind the port swaps, by environment configuration alone.
+
+### 21.1 Configuration
+
+| Variable                                                   | Meaning                                                                                                 | Default                                            |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `SUPPORT_LLM_PROVIDER`                                     | `anthropic`, `openai`, any `init_chat_model` provider, or `scripted`                                    | unset → deterministic offline model                |
+| `SUPPORT_LLM_MODEL`                                        | provider model id (e.g. `claude-opus-4-8`)                                                              | required when a real provider is set               |
+| `SUPPORT_LLM_API_KEY_REF`                                  | name of the env var holding the key (SecretResolver conventions)                                        | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` by provider |
+| `SUPPORT_LLM_TIMEOUT_MS`                                   | per-call timeout                                                                                        | 30000                                              |
+| `SUPPORT_LLM_MAX_RETRIES`                                  | SDK transport retries                                                                                   | 2                                                  |
+| `SUPPORT_LLM_TEMPERATURE`                                  | sampling temperature; omitted unless set (current Claude models reject non-default sampling parameters) | unset                                              |
+| `SUPPORT_LLM_PRICE_INPUT_PER_MTOK` / `..._OUTPUT_PER_MTOK` | cost-estimate overrides (USD per MTok)                                                                  | built-in table by model prefix                     |
+
+The pilot default is Anthropic Claude; real providers activate only by
+explicit config, and a provider/model/prompt change must re-run the eval
+gates (SOPS §11.1). Config problems fail the sidecar at boot with every
+problem listed.
+
+### 21.2 Adapter Behavior
+
+- Renders the versioned prompt file (section 8) as system instructions and
+  the run input as a fenced JSON block (customer text stays data).
+- Enforces structured outputs via `with_structured_output` with
+  closed-vocabulary JSON schemas (topics, sentiments, urgencies, priorities
+  `p1`-`p3` — `p0` is operator-reserved — and sensitive flags as enums).
+- Applies per-call timeouts, bounded SDK transport retries, and one
+  in-adapter repair attempt on structured-output parse failures; a
+  persistently non-conforming or unreachable model raises, which
+  `run_support_graph` converts into a structured `failed` run routed to a
+  human (section 16). Nothing fabricates model output after an error.
+- Captures per-call usage into `ModelMetadata` and aggregates it on the run
+  trace; the result carries a `model` section (provider, model id, prompt
+  versions, calls, tokens, latency, cost estimate) that the worker persists
+  onto `ai_runs`.
+- Policy and guardrail logic remain deterministic Python: the model
+  classifies and drafts; it never governs (section 19.3).
+
+### 21.3 Provider Agnosticism And The Scripted Provider
+
+`SUPPORT_LLM_PROVIDER=scripted` selects a dependency-free stand-in chat model
+that answers with the deterministic support rules **through the exact same
+adapter path** (prompt files → chat-model interface → structured outputs →
+usage capture). Because the adapter cannot tell it apart from a real chat
+model, the golden + injection suites passing under `scripted` and under a
+real provider with only env changes is the provider-agnosticism proof — no
+code changes anywhere in the path.
+
+### 21.4 Live Eval Gate
+
+The offline suites always run the deterministic model. The opt-in live gate
+(costs real tokens; never part of `pnpm test:py`):
+
+```
+SUPPORT_LLM_PROVIDER=anthropic SUPPORT_LLM_MODEL=claude-sonnet-5 \
+  ANTHROPIC_API_KEY=... PYTHONPATH=ai \
+  uv run --frozen --project ai --extra llm python -m evals.live_runner
+```
+
+Runs the golden dataset and the full injection suite against the configured
+provider with the unchanged hard-fail gates (zero unsafe auto-send, zero
+cross-tenant leaks, injection pass rate 1.0) and exits non-zero on any
+violation. The same command with `SUPPORT_LLM_PROVIDER=scripted` runs
+offline. Dependencies: `uv sync --project ai --extra llm` (LangChain +
+`langchain-anthropic`/`langchain-openai`; the sidecar image ships them).
+
+The end-to-end acceptance drive is the sidecar e2e's real-model mode:
+`E2E_AI_REAL_PROVIDER=anthropic E2E_AI_REAL_MODEL=claude-sonnet-5` (plus the
+provider key) on `pnpm --filter @support/workers test:e2e:service` proves a
+real, citation-grounded model draft lands in the approval with real
+token/cost provenance persisted on `ai_runs`. Recorded pass (2026-07-07):
+both models clear every hard-fail gate — `claude-sonnet-5` (pilot default:
+golden topic 0.960/routing 1.0, injection 1.0) and `claude-opus-4-8`
+(config-only upgrade; slightly more conservative routing).

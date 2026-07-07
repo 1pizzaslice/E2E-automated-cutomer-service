@@ -170,6 +170,11 @@ export interface RecordAiRunResultInput {
   readonly guardrailResults: JsonObject;
   readonly status: "succeeded" | "failed";
   readonly latencyMs: number | null;
+  /** Token/cost usage reported by the runtime (Milestone 15); null when the
+   * implementation does not report usage (e.g. the TS deterministic stand-in). */
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly costEstimate: number | null;
   readonly traceId: string | null;
   readonly completedAt: Date;
 }
@@ -457,6 +462,20 @@ export const AI_RUN_MODEL_PROVIDER = "deterministic";
 export const AI_RUN_MODEL_ID = "deterministic-support-model.v1";
 
 /**
+ * Serializes the runtime-reported prompt-version map ("support_classifier.v1"
+ * → "v1", ...) into the single `ai_runs.prompt_version` column: the sorted
+ * prompt ids (which already carry their versions) joined by commas.
+ */
+export function formatPromptVersions(
+  promptVersions: Readonly<Record<string, string>>,
+  fallback: string,
+): string {
+  const promptIds = Object.keys(promptVersions).sort();
+
+  return promptIds.length > 0 ? promptIds.join(",") : fallback;
+}
+
+/**
  * Provenance stamped on every persisted `ai_runs` row. The defaults describe
  * the in-process deterministic stand-in; the Milestone 14 sidecar composition
  * overrides `modelId` with the Python runtime's deterministic model id so the
@@ -513,15 +532,24 @@ export function createPersistedRunAiGraph(
         input.correlation_id,
       );
 
+    // Since Milestone 15 the runtime reports its own provenance and usage on
+    // the result (`model`): which provider/model actually produced the run,
+    // the versioned prompts used, and token/cost totals. When present it wins
+    // over the composition-time defaults, which remain the fallback for the
+    // deterministic TS stand-in and pre-Milestone-15 sidecars.
+    const usage = result.model ?? null;
+
     await dependencies.store.recordAiRunResult({
       tenantId: input.tenant_id,
       aiRunId,
       ticketId: input.ticket_id,
       conversationId: input.ticket.conversation_id,
       runType: "full_graph",
-      promptVersion: provenance.promptVersion,
-      modelProvider: provenance.modelProvider,
-      modelId: provenance.modelId,
+      promptVersion: usage
+        ? formatPromptVersions(usage.prompt_versions, provenance.promptVersion)
+        : provenance.promptVersion,
+      modelProvider: usage?.provider ?? provenance.modelProvider,
+      modelId: usage?.model_id ?? provenance.modelId,
       inputRefs: {
         correlation_id: input.correlation_id,
         initial_message_id: input.initial_message_id,
@@ -566,6 +594,9 @@ export function createPersistedRunAiGraph(
       guardrailResults: result.status === "succeeded" ? result.guardrails : {},
       status: result.status,
       latencyMs,
+      inputTokens: usage?.input_tokens ?? null,
+      outputTokens: usage?.output_tokens ?? null,
+      costEstimate: usage?.cost_estimate ?? null,
       traceId: result.trace_id,
       completedAt,
     });
@@ -1645,6 +1676,9 @@ export function createDatabaseTicketLifecyclePersistenceStore(
           guardrailResults: input.guardrailResults,
           status: input.status,
           latencyMs: input.latencyMs,
+          inputTokens: input.inputTokens,
+          outputTokens: input.outputTokens,
+          costEstimate: input.costEstimate,
           traceId: input.traceId,
           completedAt: input.completedAt,
         });
@@ -1669,6 +1703,9 @@ export function createDatabaseTicketLifecyclePersistenceStore(
             guardrailResults: input.guardrailResults,
             status: input.status,
             latencyMs: input.latencyMs,
+            inputTokens: input.inputTokens,
+            outputTokens: input.outputTokens,
+            costEstimate: input.costEstimate,
             traceId: input.traceId,
             completedAt: input.completedAt,
           });
