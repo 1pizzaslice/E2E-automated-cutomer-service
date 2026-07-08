@@ -323,7 +323,9 @@ Sampling job (Milestone 11):
   package (conversation, messages, AI run + trace link, tool calls,
   approvals with the original AI draft and human edit), and
   `POST /v1/qa-reviews/{id}/complete` with the dimension scores (0-5) and
-  defect taxonomy above.
+  defect taxonomy above. From Milestone 23 the reviewer console
+  (`apps/console`, ADR-0026) is the default surface for this loop and the
+  direct API path becomes the documented fallback.
   Scheduling (Milestone 17, ADR-0025): the job runs unattended, daily per
   tenant, on Temporal Schedules:
 

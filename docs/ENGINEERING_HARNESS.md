@@ -239,10 +239,14 @@ When application code is scaffolded, use a structure like:
 │   └── exec-plans/
 ├── packages/
 │   ├── api/
+│   ├── api-client/
 │   ├── workers/
 │   ├── shared-schemas/
 │   ├── db/
-│   └── integrations/
+│   ├── integrations/
+│   └── observability/
+├── apps/
+│   └── console/
 ├── ai/
 │   ├── runtime/
 │   ├── evals/
@@ -255,7 +259,7 @@ When application code is scaffolded, use a structure like:
 └── scripts/
 ```
 
-This is a target, not yet implemented.
+`packages/` is implemented. `packages/api-client/` arrives with Milestone 20 and `apps/console/` with Milestone 23 (ADR-0026); `apps/*` is not yet a `pnpm-workspace.yaml` glob.
 
 ## 7. Development Commands
 
@@ -418,7 +422,7 @@ Done when:
 
 ## 13. Avoid These Failure Modes
 
-- Building UI before backend contracts.
+- Building UI before backend contracts. This is about sequencing, not placement: the console lives in this repo at `apps/console` (ADR-0026), but no console code lands before Milestone 20 publishes its contract.
 - Letting AI bypass tool registry.
 - Letting Temporal workflows call nondeterministic services directly.
 - Adding schemas without tests.

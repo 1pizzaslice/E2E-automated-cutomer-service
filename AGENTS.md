@@ -4,7 +4,7 @@
 
 This repository is for a backend-first AI customer support BPO platform. The goal is to build the service and engineering harness for automated support operations: channel intake, ticket lifecycle, durable workflows, AI triage/drafting, tool-governed actions, human approval, auditability, evaluations, and pilot operations.
 
-Do not build frontend UI until the backend contracts and workflows are implemented. Frontend references are allowed only when defining API needs for a future agent console.
+Frontend belongs in this repository at `apps/console` and nowhere else (ADR-0026). Do not write console code before Milestone 20 lands its contract; until then, frontend references are allowed only when defining API needs for the reviewer console. The console UI itself is Milestone 23.
 
 ## Required Reading Before Coding
 
@@ -43,7 +43,7 @@ Before ending a coding session:
 ## Scope Rules
 
 - Backend first: APIs, workers, workflows, data, integrations, AI runtime, observability, security, and tests.
-- No frontend implementation unless a future task explicitly changes scope.
+- Frontend implementation only under `apps/console`, and only from Milestone 20 onward (ADR-0026). Backend correctness still comes first: the console consumes contracts, it does not shape them mid-build.
 - Do not introduce app code without updating the relevant docs and `TODO.md`.
 - Do not rely on undocumented behavior, guessed schemas, or ad hoc JSON. Validate data at boundaries.
 - Do not create one-off scripts or helpers without deciding where they live and how they are tested.
@@ -58,6 +58,7 @@ Before ending a coding session:
 - Event bus: NATS JetStream for v1.
 - Cache and rate limits: Redis.
 - Observability: OpenTelemetry, structured logs, metrics, traces, and LLM trace/eval tooling.
+- Reviewer console: TypeScript at `apps/console`, calling `/v1/*` through `packages/api-client`. No backend-for-frontend — `packages/api` is the console's backend (ADR-0026). The UI framework is unchosen and is a Milestone 23 decision.
 
 If a change contradicts these defaults, update `docs/DECISIONS.md` in the same change with the reason.
 

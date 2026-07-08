@@ -40,6 +40,7 @@ Default reading rule:
 - For AI runtime work, read `AI_RUNTIME_HARNESS.md`, `TEST_STRATEGY.md`, and `DECISIONS.md`.
 - For infrastructure or tooling work, read `DEVELOPMENT_RULES.md`, `ENGINEERING_HARNESS.md`, and `TODO.md`.
 - For operations or pilot process work, read `SOPS.md` and `PLAN.md`.
+- For reviewer console work (`apps/console`), read `apps/console/AGENTS.md`, the served OpenAPI document, and `packages/api-client`. Do **not** load `BACKEND_SPEC.md` or `AI_RUNTIME_HARNESS.md` — the console consumes the API contract, it does not implement it (ADR-0026).
 
 If a doc starts becoming too broad, split it instead of making `AGENTS.md` huge.
 
