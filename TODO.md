@@ -27,11 +27,11 @@ Start Milestone 18 - Staging Environment On Hardened Compose (full checklist bel
 
 Milestone 17 follow-ups to fold into later work (not blockers): the blob sweeper is filesystem-only until Milestone 18 delivers the S3/MinIO object store + sweeper behind the same `RawPayloadStore`/`BlobSweeper` ports — until then the API and worker must share `RAW_PAYLOAD_STORE_DIR` (the hardened Compose must mount it into both or move to S3 refs); schedule coverage lags tenant onboarding by one worker restart (documented in SOPS §10; add a reconciler if tenant creation becomes API-frequent); `audit_event_days` stays deliberately unenforced as the append-only compliance ledger (ADR-0025) until a tenant contract requires audit purging; the WhatsApp media-download slice (Milestone 6 follow-up) will start writing local attachment blobs that the attachment retention class then actually sweeps; and the QA drain loop stops on a zero-sample batch by design (unsampled candidates are deterministically never-sampled — revisit only if the sampling rules gain time-varying inputs).
 
-Milestone 16 follow-ups to fold into later work (not blockers): the internal machine token stays a static shared secret until the sidecar leaves the internal trust boundary (rotation = env change + restart; Milestone 18 delivers it as a real secret on an internal-only network); auth costs two indexed DB lookups per request — add per-request role caching alongside Milestone 20's rate limiting if pilot load warrants it; the spec's separate policy-version `approve` step is folded into activation (activator = approver) until the Milestone 20 console needs a two-person rule; `integration.credential_changed` and `permission.granted|revoked` remain the last reserved-but-unproduced audit actions (user/role management API is future work); Milestone 18's hardened Compose must inject `SUPPORT_AUTH_ISSUER`/`SUPPORT_AUTH_AUDIENCE` (production Clerk instance) alongside the provider keys; and the console repo (Milestone 20) shares the same Clerk application for reviewer identity.
+Milestone 16 follow-ups to fold into later work (not blockers): the internal machine token stays a static shared secret until the sidecar leaves the internal trust boundary (rotation = env change + restart; Milestone 18 delivers it as a real secret on an internal-only network); auth costs two indexed DB lookups per request — add per-request role caching alongside Milestone 20's rate limiting if pilot load warrants it; the spec's separate policy-version `approve` step is folded into activation (activator = approver) until the Milestone 20 console needs a two-person rule; `integration.credential_changed` and `permission.granted|revoked` remain the last reserved-but-unproduced audit actions (user/role management API is future work); Milestone 18's hardened Compose must inject `SUPPORT_AUTH_ISSUER`/`SUPPORT_AUTH_AUDIENCE` (production Clerk instance) alongside the provider keys; and the Milestone 23 console (`apps/console`, ADR-0026) shares the same Clerk application for reviewer identity.
 
 Milestone 15 follow-ups to fold into later work (not blockers): the OpenAI key is still pending — live real-embedding retrieval quality and the live second-provider `live_runner` re-run land with Milestone 19's live-provider work (the scripted proof already covers plumbing agnosticism); Milestone 18's hardened Compose must inject `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` as real secrets (the Compose ai-service currently passes them through from the host env); the workers' keyword triage still seeds initial topic/priority before the AI graph — replacing it with a classification read from the persisted run is deferred to the reopened-ticket work (Milestone 22, ADR-0023 follow-up); the retrieval similarity floor defaults to 0 — set `SUPPORT_KB_MIN_SIMILARITY` (suggested 0.25 for `text-embedding-3-small`) when real embeddings go live (Milestone 19); the scripted provider cannot judge real draft quality — the LLM-graded rubric is Milestone 21; and `evals.live_runner` prints per-suite reports but does not yet persist them — consider writing run artifacts when Milestone 21's expansion lands.
 
-Milestone 14 follow-ups to fold into later work (not blockers): the runtime's `approval_package` is dropped at the activity boundary until a consumer exists (revisit for the Milestone 20 console); the sidecar's `ai_runs` provenance constants (`AI_SIDECAR_RUN_PROVENANCE`) now serve only as the fallback — since Milestone 15 the runtime result carries its own provenance/usage; the `internal_service` machine token is a single shared static secret until Milestone 16's IdP work (rotation = env change + restart); Compose's `ai-service` defaults to local dev tokens — Milestone 18's hardened profile must override them and move the sidecar onto an internal-only network; and the runtime priority vocabulary was unified to the platform `p0`-`p3` at Milestone 15 (done).
+Milestone 14 follow-ups to fold into later work (not blockers): the runtime's `approval_package` is dropped at the activity boundary until a consumer exists (revisit for the Milestone 23 console); the sidecar's `ai_runs` provenance constants (`AI_SIDECAR_RUN_PROVENANCE`) now serve only as the fallback — since Milestone 15 the runtime result carries its own provenance/usage; the `internal_service` machine token is a single shared static secret until Milestone 16's IdP work (rotation = env change + restart); Compose's `ai-service` defaults to local dev tokens — Milestone 18's hardened profile must override them and move the sidecar onto an internal-only network; and the runtime priority vocabulary was unified to the platform `p0`-`p3` at Milestone 15 (done).
 
 Milestone 13 follow-ups to fold into later work (not blockers): an outbound email subject strategy (still null; threading relies on the RFC 5322 reply headers — Milestone 10 carry-over); arming the next-response/resolution SLA timers (due dates are persisted on the ticket, but the workflow arms only first-response); reopened-conversation semantics (a customer reply after workflow completion starts a fresh run that re-triages the existing ticket — refine at Milestone 22 per ADR-0021); the ASCII-heuristic language detection and keyword triage are Milestone 15 replacements (real model behind the same seams); the store does not enforce the §6.2 transition matrix (workflow-owned sequencing is the guard); and `ticket_events` rows have no read API (audit events are the read surface — add if the console needs them, Milestone 20).
 
@@ -51,9 +51,11 @@ Milestone 6 follow-ups to fold into later slices (not blockers): attachment bina
 
 Milestone 7 follow-ups to fold into later work (not blockers): a live-PostgreSQL KB ingestion integration test through the ingestion service (needs a seeded user for `created_by_user_id` FK, or keep it null); a Temporal `KbIngestionWorkflow` driving `load_document`/`chunk_document`/`embed_chunks`/`write_chunks`/`mark_document_active` as activities instead of the synchronous API path; choosing/documenting a production embedding model behind the `Embedder` port and wiring the same instance into both ingestion and retrieval (re-embed if its dimension != 1536); and optionally a similarity-score threshold / max-context-tokens cap on retrieval before the AI runtime consumes it.
 
-## V1 Launch Plan (Milestones 13-22)
+## V1 Launch Plan (Milestones 13-23)
 
-All twelve build milestones are complete. Launch engineering is organized into four phases, tracked as Milestones 13-22 below (checklists after Milestone 12). Platform decisions are recorded in ADR-0020: the Temporal `runAiGraph` activity calls the Python runtime as an HTTP sidecar service; model/embedding providers are config-driven behind the existing `ModelProvider`/`Embedder` ports with pilot defaults Anthropic Claude + OpenAI `text-embedding-3-small`; auth is hosted-IdP JWT verification via JWKS (default Clerk); staging/production run on a single VM with a hardened Compose profile; the reviewer console is a separate repository consuming this backend's APIs.
+All twelve build milestones are complete. Launch engineering is organized into four phases, tracked as Milestones 13-23 below (checklists after Milestone 12). Platform decisions are recorded in ADR-0020: the Temporal `runAiGraph` activity calls the Python runtime as an HTTP sidecar service; model/embedding providers are config-driven behind the existing `ModelProvider`/`Embedder` ports with pilot defaults Anthropic Claude + OpenAI `text-embedding-3-small`; auth is hosted-IdP JWT verification via JWKS (default Clerk); staging/production run on a single VM with a hardened Compose profile. ADR-0026 supersedes ADR-0020's separate-console-repository clause: the reviewer console lives in this repository at `apps/console`, `packages/api` is its backend (no BFF), and the console UI is Milestone 23.
+
+Milestone numbers are append-only identifiers, not an execution order. Milestone 23 belongs to Phase 3 and should land before the Milestone 22 go-live. Renumbering was rejected: Milestones 21 and 22 are referenced by number inside accepted ADRs (ADR-0020, ADR-0021, ADR-0023) and `docs/PROJECT_HISTORY.md`, which are append-only records.
 
 ### Phase 1: Run End-To-End (Milestones 13-17)
 
@@ -70,9 +72,10 @@ The system runs as deployable processes with real persistence, real AI, real aut
 - Milestone 18: Staging Environment On Hardened Compose.
 - Milestone 19: Live Providers And Go-Live Rehearsal.
 
-### Phase 3: Console Enablement (Milestone 20)
+### Phase 3: Console Enablement (Milestones 20 and 23)
 
-- Milestone 20: Console Enablement API. The console UI itself is a separate repository (user-owned track); this repo owes it CORS, queue ergonomics, an approval evidence composite, token-derived reviewer identity, rate limiting, and a published typed client.
+- Milestone 20: Console Enablement API. CORS, queue ergonomics, an approval evidence composite, token-derived reviewer identity, rate limiting, the `packages/api-client` typed client, a route↔spec drift test, and a vertical slice proving the contract.
+- Milestone 23: Reviewer Console. The console UI at `apps/console` (ADR-0026). Should land before the Milestone 22 go-live.
 
 ### Phase 4: Pilot Readiness And Go-Live (Milestones 21-22)
 
@@ -87,11 +90,10 @@ Start immediately (long lead times, parallel to Phase 1):
 
 - [ ] Mailgun account + pilot support domain with SPF/DKIM/DMARC access (used by Milestone 19).
 - [ ] Meta Business verification + WhatsApp Cloud API app (weeks of lead time; email go-live does not block on it).
-- [ ] IdP account (default Clerk) + application setup (used by Milestone 16 and the console repo).
+- [ ] IdP account (default Clerk) + application setup (used by Milestone 16 and, sharing the same application, the Milestone 23 console).
 - [ ] Anthropic + OpenAI API keys with billing (used by Milestone 15).
 - [ ] VM provisioning (Hetzner/EC2/DO) + staging/production DNS records + alert notification channel (used by Milestone 18).
 - [ ] Pilot client outreach: target D2C brands, pilot contract, success metrics (SOPS §1).
-- [ ] Console repository kickoff (consumes the Milestone 20 typed client; IdP shared with Milestone 16).
 
 During Phases 2-4:
 
@@ -166,7 +168,7 @@ Previous session (Milestone 14):
 - Tests: new suites `triage.test.ts` (10), `deterministic-ai-graph.test.ts` (3), `worker-runtime.test.ts` (4 config), `ticket-state-persistence.test.ts` (16 across the six new store/activity behaviors); `audit-completeness.test.ts` extended to drive the new producers (`ticket.created`, `ticket.updated`, `ticket.closed`, `approval.expired`); `domain-events.test.ts` covers the two new events; workflow suite updated for the new call orders + 3 new live tests (approval expiry → `approval_expired`, reviewer-beats-expiry resume, close request with persisted transition + `ticket.closed.v1` event).
 - Docs: BACKEND_SPEC §2.2 (worker entrypoint), §5.2 (message enums), §6.3 (ticket persistence + transitions), §7 (SLA due-date stamping), §12 (approval expiry), §13 (new audit producers); README (worker:start + test:e2e commands and env notes); DECISIONS ADR-0021; PROJECT_HISTORY; this file.
 - Planning session on `docs-v1-launch-plan` (docs only, no app code): designed the V1 launch plan — four phases, Milestones 13-22 — by consolidating the accumulated milestone follow-ups, and recorded it in this file (V1 Launch Plan section + Milestone 13-22 checklists + refreshed Active Blockers/Open Questions), `PLAN.md` (§17 V1 Launch Phases), `docs/DECISIONS.md` (ADR-0020), `docs/PROJECT_HISTORY.md`, and `README.md`.
-- Platform decisions locked with the user (ADR-0020): (1) the Temporal `runAiGraph` activity calls the Python runtime as an HTTP sidecar (FastAPI `POST /internal/ai/run`, internal bearer token) so `createPersistedRunAiGraph`/instrumentation stay unchanged; (2) model/embedding providers are config-driven behind the existing `ModelProvider`/`Embedder` ports — pilot defaults Anthropic Claude + OpenAI `text-embedding-3-small`, 1536-dim standard, provider swap = config change + eval-gate re-run, embedding swap additionally = full re-embed; (3) auth is hosted-IdP JWT verification via JWKS (default Clerk) with DB-sourced roles and server-side tenant membership; (4) staging/production is a single VM running a hardened Compose profile with offsite backups and tested rollback; (5) the reviewer console is a separate repository — Milestone 20 provides its API surface.
+- Platform decisions locked with the user (ADR-0020): (1) the Temporal `runAiGraph` activity calls the Python runtime as an HTTP sidecar (FastAPI `POST /internal/ai/run`, internal bearer token) so `createPersistedRunAiGraph`/instrumentation stay unchanged; (2) model/embedding providers are config-driven behind the existing `ModelProvider`/`Embedder` ports — pilot defaults Anthropic Claude + OpenAI `text-embedding-3-small`, 1536-dim standard, provider swap = config change + eval-gate re-run, embedding swap additionally = full re-embed; (3) auth is hosted-IdP JWT verification via JWKS (default Clerk) with DB-sourced roles and server-side tenant membership; (4) staging/production is a single VM running a hardened Compose profile with offsite backups and tested rollback; (5) the reviewer console is a separate repository — Milestone 20 provides its API surface. [Decision (5) was superseded on 2026-07-08 by ADR-0026: the console lives in this repository at `apps/console` and is built at Milestone 23. Decisions (1)-(4) stand.]
 - Created feature branch `feat-milestone12-security-pilot-readiness` from `main` and ran `pnpm harness:preflight`.
 - Completed Milestone 12 - Security And Pilot Readiness in one coherent branch (all 12 checklist items + 4 acceptance criteria) — the final planned milestone. Recorded the approach in ADR-0019 (security controls fail closed).
 - `packages/api` RBAC: removed the implicit `support_agent` role fallback in `request-context.ts` (`parseRoles` now throws `401 AUTH_REQUIRED` for missing/blank/unparseable `x-user-roles` — deny-by-default), exported `ROLE_PERMISSIONS` from `rbac.ts` as the single source of truth, added the `reports:read` permission (platform_admin, ops_admin, qa_reviewer, client_viewer), and added `rbac-matrix.test.ts`: an `onRoute` collector proves every registered route is in a permission catalog, then a full route×role matrix asserts `403` exactly when the role lacks the documented permission plus `401` for role-less requests (8 tests, ~260 assertions).
@@ -435,6 +437,9 @@ Previous session (Milestone 14):
 
 ### Verification Status
 
+- Console topology (`docs-console-topology`, docs only): `pnpm harness:preflight` passed on the branch. `git diff --name-only` returns only `*.md` files, so the change is provably docs-only.
+- Offline suite green this session: `pnpm lint` (six TS packages + Python compileall), `pnpm typecheck` (six packages), `pnpm test` — api 187, workers 164, plus observability/shared-schemas/integrations/db, and the Python suite (143) via `uv run --frozen --project ai`. `pnpm format:check` green after Prettier reflowed `docs/DECISIONS.md` (whitespace only; no content change).
+- Not run: live integration/e2e/workflow/jobs suites and CI (runs on push). No app code changed, so no behavioral surface exists to exercise — the two code-level claims recorded in ADR-0026 were verified by reading: `packages/api/src/openapi.ts` line 1 (`buildOpenApiDocument()` has zero imports) and `packages/api/src/services.ts` (`reviewerUserId: context.actor.userId`, both the approval-decide and QA-complete paths).
 - Milestone 16 (`feat-milestone16-real-auth-policy-lifecycle`): `pnpm harness:preflight` passed on the branch.
 - Offline suite green this session: `pnpm typecheck` (six packages), `pnpm -r test` — observability 44, shared-schemas 64 (policy lifecycle contracts + tenant retention_policy), integrations 79, db 85 (migration 0006 + seed idp-link coverage), api 187 (new auth.test.ts + reworked real-token rbac-matrix + policy lifecycle endpoint suites), workers 134; `pnpm lint`, `pnpm build`, `pnpm format:check`, and the Python suite via `pnpm test:py` (143) all green.
 - Live against Compose services (postgres, temporal, nats; started this session): `pnpm db:migrate` applied `0006_user_idp_subject` cleanly; `@support/db` test:integration (19); `@support/api` test:integration (42 across 3 files, incl. the new auth/policy-lifecycle live suite 5/5) including the new committed `auth.integration.test.ts` — real RSA tokens through the production verifier + DATABASE user directory (idp_subject resolution, DB roles, suspended/unprovisioned 401s, membership 403s both directions, NULL-tenant platform user, retention_policy on the tenant read) and the full live policy lifecycle (audits attributed to the acting user, activation immutability 409s, same-domain predecessor archival, fail-closed automation after archive); `@support/workers` test:integration (6, `NATS_URL=nats://127.0.0.1:4222`); `pnpm test:e2e` (1) green under the explicit insecure-header opt-in.
@@ -737,7 +742,8 @@ Refreshed 2026-07-04 for the launch phase (each maps to a launch milestone or th
 - QA sampling and retention jobs have no scheduler; retention attachment/AI-run purges are counted-and-reported placeholders (Milestone 17).
 - No staging or production environment exists; no Mailgun/WhatsApp/IdP/Anthropic/OpenAI accounts or credentials provisioned (Milestones 18-19 + user-owned track).
 - No pilot client signed; no real client KB/policy/historical-ticket data (user-owned track; feeds Milestones 21-22).
-- The reviewer console repository does not exist yet (user-owned; Milestone 20 provides its API surface).
+- The reviewer console does not exist yet. It is now in-repo work at `apps/console` (ADR-0026): Milestone 20 provides its API surface and typed client, Milestone 23 builds it. Until then reviewers would have to work the approval and QA queues through raw HTTP (SOPS §10), which is not viable for the Milestone 22 hypercare week.
+- `packages/api/src/openapi.ts` is a 3277-line hand-written OpenAPI document with no test binding it to `routes.ts` or `@support/shared-schemas`. Drift is currently caught by nothing. Milestone 20 adds the route↔spec drift test.
 
 ### Open Questions
 
@@ -1336,23 +1342,29 @@ Acceptance criteria:
 
 ## Milestone 20: Console Enablement API
 
-Goal: Everything the separate console repository needs to build the reviewer experience without backend rework. (Phase 3. User-owned: the console repository itself, built against the published client; IdP app config shared with Milestone 16.)
+Goal: Everything `apps/console` needs to build the reviewer experience without backend rework, proven by a vertical slice rather than asserted. (Phase 3, ADR-0026. User-owned: the Clerk application, shared with Milestone 16.)
 
 Checklist:
 
-- [ ] CORS support with an env-driven origin allowlist (off by default).
+- [ ] CORS support with an env-driven origin allowlist (off by default). Still required in-repo: the console runs on its own origin.
 - [ ] Approval queue ergonomics on `GET /v1/approvals`: pending/status filters, age/created ordering, pagination hardening, and a cheap open-counts summary.
 - [ ] `GET /v1/approvals/{approval_id}/evidence`: the reviewer composite (conversation, messages, AI run + trace link, tool calls, draft with policy/KB citations, prior approvals), mirroring the QA evidence read.
-- [ ] Reviewer identity from the verified token: decisions record the reviewer from auth context, not the request body.
+- [ ] `GET /v1/tickets` ergonomics (filters, ordering, pagination) and a `ticket_events` read API — the Milestone 13 follow-up deferred them to "if the console needs them"; the reviewer queue needs both.
+- [ ] Verify reviewer identity comes from the verified token. Already true (`services.ts` uses `context.actor.userId` for approvals and QA completion); fix the stale `BACKEND_SPEC.md` §17 text that still says `x-user-id`.
 - [ ] Queue freshness contract for polling clients (`updated_since` filtering and/or ETag) documented in OpenAPI; SSE deferred unless trivial.
 - [ ] Basic rate limiting on authenticated endpoints backed by Redis (first production use of the Redis service).
-- [ ] OpenAPI completeness pass over every endpoint + a generated typed TypeScript client package the console repo can consume, with a documented regeneration command.
-- [ ] A scripted end-to-end walkthrough (login → queue → evidence → decide → QA complete) validating the documented call sequences a console will make.
-- [ ] Update docs (BACKEND_SPEC console API section, this file).
+- [ ] `packages/api-client`: a typed TypeScript client over `/v1/*`, typed from `@support/shared-schemas` (not generated from `openapi.ts`), consumed by `apps/console` at `workspace:*`. Keep it publishable-shaped so extraction to its own repo stays cheap.
+- [ ] Route↔spec drift test: reuse the Fastify `onRoute` collector in `rbac-matrix.test.ts` to assert every registered route appears in `buildOpenApiDocument()` and in `packages/api-client`. `openapi.ts` is 3277 hand-written lines with no such check today.
+- [ ] OpenAPI completeness pass over every endpoint, with a documented regeneration/verification command.
+- [ ] `pnpm-workspace.yaml` gains an `apps/*` glob; `apps/console/AGENTS.md` scopes the console reading path to the OpenAPI doc + `packages/api-client`.
+- [ ] CI: gate the heavy steps (pgvector, NATS, uv, integration) behind a `dorny/paths-filter` step **inside** the existing job — workflow-level `paths:` filters make skipped required checks block merges. Keep browser tests out of root `pnpm test`.
+- [ ] Console vertical slice at `apps/console`: login → approval queue → one evidence view → decide. Not the product — the contract proof.
+- [ ] Update docs (BACKEND_SPEC console API section, TEST_STRATEGY frontend tier, this file).
 
 Acceptance criteria:
 
-- [ ] The console repo can implement login → queue → review → decide → QA purely from the OpenAPI doc and typed client, with no backend changes required mid-build.
+- [ ] The vertical slice implements login → queue → evidence → decide purely from the OpenAPI doc and `packages/api-client`, and every backend gap it exposed is closed inside this milestone.
+- [ ] The drift test fails when a route is added to `routes.ts` without a corresponding `openapi.ts` entry.
 
 ## Milestone 21: Eval Expansion And Shadow Replay
 
@@ -1395,9 +1407,42 @@ Acceptance criteria:
 - [ ] The weekly pilot report generates from real data; alerting is live; the hypercare owner is assigned.
 - [ ] No SEV1/SEV2 in the first hypercare week, or each one is postmortem'd per SOPS §13.
 
+## Milestone 23: Reviewer Console
+
+Goal: The reviewer experience described by the SOPS §4 human reviewer checklist, at `apps/console`, built entirely against `packages/api-client`. (Phase 3, ADR-0026. Numbered 23 because renumbering 21/22 would falsify accepted ADRs; sequence it after Milestone 20 and before the Milestone 22 go-live. User-owned: the shared Clerk application, reviewer staffing.)
+
+Depends on Milestone 20 (typed client, evidence composite, CORS, queue ergonomics) and Milestone 18 (a deployed API to point at).
+
+Checklist:
+
+- [ ] Pick and record the UI framework in an implementation ADR (AGENTS.md architecture defaults list none). Whatever is chosen must build under `pnpm -r build` or be excluded from it explicitly.
+- [ ] Clerk login sharing the Milestone 16 application; the session token already carries the `aud`/`email` customization the API requires.
+- [ ] Approval queue: `GET /v1/approvals` with the Milestone 20 filters/ordering/pagination and `updated_since` polling for freshness.
+- [ ] Evidence view: `GET /v1/approvals/{id}/evidence` rendering conversation, messages, the AI draft, KB/policy citations, tool calls, guardrail results, and the AI run's trace link.
+- [ ] Decide actions: approve / edit / reject / escalate, with a draft editor. `requested_payload` (original AI draft) must stay visibly distinct from the human edit.
+- [ ] QA surface: `GET /v1/qa-reviews?completed=false` → evidence → `POST /v1/qa-reviews/{id}/complete` with dimension scores and the defect taxonomy.
+- [ ] Permission-gated navigation driven by `ROLE_PERMISSIONS` — `qa_reviewer` and `client_viewer` are read-only on approvals; `client_viewer` cannot see AI runs.
+- [ ] Frontend test tier: component tests in the console package, plus a Playwright walkthrough behind `test:e2e:console` (kept out of root `pnpm test`, which requires `uv`).
+- [ ] `infra/docker-compose.yml`: a `console` service in the hardened profile; extend the TLS reverse proxy beyond the API + webhook endpoints.
+- [ ] Update docs (SOPS §4/§10 — the console becomes the default reviewer surface and the raw-API path the fallback; SOPS §19 deployment checklist; TEST_STRATEGY; this file).
+
+Acceptance criteria:
+
+- [ ] A reviewer completes the SOPS §4 ticket-handling loop end to end in the browser: queue → evidence → edit draft → approve → the reply sends.
+- [ ] A `qa_reviewer` completes a QA review end to end; a `client_viewer` is denied the approval-decide and AI-run surfaces in the UI, not merely by the API.
+- [ ] No backend change is required to ship the console. Any that proves necessary is recorded as a Milestone 20 gap.
+
 ## Completed Log
 
 Use reverse chronological order.
+
+### 2026-07-08
+
+- Console topology decided and recorded on `docs-console-topology` (docs only, no app code, no milestone — same shape as the `docs-v1-launch-plan` session that created Milestones 13-22): the reviewer console lives in this repository at `apps/console`, `packages/api` is its backend with no BFF, and the console UI is appended as Milestone 23. Recorded in `docs/DECISIONS.md` (ADR-0026, with ADR-0001 clarified as scope-only and ADR-0020's separate-console-repository clause marked superseded — the log's first use of a partial-supersede annotation), and propagated to `AGENTS.md` (scope rules + architecture defaults), `PLAN.md` (§1 scope, §3 non-goals, §17 launch phases, V2 roadmap), `README.md`, `docs/ENGINEERING_HARNESS.md` (repo structure target, failure-mode clarification), `docs/README.md` (console reading path), `docs/PROJECT_HISTORY.md` (console topology pivot), `docs/SOPS.md` §10, and this file (launch plan, Phase 3, user-owned track, active blockers, Milestone 20 checklist, new Milestone 23).
+- Two findings drove the reversal, both verified against the code rather than the docs. `packages/api/src/openapi.ts` is a 3277-line hand-written object literal: `buildOpenApiDocument()` imports nothing, so the served OpenAPI document is not derived from the zod schemas, no test binds it to `routes.ts` or `@support/shared-schemas` (the only assertion checks `openapi === "3.1.0"`), and it sits behind `openapi:read` with no spec file on disk. Milestone 20 had planned to generate the console's typed client from it. Separately, `BACKEND_SPEC.md` §17 still describes approval decisions taking `reviewer_user_id` from the `x-user-id` header, which JWT mode ignores — the code has used `context.actor.userId` since Milestone 16 (`services.ts`). Stale doc, not a bug, but exactly the drift class nothing currently catches.
+- Milestone 20 gained: `packages/api-client` typed from `@support/shared-schemas` instead of generated from `openapi.ts`; a route↔spec drift test reusing the `onRoute` collector from `rbac-matrix.test.ts`; the `GET /v1/tickets` ergonomics and `ticket_events` read API that Milestone 13's follow-up deferred; the `apps/*` workspace glob and CI path-filtering; and a console vertical slice, because its acceptance criterion ("no backend changes required mid-build") is untestable while no consumer exists.
+- Milestone 23 was appended rather than inserted: Milestones 21 and 22 are referenced by number inside accepted ADRs (ADR-0020, ADR-0021, ADR-0023) and `docs/PROJECT_HISTORY.md`, so renumbering would falsify append-only records. Milestone numbers are ids; phase membership carries the sequence. Milestone 23 should land before the Milestone 22 go-live — SOPS §10 has reviewers working the queue through raw HTTP today, which does not survive M22's "daily QA review of 100% of sent replies" hypercare week.
+- Verified: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm format:check`, and `pnpm harness:handoff` all green; no file outside `*.md` was touched, so the change is provably docs-only.
 
 ### 2026-07-07
 

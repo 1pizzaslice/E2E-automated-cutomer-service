@@ -277,4 +277,4 @@ Non-health endpoints require IdP-issued JWTs by default (Milestone 16, ADR-0024)
 
 ## Scope
 
-Backend first. Do not build frontend UI until backend contracts, workflows, and AI runtime are implemented and documented.
+Backend first. Do not build frontend UI until backend contracts, workflows, and AI runtime are implemented and documented. The reviewer console lives in this repository at `apps/console`, consumes `/v1/*` through `packages/api-client`, and is built at Milestone 23 (ADR-0026). There is no backend-for-frontend: `packages/api` is the console's backend.

@@ -16,7 +16,7 @@ V1 focuses on:
 - Narrow auto-send only after eval and QA gates are met.
 - Backend contracts, durable workflows, AI harness, integrations, observability, and test foundation.
 
-Frontend work is intentionally deferred. Backend APIs should be designed so a future agent console can be built without reworking core contracts.
+Frontend work is intentionally deferred until backend contracts stabilize. Backend APIs should be designed so the reviewer console can be built without reworking core contracts. The console lives in this repository at `apps/console` and is built at Milestone 23 (ADR-0026).
 
 ## 2. Product Thesis
 
@@ -34,7 +34,7 @@ The customer should experience the service as a plug-and-play support team with 
 
 ## 3. Non-Goals For V1
 
-- No full frontend/agent console implementation.
+- No full frontend/agent console implementation during the build milestones. The reviewer console is Milestone 23 (`apps/console`, ADR-0026); a vertical slice proving the contract lands with Milestone 20.
 - No voice support.
 - No multilingual support beyond storing language metadata.
 - No unrestricted auto-refunds.
@@ -873,16 +873,18 @@ Acceptance:
 - Security checklist passes.
 - Auto-send remains disabled except allowlisted low-risk cases.
 
-### V1 Launch Phases (TODO.md Milestones 13-22)
+### V1 Launch Phases (TODO.md Milestones 13-23)
 
-The build milestones above were executed as Milestones 0-12 in `TODO.md` (its checklists are authoritative). All twelve are complete. Launch engineering continues as `TODO.md` Milestones 13-22 in four phases, with platform decisions recorded in `docs/DECISIONS.md` ADR-0020 (HTTP sidecar AI bridge; provider-agnostic model/embedding layer with Anthropic Claude + OpenAI `text-embedding-3-small` pilot defaults; hosted-IdP JWKS auth; single-VM hardened-Compose deployment; reviewer console in a separate repository):
+The build milestones above were executed as Milestones 0-12 in `TODO.md` (its checklists are authoritative). All twelve are complete. Launch engineering continues as `TODO.md` Milestones 13-23 in four phases, with platform decisions recorded in `docs/DECISIONS.md` ADR-0020 (HTTP sidecar AI bridge; provider-agnostic model/embedding layer with Anthropic Claude + OpenAI `text-embedding-3-small` pilot defaults; hosted-IdP JWKS auth; single-VM hardened-Compose deployment) and ADR-0026 (the reviewer console lives in this repository at `apps/console`, `packages/api` is its backend, and the console UI is Milestone 23):
 
 1. Phase 1 - Run End-To-End (Milestones 13-17): the production worker entrypoint with real ticket persistence; the Python AI runtime as an HTTP sidecar behind the Temporal `runAiGraph` activity with network retrieval/tools; the config-driven real model/embedding providers passing the eval gates; hosted-IdP authentication plus policy lifecycle endpoints; scheduled QA sampling and retention jobs with real purges.
 2. Phase 2 - Deploy (Milestones 18-19): a production-shaped single-VM staging environment (TLS, Prometheus/Grafana/Alertmanager, offsite backups, CI deploys with tested rollback), then live Mailgun — and WhatsApp when Meta verification completes — with a full go-live rehearsal executing the SOPS §19 checklist.
-3. Phase 3 - Console Enablement (Milestone 20): the API surface the separate console repository needs — CORS, approval queue ergonomics, an approval evidence composite, token-derived reviewer identity, rate limiting, and a published typed client.
+3. Phase 3 - Console Enablement (Milestones 20 and 23): first the API surface the console consumes — CORS, approval queue ergonomics, an approval evidence composite, token-derived reviewer identity, rate limiting, the `packages/api-client` typed client, and a route↔spec drift test over the hand-written OpenAPI document — then the reviewer console itself at `apps/console` (Milestone 23), which should land before the Milestone 22 go-live so reviewers are not working the approval queue through raw HTTP.
 4. Phase 4 - Pilot Readiness And Go-Live (Milestones 21-22): golden dataset expansion to the §15 counts with an LLM-graded quality rubric and shadow replay over historical tickets, then closing the known product gaps (attachment binary storage, HTML sanitization, next-response/resolution SLA timers, outbound subject strategy) and taking the pilot live in 100% human-approval mode with hypercare.
 
-Auto-send remains post-v1: the §17 rollout ladder in `docs/SOPS.md` starts only after pilot QA data supports it. Non-code launch work (provider/IdP accounts, VM and DNS, pilot client signing, KB collection, reviewer staffing, the console repository) is tracked as the user-owned launch track in `TODO.md`.
+Milestone numbers are append-only identifiers, not an execution order: Milestone 23 belongs to Phase 3 and precedes Milestone 22. Renumbering was rejected because Milestones 21 and 22 are referenced by number inside accepted ADRs (ADR-0020, ADR-0021, ADR-0023) and `docs/PROJECT_HISTORY.md`.
+
+Auto-send remains post-v1: the §17 rollout ladder in `docs/SOPS.md` starts only after pilot QA data supports it. Non-code launch work (provider/IdP accounts, VM and DNS, pilot client signing, KB collection, reviewer staffing) is tracked as the user-owned launch track in `TODO.md`; the console's only user-owned input is the shared Clerk application.
 
 ## 18. V2/V3 Roadmap
 
@@ -893,7 +895,6 @@ V2:
 - Chat widget.
 - More robust routing rules engine.
 - Auto-send expansion for order status and basic FAQ.
-- Human console frontend.
 - Advanced QA workflows.
 
 V3:
