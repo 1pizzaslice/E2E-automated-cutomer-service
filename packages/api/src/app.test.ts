@@ -2404,6 +2404,26 @@ function makeServices(
           },
         };
       },
+      async summary(context) {
+        expectTenantContext(context);
+
+        return {
+          counts: {
+            pending: 1,
+            approved: 0,
+            edited: 0,
+            rejected: 0,
+            escalated: 0,
+            expired: 0,
+          },
+          total: 1,
+        };
+      },
+      // Composite evidence is exercised in console-enablement.test.ts with a
+      // purpose-built stub; here it only needs to satisfy the interface.
+      async evidence() {
+        return null;
+      },
     },
     aiRuns: {
       async list(context, options) {
@@ -2826,6 +2846,11 @@ function makeServices(
           created_at: now,
           updated_at: now,
         };
+      },
+      // Ticket-event timeline is exercised in console-enablement.test.ts with a
+      // purpose-built stub; here it only needs to satisfy the interface.
+      async listEvents() {
+        return null;
       },
     },
   };

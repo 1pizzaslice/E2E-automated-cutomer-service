@@ -505,6 +505,16 @@ Current Milestone 4 event bus foundation coverage:
 - `packages/workers/src/event-consumer.test.ts` verifies durable consumer config/create/update helpers, event payload and subject validation, completed duplicate ack/skip behavior, in-progress duplicate nak behavior, handler failure retry behavior, invalid envelope error publishing and termination, max-delivery dead-letter termination, and the one-message `processNext()` wrapper.
 - `packages/workers/src/event-bus.integration.test.ts` connects to local NATS, ensures the `SUPPORT_EVENTS` and `SUPPORT_EVENT_ERRORS` streams, publishes a tenant-scoped event, consumes it from JetStream, verifies duplicate publish detection through `event_id`, and verifies structured event error publish/consume behavior.
 
+### 3.15 Console Enablement And API Client (Milestone 20)
+
+The reviewer console (`apps/console`, ADR-0026) consumes the API contract through `@support/api-client`; this tier keeps the contract, the client, and the console honest without a browser. Frameworked browser/e2e tests are Milestone 23 and run behind `test:e2e:console`, kept out of the root `pnpm test` (which requires `uv`).
+
+- `packages/api/src/http-hardening.test.ts` — CORS off by default, exact-origin reflection + preflight-before-auth, and per-principal rate limiting (limit trips, principals isolated, health exempt) plus the config loaders.
+- `packages/api/src/console-enablement.test.ts` — the new read surfaces end to end through the app: approval queue ergonomics (order/offset/has_more) with the ETag/`If-None-Match`→304 contract, `GET /v1/approvals/summary`, the approval evidence composite (+404), `GET /v1/tickets` `updated_since`/order/offset, and the `ticket_events` timeline (+404).
+- `packages/api/src/route-drift.test.ts` — the drift guard: every registered Fastify route appears in `buildOpenApiDocument()` (both directions) and every client-facing route in `packages/api-client`'s `API_ROUTES` (internal + webhook routes excluded from the client check only). This is the OpenAPI **verification command** — it runs under `pnpm -r test`; adding a route without a spec/client entry fails it.
+- `packages/api-client/src/index.test.ts` — the typed client: query/header serialization, JSON request bodies, `ApiClientError` mapping from structured error bodies, and a non-empty `API_ROUTES` manifest, all against an injected fetch.
+- `apps/console/src/review-flow.test.ts` — the Milestone 20 acceptance proof: `runReviewFlow` (login → queue → evidence → decide) driven purely through `SupportApiClient` against the real Fastify app via an `app.inject()` transport, covering the approve and edit paths and confirming the original AI draft stays visible in the evidence during an edit.
+
 ## 4. Golden Dataset
 
 Create the first golden dataset under the future AI package.

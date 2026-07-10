@@ -48,12 +48,11 @@ export function registerErrorHandler(app: {
 }) {
   app.setErrorHandler(async (error, request, reply) => {
     const requestId = request.requestContext?.requestId ?? request.id;
-    const httpError =
-      error instanceof HttpError
-        ? error
-        : new HttpError(500, "INTERNAL_ERROR", "An internal error occurred.");
+    const httpError = toHttpError(error);
 
-    if (!(error instanceof HttpError)) {
+    // 5xx are unexpected faults worth an error log; expected client errors
+    // (including rate-limit rejections translated below) are not.
+    if (!(error instanceof HttpError) && httpError.statusCode >= 500) {
       request.log.error({ error }, "unhandled api error");
     }
 
@@ -61,4 +60,27 @@ export function registerErrorHandler(app: {
       .status(httpError.statusCode)
       .send(createErrorResponse(httpError, requestId));
   });
+}
+
+/**
+ * Normalizes a thrown error to an `HttpError`. Everything unrecognized becomes
+ * a masked 500; the one framework error we surface deliberately is the
+ * `@fastify/rate-limit` 429 (Milestone 20), mapped to the taxonomy's
+ * `RATE_LIMITED` code. Its `Retry-After` / `X-RateLimit-*` headers are already
+ * on the reply and survive the error response.
+ */
+function toHttpError(error: FastifyError | Error): HttpError {
+  if (error instanceof HttpError) {
+    return error;
+  }
+
+  if ((error as FastifyError).statusCode === 429) {
+    return new HttpError(
+      429,
+      "RATE_LIMITED",
+      error.message || "Rate limit exceeded.",
+    );
+  }
+
+  return new HttpError(500, "INTERNAL_ERROR", "An internal error occurred.");
 }

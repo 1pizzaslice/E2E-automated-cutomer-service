@@ -224,8 +224,20 @@ const ROUTE_PERMISSION_CATALOG: ReadonlyArray<{
   },
   {
     method: "GET",
+    url: "/v1/approvals/summary",
+    routePath: "/v1/approvals/summary",
+    permission: "approvals:read",
+  },
+  {
+    method: "GET",
     url: "/v1/approvals/apr_test",
     routePath: "/v1/approvals/:approval_id",
+    permission: "approvals:read",
+  },
+  {
+    method: "GET",
+    url: "/v1/approvals/apr_test/evidence",
+    routePath: "/v1/approvals/:approval_id/evidence",
     permission: "approvals:read",
   },
   {
@@ -329,6 +341,12 @@ const ROUTE_PERMISSION_CATALOG: ReadonlyArray<{
     url: "/v1/tickets/tic_test/audit-events",
     routePath: "/v1/tickets/:ticket_id/audit-events",
     permission: "audit_events:read",
+  },
+  {
+    method: "GET",
+    url: "/v1/tickets/tic_test/events",
+    routePath: "/v1/tickets/:ticket_id/events",
+    permission: "tickets:read",
   },
   {
     method: "PATCH",

@@ -37,28 +37,63 @@ jobs:
         with:
           version: 11.3.0
 
+      # Gate the heavy steps (uv/Python, NATS, live integration) INSIDE this
+      # one required job (Milestone 20). A workflow-level `paths:` filter would
+      # skip the whole job, and a skipped required check blocks merges; a step
+      # `if:` keeps the job green while skipping work a frontend/docs-only change
+      # does not need. `heavy` covers anything that can affect the backend,
+      # Python runtime, or live integration.
+      - name: Detect changed areas
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            heavy:
+              - 'packages/**'
+              - 'ai/**'
+              - 'infra/**'
+              - 'scripts/**'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - 'vitest.config.ts'
+              - 'tsconfig.base.json'
+              - '.github/workflows/ci.yml'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (JS/TS)
+        run: pnpm -r lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test (JS/TS)
+        run: pnpm -r test
+
+      - name: Build
+        run: pnpm build
+
       - name: Setup uv
+        if: steps.changes.outputs.heavy == 'true'
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.26"
           enable-cache: true
         # uv provisions the CPython version pinned in ai/.python-version (3.12)
-        # and runs the Python AI runtime suite/lint via `uv run --frozen`
-        # (see package.json test:py / lint). Replaces actions/setup-python.
+        # and runs the Python AI runtime suite/lint via `uv run --frozen`.
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Lint (Python)
+        if: steps.changes.outputs.heavy == 'true'
+        run: uv run --frozen --project ai python -m compileall -q ai/runtime ai/evals ai/service
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
+      - name: Test (Python)
+        if: steps.changes.outputs.heavy == 'true'
+        run: pnpm test:py
 
       - name: Start NATS
+        if: steps.changes.outputs.heavy == 'true'
         run: |
           docker run -d --name support-nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
           for i in {1..30}; do
@@ -71,10 +106,8 @@ jobs:
           exit 1
 
       - name: Integration test
+        if: steps.changes.outputs.heavy == 'true'
         run: pnpm test:integration
         env:
           DATABASE_URL: postgres://support:support@localhost:5432/support
           NATS_URL: nats://localhost:4222
-
-      - name: Build
-        run: pnpm build

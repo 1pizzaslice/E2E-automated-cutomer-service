@@ -38,6 +38,20 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/openapi.json": {
+        get: {
+          summary: "Serve this OpenAPI document",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ $ref: "#/components/parameters/RequestIdHeader" }],
+          responses: {
+            "200": {
+              description: "The OpenAPI 3.1 document describing this API",
+              content: { "application/json": { schema: { type: "object" } } },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/tenants": {
         get: {
           summary: "List tenants",
@@ -431,17 +445,27 @@ export function buildOpenApiDocument() {
               required: false,
               schema: { type: "string", minLength: 1 },
             },
+            {
+              name: "updated_since",
+              in: "query",
+              required: false,
+              schema: { type: "string", format: "date-time" },
+            },
+            { $ref: "#/components/parameters/OffsetQuery" },
+            { $ref: "#/components/parameters/SortOrderQuery" },
             { $ref: "#/components/parameters/RequestIdHeader" },
           ],
           responses: {
             "200": {
               description: "Ticket list",
+              headers: { ETag: { $ref: "#/components/headers/ETag" } },
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/TicketList" },
                 },
               },
             },
+            "304": { $ref: "#/components/responses/NotModified" },
             default: { $ref: "#/components/responses/Error" },
           },
         },
@@ -1015,17 +1039,44 @@ export function buildOpenApiDocument() {
               required: false,
               schema: { $ref: "#/components/schemas/ApprovalType" },
             },
+            { $ref: "#/components/parameters/OffsetQuery" },
+            { $ref: "#/components/parameters/SortOrderQuery" },
             { $ref: "#/components/parameters/RequestIdHeader" },
           ],
           responses: {
             "200": {
               description: "Approval list",
+              headers: { ETag: { $ref: "#/components/headers/ETag" } },
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/ApprovalList" },
                 },
               },
             },
+            "304": { $ref: "#/components/responses/NotModified" },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/approvals/summary": {
+        get: {
+          summary: "Open-counts summary of tenant approvals by status",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Approval status counts",
+              headers: { ETag: { $ref: "#/components/headers/ETag" } },
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ApprovalSummary" },
+                },
+              },
+            },
+            "304": { $ref: "#/components/responses/NotModified" },
             default: { $ref: "#/components/responses/Error" },
           },
         },
@@ -1050,6 +1101,33 @@ export function buildOpenApiDocument() {
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/ApprovalResource" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/v1/approvals/{approval_id}/evidence": {
+        get: {
+          summary: "Reviewer evidence composite for an approval",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "approval_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Approval evidence package",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ApprovalEvidence" },
                 },
               },
             },
@@ -1554,6 +1632,37 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/tickets/{ticket_id}/events": {
+        get: {
+          summary: "List the lifecycle event timeline for a ticket",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "ticket_id",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/TenantHeader" },
+            { $ref: "#/components/parameters/LimitQuery" },
+            { $ref: "#/components/parameters/OffsetQuery" },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description: "Ticket lifecycle event list",
+              headers: { ETag: { $ref: "#/components/headers/ETag" } },
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TicketEventList" },
+                },
+              },
+            },
+            "304": { $ref: "#/components/responses/NotModified" },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/webhooks/email/{provider}": {
         post: {
           summary: "Ingest an inbound email provider webhook",
@@ -1711,6 +1820,27 @@ export function buildOpenApiDocument() {
             default: 50,
           },
         },
+        OffsetQuery: {
+          name: "offset",
+          in: "query",
+          required: false,
+          schema: { type: "integer", minimum: 0, default: 0 },
+        },
+        SortOrderQuery: {
+          name: "order",
+          in: "query",
+          required: false,
+          description:
+            "Chronological order by created_at. Defaults to newest-first.",
+          schema: { type: "string", enum: ["created_asc", "created_desc"] },
+        },
+      },
+      headers: {
+        ETag: {
+          description:
+            "Content hash of the list page for conditional requests (send it back as If-None-Match to get a 304 when unchanged).",
+          schema: { type: "string" },
+        },
       },
       responses: {
         Error: {
@@ -1720,6 +1850,10 @@ export function buildOpenApiDocument() {
               schema: { $ref: "#/components/schemas/ApiError" },
             },
           },
+        },
+        NotModified: {
+          description:
+            "The list page is unchanged since the client's If-None-Match ETag; no body is returned.",
         },
       },
       schemas: {
@@ -1757,6 +1891,8 @@ export function buildOpenApiDocument() {
           properties: {
             count: { type: "integer", minimum: 0 },
             limit: { type: "integer", minimum: 1 },
+            offset: { type: "integer", minimum: 0 },
+            has_more: { type: "boolean" },
           },
         },
         TenantResource: {
@@ -2851,6 +2987,115 @@ export function buildOpenApiDocument() {
               type: "array",
               items: { $ref: "#/components/schemas/Approval" },
             },
+          },
+        },
+        ApprovalEvidence: {
+          type: "object",
+          required: [
+            "approval",
+            "ticket",
+            "conversation",
+            "messages",
+            "ai_run",
+            "tool_calls",
+            "prior_approvals",
+          ],
+          properties: {
+            approval: { $ref: "#/components/schemas/Approval" },
+            ticket: { $ref: "#/components/schemas/Ticket" },
+            conversation: { $ref: "#/components/schemas/Conversation" },
+            messages: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Message" },
+            },
+            ai_run: {
+              oneOf: [{ $ref: "#/components/schemas/AiRun" }, { type: "null" }],
+            },
+            tool_calls: {
+              type: "array",
+              items: { $ref: "#/components/schemas/ToolCall" },
+            },
+            prior_approvals: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Approval" },
+            },
+          },
+        },
+        ApprovalStatusCounts: {
+          type: "object",
+          required: [
+            "pending",
+            "approved",
+            "edited",
+            "rejected",
+            "escalated",
+            "expired",
+          ],
+          properties: {
+            pending: { type: "integer", minimum: 0 },
+            approved: { type: "integer", minimum: 0 },
+            edited: { type: "integer", minimum: 0 },
+            rejected: { type: "integer", minimum: 0 },
+            escalated: { type: "integer", minimum: 0 },
+            expired: { type: "integer", minimum: 0 },
+          },
+        },
+        ApprovalSummary: {
+          type: "object",
+          required: ["counts", "total"],
+          properties: {
+            counts: { $ref: "#/components/schemas/ApprovalStatusCounts" },
+            total: { type: "integer", minimum: 0 },
+          },
+        },
+        TicketEvent: {
+          type: "object",
+          required: [
+            "ticket_event_id",
+            "tenant_id",
+            "ticket_id",
+            "event_type",
+            "from_status",
+            "to_status",
+            "actor_type",
+            "actor_id",
+            "reason_code",
+            "metadata",
+            "created_at",
+          ],
+          properties: {
+            ticket_event_id: { type: "string" },
+            tenant_id: { type: "string" },
+            ticket_id: { type: "string" },
+            event_type: { type: "string" },
+            from_status: {
+              oneOf: [
+                { $ref: "#/components/schemas/TicketStatus" },
+                { type: "null" },
+              ],
+            },
+            to_status: {
+              oneOf: [
+                { $ref: "#/components/schemas/TicketStatus" },
+                { type: "null" },
+              ],
+            },
+            actor_type: { $ref: "#/components/schemas/AuditActorType" },
+            actor_id: { type: ["string", "null"] },
+            reason_code: { type: ["string", "null"] },
+            metadata: { oneOf: [{ type: "object" }, { type: "null" }] },
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        TicketEventList: {
+          type: "object",
+          required: ["ticket_events", "page"],
+          properties: {
+            ticket_events: {
+              type: "array",
+              items: { $ref: "#/components/schemas/TicketEvent" },
+            },
+            page: { $ref: "#/components/schemas/ListPage" },
           },
         },
         AuditEventResource: {

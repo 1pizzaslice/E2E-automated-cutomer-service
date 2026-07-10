@@ -8,6 +8,7 @@ import {
   approvalByIdQuery,
   approvalResolutionCountsQuery,
   approvalsListQuery,
+  approvalStatusCountsQuery,
   approvalsRequestedCountQuery,
   auditActionCountQuery,
   auditEventByIdQuery,
@@ -51,6 +52,7 @@ import {
   tenantsListQuery,
   tenantByIdQuery,
   ticketByIdQuery,
+  ticketEventsForTicketQuery,
   ticketsListQuery,
   toolCallsListQuery,
   updateCustomerByIdQuery,
@@ -75,6 +77,7 @@ import {
   type TenantPolicy,
   type TenantScope,
   type Ticket,
+  type TicketEvent,
   type ToolCall,
 } from "@support/db";
 import {
@@ -95,8 +98,10 @@ import type {
   AiRunResponse,
   ApprovalDecisionResponse,
   ApprovalDecisionStatus,
+  ApprovalEvidenceResponse,
   ApprovalListResponse,
   ApprovalResponse,
+  ApprovalSummaryResponse,
   ApprovalWorkflowSignalResult,
   AuditEventListResponse,
   AuditEventResponse,
@@ -133,10 +138,13 @@ import type {
   TenantResponse,
   TenantUpdateRequest,
   TicketCreateRequest,
+  TicketEventListResponse,
+  TicketEventResponse,
   TicketListResponse,
   TicketResponse,
   TicketUpdateRequest,
   ToolCallResponse,
+  ListSortOrder,
 } from "@support/shared-schemas";
 import { createEmbedderFromEnv, type Embedder } from "@support/integrations";
 import {
@@ -183,6 +191,14 @@ export interface TicketListOptions extends ListOptions {
   readonly status?: Ticket["status"];
   readonly customer_id?: string;
   readonly assigned_queue?: string;
+  readonly offset?: number;
+  readonly order?: ListSortOrder;
+  /** ISO-8601 instant; returns only tickets updated strictly after it. */
+  readonly updated_since?: string;
+}
+
+export interface TicketEventListOptions extends ListOptions {
+  readonly offset?: number;
 }
 
 export interface PolicyListOptions extends ListOptions {
@@ -200,6 +216,8 @@ export interface ApprovalListOptions extends ListOptions {
   readonly status?: Approval["status"];
   readonly ticket_id?: string;
   readonly approval_type?: Approval["approvalType"];
+  readonly offset?: number;
+  readonly order?: ListSortOrder;
 }
 
 export interface ApprovalDecisionInput {
@@ -416,6 +434,11 @@ export interface ApiServices {
       approvalId: string,
       decision: ApprovalDecisionInput,
     ): Promise<ApprovalDecisionOutcome>;
+    summary(context: TenantRequestContext): Promise<ApprovalSummaryResponse>;
+    evidence(
+      context: TenantRequestContext,
+      approvalId: string,
+    ): Promise<ApprovalEvidenceResponse | null>;
   };
   readonly aiRuns: {
     list(
@@ -483,6 +506,11 @@ export interface ApiServices {
       ticketId: string,
       input: TicketUpdateRequest,
     ): Promise<TicketResponse | null>;
+    listEvents(
+      context: TenantRequestContext,
+      ticketId: string,
+      options: TicketEventListOptions,
+    ): Promise<TicketEventListResponse | null>;
   };
   readonly close?: () => Promise<void>;
 }
@@ -1390,30 +1418,28 @@ export function createDatabaseApiServices(
     },
     approvals: {
       async list(context, options) {
-        return withTenantTransaction(
-          getClient(),
-          { tenantId: context.tenant.tenantId },
-          async (db) => {
-            const rows = await approvalsListQuery(
-              db,
-              { tenantId: context.tenant.tenantId },
-              {
-                limit: options.limit,
-                status: options.status,
-                ticketId: options.ticket_id,
-                approvalType: options.approval_type,
-              },
-            );
+        const scope = { tenantId: context.tenant.tenantId };
+        const limit = options.limit;
+        const offset = options.offset ?? 0;
 
-            return {
-              approvals: rows.map(mapApproval),
-              page: {
-                count: rows.length,
-                limit: options.limit,
-              },
-            };
-          },
-        );
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          // Over-fetch one row to compute has_more without a second count query.
+          const rows = await approvalsListQuery(db, scope, {
+            limit: limit + 1,
+            offset,
+            order: toSortDirection(options.order),
+            status: options.status,
+            ticketId: options.ticket_id,
+            approvalType: options.approval_type,
+          });
+          const hasMore = rows.length > limit;
+          const items = hasMore ? rows.slice(0, limit) : rows;
+
+          return {
+            approvals: items.map(mapApproval),
+            page: { count: items.length, limit, offset, has_more: hasMore },
+          };
+        });
       },
       async getById(context, approvalId) {
         return withTenantTransaction(
@@ -1596,6 +1622,95 @@ export function createDatabaseApiServices(
             };
           },
         );
+      },
+      async summary(context) {
+        const scope = { tenantId: context.tenant.tenantId };
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const rows = await approvalStatusCountsQuery(db, scope);
+          const counts = {
+            pending: 0,
+            approved: 0,
+            edited: 0,
+            rejected: 0,
+            escalated: 0,
+            expired: 0,
+          };
+
+          for (const row of rows) {
+            counts[row.status] = row.count;
+          }
+
+          const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+
+          return { counts, total };
+        });
+      },
+      async evidence(context, approvalId) {
+        const scope = { tenantId: context.tenant.tenantId };
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const [approval] = await approvalByIdQuery(db, scope, approvalId);
+
+          if (!approval) {
+            return null;
+          }
+
+          const [ticket] = await ticketByIdQuery(db, scope, approval.ticketId);
+
+          if (!ticket) {
+            return null;
+          }
+
+          const [conversation] = await conversationByIdQuery(
+            db,
+            scope,
+            ticket.conversationId,
+          );
+
+          if (!conversation) {
+            return null;
+          }
+
+          const messages = await messagesListQuery(
+            db,
+            scope,
+            conversation.conversationId,
+            { limit: 100 },
+          );
+
+          let aiRun: AiRun | null = null;
+
+          if (approval.aiRunId !== null) {
+            const aiRunRows = await aiRunByIdQuery(db, scope, approval.aiRunId);
+            aiRun = aiRunRows[0] ?? null;
+          }
+
+          const toolCalls = await toolCallsListQuery(db, scope, {
+            limit: 100,
+            ...(aiRun
+              ? { aiRunId: aiRun.aiRunId }
+              : { ticketId: approval.ticketId }),
+          });
+          // Every approval on the same ticket, so the reviewer sees the prior
+          // decision trail (the focal approval is included and marked below).
+          const ticketApprovals = await approvalsListQuery(db, scope, {
+            limit: 50,
+            ticketId: approval.ticketId,
+          });
+
+          return {
+            approval: mapApproval(approval),
+            ticket: mapTicket(ticket),
+            conversation: mapConversation(conversation),
+            messages: messages.map(mapMessage),
+            ai_run: aiRun ? mapAiRun(aiRun) : null,
+            tool_calls: toolCalls.map(mapToolCall),
+            prior_approvals: ticketApprovals
+              .filter((row) => row.approvalId !== approval.approvalId)
+              .map(mapApproval),
+          };
+        });
       },
     },
     aiRuns: {
@@ -1910,30 +2025,30 @@ export function createDatabaseApiServices(
     },
     tickets: {
       async list(context, options) {
-        return withTenantTransaction(
-          getClient(),
-          { tenantId: context.tenant.tenantId },
-          async (db) => {
-            const rows = await ticketsListQuery(
-              db,
-              { tenantId: context.tenant.tenantId },
-              {
-                limit: options.limit,
-                status: options.status,
-                customerId: options.customer_id,
-                assignedQueue: options.assigned_queue,
-              },
-            );
+        const scope = { tenantId: context.tenant.tenantId };
+        const limit = options.limit;
+        const offset = options.offset ?? 0;
 
-            return {
-              tickets: rows.map(mapTicket),
-              page: {
-                count: rows.length,
-                limit: options.limit,
-              },
-            };
-          },
-        );
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const rows = await ticketsListQuery(db, scope, {
+            limit: limit + 1,
+            offset,
+            order: toSortDirection(options.order),
+            status: options.status,
+            customerId: options.customer_id,
+            assignedQueue: options.assigned_queue,
+            ...(options.updated_since
+              ? { updatedSince: new Date(options.updated_since) }
+              : {}),
+          });
+          const hasMore = rows.length > limit;
+          const items = hasMore ? rows.slice(0, limit) : rows;
+
+          return {
+            tickets: items.map(mapTicket),
+            page: { count: items.length, limit, offset, has_more: hasMore },
+          };
+        });
       },
       async create(context, input) {
         return withTenantTransaction(
@@ -2038,6 +2153,31 @@ export function createDatabaseApiServices(
             return rows[0] ? mapTicket(rows[0]) : null;
           },
         );
+      },
+      async listEvents(context, ticketId, options) {
+        const scope = { tenantId: context.tenant.tenantId };
+        const limit = options.limit;
+        const offset = options.offset ?? 0;
+
+        return withTenantTransaction(getClient(), scope, async (db) => {
+          const [ticket] = await ticketByIdQuery(db, scope, ticketId);
+
+          if (!ticket) {
+            return null;
+          }
+
+          const rows = await ticketEventsForTicketQuery(db, scope, ticketId, {
+            limit: limit + 1,
+            offset,
+          });
+          const hasMore = rows.length > limit;
+          const items = hasMore ? rows.slice(0, limit) : rows;
+
+          return {
+            ticket_events: items.map(mapTicketEvent),
+            page: { count: items.length, limit, offset, has_more: hasMore },
+          };
+        });
       },
     },
     async close() {
@@ -2332,6 +2472,30 @@ function mapAuditEvent(row: AuditEvent): AuditEventResponse {
     correlation_id: row.correlationId,
     created_at: toIsoString(row.createdAt),
   };
+}
+
+function mapTicketEvent(row: TicketEvent): TicketEventResponse {
+  return {
+    ticket_event_id: row.ticketEventId,
+    tenant_id: row.tenantId,
+    ticket_id: row.ticketId,
+    event_type: row.eventType,
+    from_status: row.fromStatus,
+    to_status: row.toStatus,
+    actor_type: row.actorType,
+    actor_id: row.actorId,
+    reason_code: row.reasonCode,
+    metadata: row.metadata,
+    created_at: toIsoString(row.createdAt),
+  };
+}
+
+/**
+ * Maps the console's chronological sort choice to a SQL direction on
+ * `created_at`. Oldest-first for working a queue; newest-first otherwise.
+ */
+function toSortDirection(order: ListSortOrder | undefined): "asc" | "desc" {
+  return order === "created_asc" ? "asc" : "desc";
 }
 
 function mapTicket(row: Ticket): TicketResponse {
