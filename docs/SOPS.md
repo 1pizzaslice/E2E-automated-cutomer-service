@@ -618,18 +618,35 @@ Run this checklist for every production (pilot) deployment. It encodes the
 Milestone 12 security acceptance criteria; a deployment that cannot check
 every box does not ship.
 
+Mechanics (Milestone 18, ADR-0027): the deployment target is the hardened
+single-VM Compose profile at `infra/production/`. `infra/production/README.md`
+is the operational runbook — bring-up order, secrets, tunnels, and the exact
+commands. In brief: fill `.env` + `env/*.env` from the templates; `docker
+compose -f infra/production/docker-compose.yml up -d` (Caddy is the only public
+service; operator UIs are `127.0.0.1`-bound, reached by SSH tunnel);
+`--profile setup run --rm migrate` then `seed`; back up with the `pg-backup`
+service and prove it with `pg-restore-drill.sh`; deploy/roll back with
+`deploy.sh <tag>` / `rollback.sh` (CI drives these on a `v*` tag once
+`DEPLOY_ENABLED=true`).
+
 Environment and infrastructure:
 
 - [ ] Separate credentials per environment; secrets exist only as environment
       variables named by the `*_ref` values in config rows (never plaintext
-      in the database, repo, or prompts).
-- [ ] Managed PostgreSQL provisioned; `pnpm db:migrate` applied and
-      `schema_migrations` verified (0001-0004).
+      in the database, repo, or prompts). Production secrets live in
+      `infra/production/.env` + `env/*.env` (git-ignored; templates committed).
+- [ ] Managed PostgreSQL provisioned; migrations applied via the `migrate`
+      one-shot (`--profile setup run --rm migrate`) and `schema_migrations`
+      verified (0001-0007).
 - [ ] RLS verified on the deployed database: the `support_app` role exists
-      and a cross-tenant read/write smoke check fails.
+      and a cross-tenant read/write smoke check fails (README §3 provides the
+      exact SQL — unset tenant raises, cross-tenant read returns zero rows,
+      cross-tenant insert is rejected by the WITH CHECK policy).
 - [ ] Temporal, NATS JetStream, Redis, and object storage reachable from the
       workers; OTel collector deployed with the Prometheus scrape endpoint,
-      dashboards and alert rules loaded from `infra/observability/`.
+      and Prometheus + Grafana + Alertmanager provisioned from
+      `infra/observability/` (dashboards + the nine `Support*` alert rules
+      load as code; Alertmanager's Slack webhook is set).
 
 Security gates (all automated — run the suites):
 
@@ -662,7 +679,9 @@ Tenant readiness:
 
 Rollback:
 
-- [ ] Previous deployable artifact retained and the rollback command tested.
+- [ ] Previous image tag retained in GHCR and the rollback command tested
+      (`infra/production/rollback.sh`; `deploy.sh` auto-rolls-back on a failed
+      health gate).
 - [ ] Database migrations in this release are backward-compatible with the
       previous application version (additive-only), or a tested down-path
       exists.

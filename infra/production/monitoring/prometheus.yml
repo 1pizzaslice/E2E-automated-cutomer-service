@@ -1,0 +1,28 @@
+# Prometheus config for staging/production (Milestone 18).
+# Scrapes the OTel collector's Prometheus exporter (:8889) — the same endpoint
+# the dev stack exposes — and evaluates the committed critical-failure alert
+# rules (infra/observability/alerts.yaml, mounted read-only), routing firing
+# alerts to Alertmanager.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: staging
+
+rule_files:
+  - /etc/prometheus/alerts.yaml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Application metrics (support_* series) re-exposed by the collector.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

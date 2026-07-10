@@ -1,0 +1,28 @@
+# Keep the build context small and reproducible. The production images
+# (infra/production/*.Dockerfile) install dependencies from the committed
+# lockfile inside the builder stage, so no host node_modules or build output
+# should ever be sent to the daemon.
+**/node_modules
+**/dist
+**/.venv
+ai/.venv
+**/*.tsbuildinfo
+
+.git
+.github
+.env
+.env.*
+!.env.example
+
+# Docs and local-only artifacts are never needed to build a runnable image.
+docs
+*.md
+!packages/**/README.md
+.data
+backups
+scratchpad
+
+# Test/coverage output
+coverage
+**/coverage
+**/*.log

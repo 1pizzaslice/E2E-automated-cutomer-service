@@ -1,0 +1,39 @@
+# Alertmanager config for staging/production (Milestone 18).
+#
+# The Slack webhook is a secret: it is NOT stored here. The alertmanager
+# container's entrypoint writes $SLACK_WEBHOOK_URL to /tmp/slack_api_url and
+# this config reads it via slack_api_url_file. If the webhook is unset the
+# file is empty and delivery is a no-op (alerts still fire and are visible in
+# the Alertmanager UI) — that is the "config-ready, drop in the URL later"
+# state. Set SLACK_WEBHOOK_URL in infra/production/.env to enable delivery.
+global:
+  resolve_timeout: 5m
+  slack_api_url_file: /tmp/slack_api_url
+
+route:
+  receiver: slack-notifications
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 3h
+  routes:
+    - matchers:
+        - severity = critical
+      receiver: slack-notifications
+      repeat_interval: 1h
+
+receivers:
+  - name: slack-notifications
+    slack_configs:
+      - channel: "#support-alerts"
+        send_resolved: true
+        title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})"
+        text: >-
+          {{ range .Alerts }}*{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ end }}
+
+inhibit_rules:
+  - source_matchers: [severity = critical]
+    target_matchers: [severity = high]
+    equal: [alertname]
