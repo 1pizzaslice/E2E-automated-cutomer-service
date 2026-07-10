@@ -11,6 +11,7 @@ import {
   type TokenVerifier,
   type UserDirectory,
 } from "./auth.js";
+import { loadCorsConfig, registerCors, type CorsConfig } from "./cors.js";
 import { HttpError, registerErrorHandler } from "./errors.js";
 import { createDatabaseInboundWebhookDependencies } from "./inbound-webhook-deps.js";
 import {
@@ -23,6 +24,11 @@ import {
   registerRequestContext,
   type ResolvedAuth,
 } from "./request-context.js";
+import {
+  loadRateLimitConfig,
+  registerRateLimit,
+  type RateLimitConfig,
+} from "./rate-limit.js";
 import { registerRoutes } from "./routes.js";
 import { createDatabaseApiServices, type ApiServices } from "./services.js";
 import type { ToolExecutor } from "./tool-registry.js";
@@ -71,6 +77,16 @@ export interface BuildAppOptions {
    * database-backed directory.
    */
   readonly userDirectory?: UserDirectory;
+  /**
+   * CORS config (Milestone 20). `undefined` loads from the environment (off
+   * unless `SUPPORT_CORS_ALLOWED_ORIGINS` is set); `null` forces it off.
+   */
+  readonly cors?: CorsConfig | null;
+  /**
+   * Rate-limit config (Milestone 20). `undefined` loads from the environment
+   * (off unless `SUPPORT_RATE_LIMIT_ENABLED=true`); `null` forces it off.
+   */
+  readonly rateLimit?: RateLimitConfig | null;
 }
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
@@ -114,17 +130,40 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
           userDirectory: userDirectory!,
         }
       : { mode: "insecure-headers" };
+  const corsConfig =
+    options.cors === undefined ? loadCorsConfig() : (options.cors ?? undefined);
+  const rateLimitConfig =
+    options.rateLimit === undefined
+      ? loadRateLimitConfig()
+      : (options.rateLimit ?? undefined);
 
   registerRawJsonBodyParser(app);
   registerErrorHandler(app);
+  // CORS runs first so a browser preflight (OPTIONS) is answered before auth.
+  if (corsConfig) {
+    registerCors(app, corsConfig);
+  }
   registerRequestContext(app, {
     auth,
     ...(internalAuth ? { internalAuth } : {}),
   });
   registerRequestTelemetry(app, metrics);
-  registerRoutes(app, services);
-  registerInternalRoutes(app, { toolExecutor });
-  registerWebhookRoutes(app, webhooks);
+  // Rate limiting runs after request-context so the key generator can read the
+  // authenticated principal; exempt paths (health, webhooks) are skipped inside.
+  if (rateLimitConfig) {
+    registerRateLimit(app, rateLimitConfig);
+  }
+  // Routes register inside a child plugin so they load AFTER the CORS and
+  // rate-limit plugins above. Those plugins add their onRequest hooks during
+  // `ready()`; a hook added by a deferred plugin does not apply to routes that
+  // were already registered synchronously, so the routes must be deferred too
+  // for the hooks to cover them. The synchronous request-context/telemetry
+  // hooks are on the root instance and reach this child context unchanged.
+  app.register(async (instance) => {
+    registerRoutes(instance, services);
+    registerInternalRoutes(instance, { toolExecutor });
+    registerWebhookRoutes(instance, webhooks);
+  });
 
   app.addHook("onClose", async () => {
     await services.close?.();
