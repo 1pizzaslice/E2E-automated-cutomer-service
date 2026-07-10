@@ -1190,6 +1190,17 @@ Current implementation:
 - After the decision commits, the API signals the ticket lifecycle workflow (`approval_completed` on workflow id `ticket-lifecycle:{tenant_id}:{conversation_id}`, conversation resolved through the approval's ticket) via an injectable `ApprovalWorkflowSignaler` (Temporal-backed default, lazy connection). The response is `{ approval, workflow_signal }`; a missing workflow (`workflow_not_found`) or missing ticket (`ticket_not_found`) is reported in `workflow_signal` rather than failing, because manually seeded approvals have no waiting workflow. Transport-level signal failures return `502 WORKFLOW_ERROR` after the decision has been persisted.
 - Deciding a non-pending approval returns `409 CONFLICT` (the `pending`-guarded update makes concurrent double-decides safe); missing or cross-tenant approvals return `404 RESOURCE_NOT_FOUND`.
 
+### 17.12a Console enablement (Milestone 20)
+
+The reviewer console (`apps/console`, ADR-0026) is a browser client on its own origin; these surfaces exist so it needs no backend rework. All are governed by the same RBAC + tenant-membership rules as the rest of `/v1/*`, and the whole API is described by the hand-written OpenAPI document (`GET /openapi.json`); a route↔spec↔client drift test (`route-drift.test.ts`) keeps `routes.ts`, `openapi.ts`, and `packages/api-client` in lockstep. Consumers use the typed `@support/api-client` rather than hand-rolled `fetch`.
+
+- **Reviewer queue.** `GET /v1/approvals` gains `order` (`created_asc` = oldest-first queue order | `created_desc`, default newest-first), `offset` pagination, and `has_more` on the page object (computed by over-fetching one row). `GET /v1/approvals/summary` (permission `approvals:read`) returns per-status open counts + total in one grouped aggregate — the queue badge without listing.
+- **Evidence composite.** `GET /v1/approvals/{approval_id}/evidence` (permission `approvals:read`) returns the approval, ticket, conversation, messages, the AI run (draft/evidence/guardrails/trace link, nullable), its tool calls, and prior approvals on the same ticket — mirroring the QA evidence read. The focal approval's `requested_payload` is the original AI draft; `prior_approvals` excludes the focal row.
+- **Ticket surfaces.** `GET /v1/tickets` gains `order`/`offset`/`updated_since` (returns only tickets updated strictly after the instant). `GET /v1/tickets/{ticket_id}/events` (permission `tickets:read`) is the append-only `ticket_events` lifecycle timeline (the Milestone 13 follow-up read API).
+- **Freshness.** List endpoints set a content-hash `ETag`; a matching `If-None-Match` returns `304 Not Modified` with no body, so polling clients skip unchanged payloads. `updated_since` (tickets) is the complementary server-side filter.
+- **CORS.** Off by default; enabled per deployment via `SUPPORT_CORS_ALLOWED_ORIGINS` (comma-separated exact origins; `*` rejected). Preflight is answered before auth.
+- **Rate limiting.** Off by default; enabled via `SUPPORT_RATE_LIMIT_ENABLED`, keyed per authenticated principal (client IP fallback), counters in Redis (`REDIS_URL`) so the limit holds across replicas. Health probes and provider webhooks are exempt. A throttled request returns `429 RATE_LIMITED`.
+
 ### 17.13 Audit
 
 - `GET /v1/audit-events`

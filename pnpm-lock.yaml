@@ -24,6 +24,16 @@ importers:
         specifier: ^4.0.0
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(vite@8.0.16(@types/node@24.13.2)(esbuild@0.28.1)(terser@5.48.0)(tsx@4.22.4))
 
+  apps/console:
+    dependencies:
+      '@support/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+    devDependencies:
+      '@support/api':
+        specifier: workspace:*
+        version: link:../../packages/api
+
   packages/api:
     dependencies:
       '@fastify/cors':
