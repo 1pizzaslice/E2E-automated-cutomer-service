@@ -1,4 +1,5 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import { createHash } from "node:crypto";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   AiRunListResponseSchema,
@@ -9,11 +10,14 @@ import {
   ApprovalDecisionResponseSchema,
   ApprovalEditRequestSchema,
   ApprovalEscalateRequestSchema,
+  ApprovalEvidenceResponseSchema,
   ApprovalListResponseSchema,
   ApprovalRejectRequestSchema,
   ApprovalResourceResponseSchema,
   ApprovalStatusSchema,
+  ApprovalSummaryResponseSchema,
   ApprovalTypeSchema,
+  ListSortOrderSchema,
   AuditActorTypeSchema,
   AuditEventListResponseSchema,
   AuditEventResourceResponseSchema,
@@ -58,6 +62,7 @@ import {
   TenantListResponseSchema,
   TenantUpdateRequestSchema,
   TicketCreateRequestSchema,
+  TicketEventListResponseSchema,
   TicketListResponseSchema,
   TicketResourceResponseSchema,
   TicketStatusSchema,
@@ -167,6 +172,8 @@ const ApprovalListQuerySchema = ListQuerySchema.extend({
   status: ApprovalStatusSchema.optional(),
   ticket_id: z.string().min(1).optional(),
   approval_type: ApprovalTypeSchema.optional(),
+  offset: z.coerce.number().int().min(0).default(0),
+  order: ListSortOrderSchema.optional(),
 });
 
 const AuditEventListQuerySchema = ListQuerySchema.extend({
@@ -187,7 +194,17 @@ const TicketListQuerySchema = ListQuerySchema.extend({
   status: TicketStatusSchema.optional(),
   customer_id: z.string().min(1).optional(),
   assigned_queue: z.string().min(1).optional(),
+  offset: z.coerce.number().int().min(0).default(0),
+  order: ListSortOrderSchema.optional(),
+  updated_since: z.string().datetime().optional(),
 });
+
+const TicketEventListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    offset: z.coerce.number().int().min(0).default(0),
+  })
+  .strict();
 
 const AiRunListQuerySchema = ListQuerySchema.extend({
   ticket_id: z.string().min(1).optional(),
@@ -736,7 +753,7 @@ export function registerRoutes(
     return KbSearchResponseSchema.parse(results);
   });
 
-  app.get("/v1/approvals", async (request) => {
+  app.get("/v1/approvals", async (request, reply) => {
     const context = requireTenantRequestContext(request);
 
     requirePermission(context.actor, "approvals:read");
@@ -744,7 +761,28 @@ export function registerRoutes(
     const query = parseQuery(ApprovalListQuerySchema, request);
     const approvals = await services.approvals.list(context, query);
 
-    return ApprovalListResponseSchema.parse(approvals);
+    return respondWithEtag(
+      request,
+      reply,
+      ApprovalListResponseSchema.parse(approvals),
+    );
+  });
+
+  // Static path registered before `/:approval_id` so "summary" is never read as
+  // an approval id (find-my-way prefers static segments regardless, but this
+  // keeps the intent explicit).
+  app.get("/v1/approvals/summary", async (request, reply) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "approvals:read");
+
+    const summary = await services.approvals.summary(context);
+
+    return respondWithEtag(
+      request,
+      reply,
+      ApprovalSummaryResponseSchema.parse(summary),
+    );
   });
 
   app.get("/v1/approvals/:approval_id", async (request) => {
@@ -763,6 +801,24 @@ export function registerRoutes(
     }
 
     return ApprovalResourceResponseSchema.parse({ approval });
+  });
+
+  app.get("/v1/approvals/:approval_id/evidence", async (request) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "approvals:read");
+
+    const { approval_id: approvalId } = parseParams(
+      ApprovalParamsSchema,
+      request,
+    );
+    const evidence = await services.approvals.evidence(context, approvalId);
+
+    if (!evidence) {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Approval was not found.");
+    }
+
+    return ApprovalEvidenceResponseSchema.parse(evidence);
   });
 
   app.post("/v1/approvals/:approval_id/approve", async (request) =>
@@ -984,7 +1040,7 @@ export function registerRoutes(
     });
   });
 
-  app.get("/v1/tickets", async (request) => {
+  app.get("/v1/tickets", async (request, reply) => {
     const context = requireTenantRequestContext(request);
 
     requirePermission(context.actor, "tickets:read");
@@ -992,7 +1048,11 @@ export function registerRoutes(
     const query = parseQuery(TicketListQuerySchema, request);
     const tickets = await services.tickets.list(context, query);
 
-    return TicketListResponseSchema.parse(tickets);
+    return respondWithEtag(
+      request,
+      reply,
+      TicketListResponseSchema.parse(tickets),
+    );
   });
 
   app.post("/v1/tickets", async (request, reply) => {
@@ -1050,6 +1110,26 @@ export function registerRoutes(
     return AuditEventListResponseSchema.parse(auditEvents);
   });
 
+  app.get("/v1/tickets/:ticket_id/events", async (request, reply) => {
+    const context = requireTenantRequestContext(request);
+
+    requirePermission(context.actor, "tickets:read");
+
+    const { ticket_id: ticketId } = parseParams(TicketParamsSchema, request);
+    const query = parseQuery(TicketEventListQuerySchema, request);
+    const events = await services.tickets.listEvents(context, ticketId, query);
+
+    if (!events) {
+      throw new HttpError(404, "RESOURCE_NOT_FOUND", "Ticket was not found.");
+    }
+
+    return respondWithEtag(
+      request,
+      reply,
+      TicketEventListResponseSchema.parse(events),
+    );
+  });
+
   app.patch("/v1/tickets/:ticket_id", async (request) => {
     const context = requireTenantRequestContext(request);
 
@@ -1065,6 +1145,44 @@ export function registerRoutes(
 
     return TicketResourceResponseSchema.parse({ ticket });
   });
+}
+
+/**
+ * Freshness contract for polling clients (Milestone 20): sets an ETag derived
+ * from the serialized body and returns 304 (no body) when the caller's
+ * If-None-Match already matches. The ETag is a content hash, so it is stable
+ * across identical pages and changes the moment any row does — letting the
+ * console poll the queues without re-downloading unchanged results.
+ */
+function respondWithEtag(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  body: unknown,
+): unknown {
+  const etag = `"${createHash("sha1")
+    .update(JSON.stringify(body))
+    .digest("hex")}"`;
+
+  reply.header("etag", etag);
+  reply.header("cache-control", "no-cache");
+
+  const ifNoneMatch = request.headers["if-none-match"];
+
+  if (ifNoneMatch && ifNoneMatchSatisfied(ifNoneMatch, etag)) {
+    reply.code(304);
+    return reply.send();
+  }
+
+  return body;
+}
+
+function ifNoneMatchSatisfied(header: string, etag: string): boolean {
+  const normalized = etag.replace(/^W\//, "");
+
+  return header
+    .split(",")
+    .map((value) => value.trim())
+    .some((value) => value === "*" || value.replace(/^W\//, "") === normalized);
 }
 
 function parseParams<T extends z.ZodType>(

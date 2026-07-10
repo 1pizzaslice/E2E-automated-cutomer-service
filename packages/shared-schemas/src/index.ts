@@ -224,7 +224,21 @@ export const TenantResourceResponseSchema = z.object({
 export const ListResponsePageSchema = z.object({
   count: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
+  // Offset pagination (Milestone 20). Optional so existing non-paginated list
+  // endpoints stay unchanged; the console queues set both.
+  offset: z.number().int().nonnegative().optional(),
+  // True when more rows exist beyond this page (computed by over-fetching one
+  // row). Lets a polling client page without a separate count call.
+  has_more: z.boolean().optional(),
 });
+
+/**
+ * Chronological sort order for reviewer queues (Milestone 20). `created_asc`
+ * is oldest-first — the natural work-the-backlog order for an approval queue;
+ * `created_desc` (newest-first) stays the default for browse-style lists.
+ */
+export const ListSortOrderSchema = z.enum(["created_asc", "created_desc"]);
+export type ListSortOrder = z.infer<typeof ListSortOrderSchema>;
 
 export const TenantListResponseSchema = z.object({
   tenants: z.array(TenantResponseSchema),
@@ -1088,6 +1102,30 @@ export type ApprovalResourceResponse = z.infer<
 >;
 export type ApprovalListResponse = z.infer<typeof ApprovalListResponseSchema>;
 
+/**
+ * Cheap open-counts summary for the reviewer queue badge (Milestone 20): one
+ * count per approval status plus the total. Every status key is always present
+ * (zero when none), so the console can render the badge without null checks.
+ */
+export const ApprovalStatusCountsSchema = z.object({
+  pending: z.number().int().nonnegative(),
+  approved: z.number().int().nonnegative(),
+  edited: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+  escalated: z.number().int().nonnegative(),
+  expired: z.number().int().nonnegative(),
+});
+
+export const ApprovalSummaryResponseSchema = z.object({
+  counts: ApprovalStatusCountsSchema,
+  total: z.number().int().nonnegative(),
+});
+
+export type ApprovalStatusCounts = z.infer<typeof ApprovalStatusCountsSchema>;
+export type ApprovalSummaryResponse = z.infer<
+  typeof ApprovalSummaryResponseSchema
+>;
+
 // Terminal statuses a human reviewer can set on a pending approval
 // (BACKEND_SPEC §12/§17.12). `expired` is reserved for future timeout handling
 // and is never set through the decision endpoints.
@@ -1559,6 +1597,57 @@ export type QaReviewCompleteRequest = z.infer<
 >;
 export type QaReviewEvidenceResponse = z.infer<
   typeof QaReviewEvidenceResponseSchema
+>;
+
+/**
+ * Composite approval evidence package (Milestone 20): everything a reviewer
+ * needs to decide a pending approval in one read — the approval itself (its
+ * `requested_payload` is the original AI draft), the ticket and conversation,
+ * the messages, the persisted AI run (draft, evidence, guardrails, trace link)
+ * and its tool calls, and any prior approvals on the same ticket. Mirrors
+ * `QaReviewEvidenceResponseSchema`; the focal record is the approval.
+ */
+export const ApprovalEvidenceResponseSchema = z.object({
+  approval: ApprovalResponseSchema,
+  ticket: TicketResponseSchema,
+  conversation: ConversationResponseSchema,
+  messages: z.array(MessageResponseSchema),
+  ai_run: AiRunResponseSchema.nullable(),
+  tool_calls: z.array(ToolCallResponseSchema),
+  prior_approvals: z.array(ApprovalResponseSchema),
+});
+
+export type ApprovalEvidenceResponse = z.infer<
+  typeof ApprovalEvidenceResponseSchema
+>;
+
+/**
+ * Append-only ticket lifecycle event (BACKEND_SPEC §6.3): one row per
+ * workflow-owned status transition. Read surface added in Milestone 20 for the
+ * console's ticket timeline. `from_status` is null on the opening event.
+ */
+export const TicketEventResponseSchema = z.object({
+  ticket_event_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  ticket_id: z.string().min(1),
+  event_type: z.string().min(1),
+  from_status: TicketStatusSchema.nullable(),
+  to_status: TicketStatusSchema.nullable(),
+  actor_type: AuditActorTypeSchema,
+  actor_id: z.string().nullable(),
+  reason_code: z.string().nullable(),
+  metadata: JsonObjectSchema.nullable(),
+  created_at: z.string().datetime(),
+});
+
+export const TicketEventListResponseSchema = z.object({
+  ticket_events: z.array(TicketEventResponseSchema),
+  page: ListResponsePageSchema,
+});
+
+export type TicketEventResponse = z.infer<typeof TicketEventResponseSchema>;
+export type TicketEventListResponse = z.infer<
+  typeof TicketEventListResponseSchema
 >;
 
 const ReportRateSchema = z.number().min(0).max(1).nullable();

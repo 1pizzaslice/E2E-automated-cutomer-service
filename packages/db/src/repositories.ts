@@ -4,6 +4,7 @@ import {
   cosineDistance,
   desc,
   eq,
+  gt,
   gte,
   inArray,
   isNotNull,
@@ -100,6 +101,12 @@ export interface TicketListQueryOptions extends ListQueryOptions {
   readonly status?: Ticket["status"];
   readonly customerId?: string;
   readonly assignedQueue?: string;
+  /** Row offset for pagination (Milestone 20). */
+  readonly offset?: number;
+  /** `asc` = oldest-first; defaults to newest-first. */
+  readonly order?: "asc" | "desc";
+  /** Only rows updated strictly after this instant (freshness polling). */
+  readonly updatedSince?: Date;
 }
 
 export interface PolicyListQueryOptions extends ListQueryOptions {
@@ -117,6 +124,10 @@ export interface ApprovalListQueryOptions extends ListQueryOptions {
   readonly status?: Approval["status"];
   readonly ticketId?: string;
   readonly approvalType?: Approval["approvalType"];
+  /** Row offset for pagination (Milestone 20). */
+  readonly offset?: number;
+  /** `asc` = oldest-first (queue order); defaults to newest-first. */
+  readonly order?: "asc" | "desc";
 }
 
 export interface AuditEventListQueryOptions extends ListQueryOptions {
@@ -379,12 +390,19 @@ export function ticketsListQuery(
     filters.push(eq(tickets.assignedQueue, options.assignedQueue));
   }
 
+  if (options.updatedSince) {
+    filters.push(gt(tickets.updatedAt, options.updatedSince));
+  }
+
+  const direction = options.order === "asc" ? asc : desc;
+
   return db
     .select()
     .from(tickets)
     .where(and(...filters))
-    .orderBy(desc(tickets.createdAt), desc(tickets.ticketId))
-    .limit(options.limit);
+    .orderBy(direction(tickets.createdAt), direction(tickets.ticketId))
+    .limit(options.limit)
+    .offset(options.offset ?? 0);
 }
 
 export function ticketByIdQuery(
@@ -487,8 +505,9 @@ export function ticketEventsForTicketQuery(
   db: SupportDatabase,
   scope: TenantScope,
   ticketId: string,
+  options: { readonly limit?: number; readonly offset?: number } = {},
 ) {
-  return db
+  const ordered = db
     .select()
     .from(ticketEvents)
     .where(
@@ -498,6 +517,12 @@ export function ticketEventsForTicketQuery(
       ),
     )
     .orderBy(asc(ticketEvents.createdAt), asc(ticketEvents.ticketEventId));
+
+  if (options.limit !== undefined) {
+    return ordered.limit(options.limit).offset(options.offset ?? 0);
+  }
+
+  return options.offset ? ordered.offset(options.offset) : ordered;
 }
 
 /**
@@ -863,12 +888,34 @@ export function approvalsListQuery(
     filters.push(eq(approvals.approvalType, options.approvalType));
   }
 
+  const direction = options.order === "asc" ? asc : desc;
+
   return db
     .select()
     .from(approvals)
     .where(and(...filters))
-    .orderBy(desc(approvals.createdAt), desc(approvals.approvalId))
-    .limit(options.limit);
+    .orderBy(direction(approvals.createdAt), direction(approvals.approvalId))
+    .limit(options.limit)
+    .offset(options.offset ?? 0);
+}
+
+/**
+ * Per-status approval counts for the reviewer queue badge (Milestone 20). One
+ * grouped aggregate over the tenant's approvals — cheaper than listing — the
+ * caller fills any absent status with zero.
+ */
+export function approvalStatusCountsQuery(
+  db: SupportDatabase,
+  scope: TenantScope,
+) {
+  return db
+    .select({
+      status: approvals.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(approvals)
+    .where(eq(approvals.tenantId, scope.tenantId))
+    .groupBy(approvals.status);
 }
 
 export function approvalByIdQuery(
