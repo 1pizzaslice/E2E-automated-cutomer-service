@@ -1,0 +1,15 @@
+# Grafana dashboard provisioning (Milestone 18). Loads the committed
+# definitions-as-code dashboards from infra/observability/dashboards/, mounted
+# read-only at /var/lib/grafana/dashboards by the Compose profile.
+apiVersion: 1
+providers:
+  - name: support
+    orgId: 1
+    folder: Support
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

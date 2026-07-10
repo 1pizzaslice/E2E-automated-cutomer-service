@@ -1,0 +1,46 @@
+# TLS reverse proxy for staging/production (Milestone 18).
+#
+# Terminates TLS and proxies ONLY the public API surface (/v1/* — which
+# includes the provider webhooks under /v1/webhooks/* — and /health) to the
+# API container. The internal service-to-service endpoints (/internal/*) are
+# never proxied: they stay reachable only over the internal Compose network.
+# Temporal UI, Grafana, Prometheus, Alertmanager and the MinIO console are not
+# routed here at all — reach them via SSH tunnel to their 127.0.0.1 ports.
+#
+# STAGING_DOMAIN drives automatic HTTPS. Set it to the real hostname on the VM
+# (Caddy fetches a Let's Encrypt cert); set it to `localhost` for local
+# validation (Caddy serves a locally-trusted internal cert — curl -k).
+
+{
+	# Uncomment while testing DNS/issuance to avoid Let's Encrypt rate limits:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+	admin off
+}
+
+{$STAGING_DOMAIN} {
+	encode zstd gzip
+
+	# Public API surface only.
+	@public path /v1/* /health
+	handle @public {
+		reverse_proxy api:3000 {
+			health_uri /health
+			health_interval 15s
+		}
+	}
+
+	# Defense in depth: internal endpoints are explicitly refused at the edge.
+	handle /internal/* {
+		respond "Not found" 404
+	}
+
+	# Everything else is not part of the public contract.
+	handle {
+		respond "Not found" 404
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

@@ -69,10 +69,13 @@ pnpm test:py
 │   ├── runtime/
 │   └── service/
 ├── infra/
-│   ├── docker-compose.yml
+│   ├── docker-compose.yml      # local dev stack
+│   ├── production/             # hardened single-VM staging/prod profile (Milestone 18)
 │   ├── observability/
 │   └── otel/
-└── .github/workflows/ci.yml
+└── .github/workflows/
+    ├── ci.yml
+    └── deploy.yml              # build+push GHCR on tag, SSH deploy, health-gated rollback
 ```
 
 ## Local Infrastructure
@@ -169,6 +172,20 @@ Services:
 - MinIO API: `http://localhost:9000`
 - MinIO console: `http://localhost:9001`
 - OpenTelemetry collector: `localhost:4317` and `localhost:4318` (OTLP), `http://localhost:8889/metrics` (Prometheus scrape)
+
+## Staging / Production Deployment
+
+The production-shaped single-VM deployment (Milestone 18, ADR-0027) lives under
+`infra/production/` with its own hardened Compose profile: production
+Dockerfiles for the API/worker/AI sidecar (pruned `pnpm deploy` images running
+`tsx` on source), a Caddy TLS reverse proxy fronting only `/v1/*` + webhooks,
+Prometheus/Grafana/Alertmanager provisioned from `infra/observability/`, nightly
+PostgreSQL backups with a tested restore drill, and a `DEPLOY_ENABLED`-gated CI
+deploy workflow (`.github/workflows/deploy.yml`) with a health-gated
+`deploy.sh`/`rollback.sh`. Only Caddy is publicly exposed; every datastore and
+operator UI is internal or `127.0.0.1`-bound (SSH tunnel). See
+[`infra/production/README.md`](infra/production/README.md) for the deploy
+runbook and `docs/SOPS.md` §19 for the release checklist.
 
 ## Current Event Bus Foundation
 

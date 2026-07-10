@@ -1,0 +1,478 @@
+# Hardened production/staging Compose profile (Milestone 18, ADR-0020/ADR-0027).
+#
+# Differences from the dev stack (infra/docker-compose.yml):
+#   - App images (api/worker/ai) are built from infra/production/*.Dockerfile
+#     and run as non-root; no source bind mounts.
+#   - Only Caddy publishes host ports (80/443). Every datastore/UI is either
+#     unpublished (reachable only over the internal Compose network by service
+#     name) or bound to 127.0.0.1 for SSH-tunnel-only operator access.
+#   - restart: unless-stopped and per-service CPU/memory limits everywhere.
+#   - Secrets come from ./.env (interpolation, single source for shared
+#     tokens/passwords) and ./env/<service>.env (external provider/IdP keys).
+#     Copy the .example files, fill them in, keep the real files out of git.
+#   - API and worker share one raw-payload volume at RAW_PAYLOAD_STORE_DIR so
+#     the retention blob sweeper can delete what the API wrote (M17 follow-up).
+#
+# Bring-up:  docker compose -f infra/production/docker-compose.yml up -d
+# Migrate:   docker compose -f infra/production/docker-compose.yml --profile setup run --rm migrate
+# Seed:      docker compose -f infra/production/docker-compose.yml --profile setup run --rm seed
+
+name: support-prod
+
+# ---------------------------------------------------------------------------
+# Reusable anchors
+# ---------------------------------------------------------------------------
+x-restart: &restart unless-stopped
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  # ---- datastores -------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: *restart
+    logging: *logging
+    environment:
+      POSTGRES_DB: support
+      POSTGRES_USER: support
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/production/.env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U support -d support"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+
+  redis:
+    image: redis:8-alpine
+    restart: *restart
+    logging: *logging
+    command:
+      [
+        "redis-server",
+        "--requirepass",
+        "${REDIS_PASSWORD:?set REDIS_PASSWORD in infra/production/.env}",
+        "--save",
+        "60",
+        "1",
+      ]
+    volumes:
+      - redis-data:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  nats:
+    image: nats:2.12-alpine
+    restart: *restart
+    logging: *logging
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    volumes:
+      - ../nats/server.conf:/etc/nats/nats-server.conf:ro
+      - nats-data:/data
+    networks: [backend]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null 'http://127.0.0.1:8222/healthz?js-enabled-only=true'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    restart: *restart
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: support
+      POSTGRES_PWD: ${POSTGRES_PASSWORD}
+      POSTGRES_SEEDS: postgres
+    networks: [backend]
+    healthcheck:
+      # auto-setup binds the frontend to the container IP (not loopback), so
+      # the probe must target the service DNS name, which resolves to it.
+      test:
+        [
+          "CMD",
+          "temporal",
+          "operator",
+          "cluster",
+          "health",
+          "--address",
+          "temporal:7233",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+  # Operator UI: reachable only via `ssh -L 8080:127.0.0.1:8080 vm` then
+  # http://127.0.0.1:8080. Never published to 0.0.0.0.
+  temporal-ui:
+    image: temporalio/ui:2.35.0
+    restart: *restart
+    logging: *logging
+    depends_on: [temporal]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://127.0.0.1:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+  minio:
+    image: minio/minio:latest
+    restart: *restart
+    logging: *logging
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-support}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in infra/production/.env}
+    volumes:
+      - minio-data:/data
+    # Console bound to localhost only (SSH tunnel); S3 API stays internal.
+    ports:
+      - "127.0.0.1:9001:9001"
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.154.0
+    restart: *restart
+    logging: *logging
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ../otel/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  # ---- application services --------------------------------------------
+  api:
+    image: ${REGISTRY:-ghcr.io/1pizzaslice}/support-api:${IMAGE_TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: infra/production/api.Dockerfile
+    restart: *restart
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./env/api.env
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      API_HOST: 0.0.0.0
+      API_PORT: "3000"
+      DATABASE_URL: postgres://support:${POSTGRES_PASSWORD}@postgres:5432/support
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      NATS_URL: nats://nats:4222
+      TEMPORAL_ADDRESS: temporal:7233
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-support}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: support-artifacts
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      RAW_PAYLOAD_STORE_DIR: /data/raw-payloads
+      # Shared machine token: the sidecar authenticates to the API's
+      # /internal/* endpoints with this value.
+      SUPPORT_INTERNAL_API_TOKEN: ${SUPPORT_INTERNAL_API_TOKEN:?set SUPPORT_INTERNAL_API_TOKEN in infra/production/.env}
+    volumes:
+      - raw-payloads:/data/raw-payloads
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1g
+
+  worker:
+    image: ${REGISTRY:-ghcr.io/1pizzaslice}/support-worker:${IMAGE_TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: infra/production/worker.Dockerfile
+    restart: *restart
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    env_file:
+      - ./env/worker.env
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgres://support:${POSTGRES_PASSWORD}@postgres:5432/support
+      NATS_URL: nats://nats:4222
+      TEMPORAL_ADDRESS: temporal:7233
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      RAW_PAYLOAD_STORE_DIR: /data/raw-payloads
+      # Worker -> AI sidecar bridge (internal network).
+      AI_RUNTIME_SERVICE_URL: http://ai-service:8090
+      SUPPORT_AI_SERVICE_TOKEN: ${SUPPORT_AI_SERVICE_TOKEN:?set SUPPORT_AI_SERVICE_TOKEN in infra/production/.env}
+    volumes:
+      - raw-payloads:/data/raw-payloads
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1g
+
+  ai-service:
+    image: ${REGISTRY:-ghcr.io/1pizzaslice}/support-ai:${IMAGE_TAG:-latest}
+    build:
+      context: ../../ai
+      dockerfile: ../infra/production/ai.Dockerfile
+    restart: *restart
+    logging: *logging
+    env_file:
+      - ./env/ai.env
+    environment:
+      SUPPORT_ENVIRONMENT: ${SUPPORT_ENVIRONMENT:-staging}
+      SUPPORT_AI_SERVICE_MODE: service
+      SUPPORT_UVICORN_WORKERS: ${SUPPORT_UVICORN_WORKERS:-2}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      # Incoming worker calls are authenticated with this token; outgoing
+      # tool-exec/KB calls to the API carry the internal token.
+      SUPPORT_AI_SERVICE_TOKEN: ${SUPPORT_AI_SERVICE_TOKEN}
+      SUPPORT_API_BASE_URL: http://api:3000
+      SUPPORT_INTERNAL_API_TOKEN: ${SUPPORT_INTERNAL_API_TOKEN}
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+
+  # ---- one-shot setup (profile: setup) ---------------------------------
+  # docker compose ... --profile setup run --rm migrate
+  migrate:
+    image: ${REGISTRY:-ghcr.io/1pizzaslice}/support-api:${IMAGE_TAG:-latest}
+    profiles: ["setup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://support:${POSTGRES_PASSWORD}@postgres:5432/support
+    command: ["tsx", "node_modules/@support/db/src/migrate.ts"]
+    networks: [backend]
+    restart: "no"
+
+  # docker compose ... --profile setup run --rm seed
+  seed:
+    image: ${REGISTRY:-ghcr.io/1pizzaslice}/support-api:${IMAGE_TAG:-latest}
+    profiles: ["setup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./env/api.env
+    environment:
+      DATABASE_URL: postgres://support:${POSTGRES_PASSWORD}@postgres:5432/support
+    command: ["tsx", "node_modules/@support/db/src/seed-pilot-run.ts"]
+    networks: [backend]
+    restart: "no"
+
+  # ---- edge: TLS reverse proxy -----------------------------------------
+  caddy:
+    image: caddy:2.10-alpine
+    restart: *restart
+    logging: *logging
+    depends_on: [api]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      STAGING_DOMAIN: ${STAGING_DOMAIN:?set STAGING_DOMAIN in infra/production/.env}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+  # ---- monitoring stack ------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    restart: *restart
+    logging: *logging
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/alerts.yaml:/etc/prometheus/alerts.yaml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: *restart
+    logging: *logging
+    # Render the Slack webhook (an env secret) into a file that the config
+    # references via slack_api_url_file, so the URL never lives in the image
+    # or the committed config. Empty webhook => alerts fire but do not deliver.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        printf '%s' "$${SLACK_WEBHOOK_URL:-}" > /tmp/slack_api_url
+        exec /bin/alertmanager --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager
+    environment:
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    restart: *restart
+    logging: *logging
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in infra/production/.env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: http://127.0.0.1:3001
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  # ---- nightly PostgreSQL backups --------------------------------------
+  pg-backup:
+    image: pgvector/pgvector:pg17
+    restart: *restart
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: support
+      PGDATABASE: support
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_SCHEDULE_UTC: ${BACKUP_SCHEDULE_UTC:-01:30}
+      # Optional offsite shipping hook, run after each dump with the dump path
+      # as $1 (e.g. "aws s3 cp \"$1\" s3://bucket/pg/" or an rclone copy).
+      BACKUP_UPLOAD_CMD: ${BACKUP_UPLOAD_CMD:-}
+    volumes:
+      - ./backup:/opt/backup:ro
+      - pg-backups:/backups
+    entrypoint: ["/bin/bash", "/opt/backup/pg-backup.sh"]
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  nats-data:
+  minio-data:
+  raw-payloads:
+  caddy-data:
+  caddy-config:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+  pg-backups:

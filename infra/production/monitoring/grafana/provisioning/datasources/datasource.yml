@@ -1,0 +1,12 @@
+# Grafana datasource provisioning (Milestone 18). The support-overview
+# dashboard's panels carry no explicit datasource, so they resolve to the
+# default — which must be this Prometheus instance.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

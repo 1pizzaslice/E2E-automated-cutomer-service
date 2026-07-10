@@ -1,0 +1,9 @@
+# Real secret files never get committed — only the .example templates do.
+.env
+env/*.env
+!env/*.env.example
+
+# Local backup/drill artifacts.
+backups/
+*.dump
+*.dump.sha256

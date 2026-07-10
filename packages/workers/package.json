@@ -24,7 +24,8 @@
     "@support/shared-schemas": "workspace:*",
     "@temporalio/client": "^1.18.1",
     "@temporalio/worker": "^1.18.1",
-    "@temporalio/workflow": "^1.18.1"
+    "@temporalio/workflow": "^1.18.1",
+    "tsx": "^4.22.4"
   },
   "devDependencies": {
     "@support/api": "workspace:*",
