@@ -9,6 +9,12 @@ export interface ConsoleConfig {
   readonly apiBaseUrl: string;
   /** Clerk publishable key. Empty string selects the dev token provider. */
   readonly clerkPublishableKey: string;
+  /**
+   * Optional trace-viewer URL template with a `{trace_id}` placeholder (e.g.
+   * `https://grafana.example.com/explore?traceID={trace_id}`). When set, the AI
+   * run's trace id renders as a link; otherwise as plain text.
+   */
+  readonly traceUrlTemplate: string;
 }
 
 export function loadConsoleConfig(
@@ -19,5 +25,6 @@ export function loadConsoleConfig(
     // share a host, so a relative base resolves against the current origin.
     apiBaseUrl: env.VITE_API_BASE_URL ?? "",
     clerkPublishableKey: env.VITE_CLERK_PUBLISHABLE_KEY ?? "",
+    traceUrlTemplate: env.VITE_TRACE_URL_TEMPLATE ?? "",
   };
 }

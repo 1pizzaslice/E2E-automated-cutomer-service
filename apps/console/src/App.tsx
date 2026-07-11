@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthGate } from "./auth/auth-gate.js";
 import { ApprovalsPage } from "./pages/approvals-page.js";
+import { EvidencePage } from "./pages/evidence-page.js";
 import { NotFoundPage } from "./pages/not-found-page.js";
 import { QaPage } from "./pages/qa-page.js";
 import { AppShell } from "./shell/app-shell.js";
@@ -18,6 +19,7 @@ export function App() {
           <Route element={<AppShell />}>
             <Route index element={<Navigate to="/approvals" replace />} />
             <Route path="approvals" element={<ApprovalsPage />} />
+            <Route path="approvals/:approvalId" element={<EvidencePage />} />
             <Route path="qa" element={<QaPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
