@@ -134,13 +134,18 @@ export class SupportApiClient {
     this.#baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.#token = options.token;
     this.#tenantId = options.tenantId;
-    const resolvedFetch = options.fetch ?? globalThis.fetch;
 
-    if (!resolvedFetch) {
+    if (options.fetch) {
+      this.#fetch = options.fetch;
+    } else if (globalThis.fetch) {
+      // The default global `fetch` must keep its receiver bound to the global
+      // object: stored as a field and invoked unbound (`this.#fetch(...)`), a
+      // browser throws `TypeError: Illegal invocation`. Node's fetch tolerates
+      // it, so this only bites in the browser — bind defensively.
+      this.#fetch = globalThis.fetch.bind(globalThis);
+    } else {
       throw new Error("No fetch implementation available; pass options.fetch.");
     }
-
-    this.#fetch = resolvedFetch;
   }
 
   /** Returns a copy of this client scoped to a different tenant. */

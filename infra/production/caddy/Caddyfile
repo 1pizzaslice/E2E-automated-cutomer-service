@@ -1,11 +1,12 @@
-# TLS reverse proxy for staging/production (Milestone 18).
+# TLS reverse proxy for staging/production (Milestone 18, Milestone 23).
 #
-# Terminates TLS and proxies ONLY the public API surface (/v1/* — which
-# includes the provider webhooks under /v1/webhooks/* — and /health) to the
-# API container. The internal service-to-service endpoints (/internal/*) are
-# never proxied: they stay reachable only over the internal Compose network.
-# Temporal UI, Grafana, Prometheus, Alertmanager and the MinIO console are not
-# routed here at all — reach them via SSH tunnel to their 127.0.0.1 ports.
+# Terminates TLS and routes the public surface:
+#   - /v1/* (incl. provider webhooks under /v1/webhooks/*) and /health -> api
+#   - everything else -> the reviewer console SPA (Milestone 23, ADR-0028)
+# The internal service-to-service endpoints (/internal/*) are never proxied:
+# they stay reachable only over the internal Compose network. Temporal UI,
+# Grafana, Prometheus, Alertmanager and the MinIO console are not routed here at
+# all — reach them via SSH tunnel to their 127.0.0.1 ports.
 #
 # STAGING_DOMAIN drives automatic HTTPS. Set it to the real hostname on the VM
 # (Caddy fetches a Let's Encrypt cert); set it to `localhost` for local
@@ -34,9 +35,10 @@
 		respond "Not found" 404
 	}
 
-	# Everything else is not part of the public contract.
+	# Everything else is the reviewer console SPA (its own Caddy does the
+	# history-API fallback to index.html).
 	handle {
-		respond "Not found" 404
+		reverse_proxy console:80
 	}
 
 	log {

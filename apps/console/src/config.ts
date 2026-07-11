@@ -22,8 +22,13 @@ export function loadConsoleConfig(
 ): ConsoleConfig {
   return {
     // Same-origin by default: served behind Caddy, the console and the API
-    // share a host, so a relative base resolves against the current origin.
-    apiBaseUrl: env.VITE_API_BASE_URL ?? "",
+    // share a host. The API client needs an absolute base (it builds `new
+    // URL(base + path)`), so fall back to the current origin rather than "".
+    apiBaseUrl: env.VITE_API_BASE_URL?.trim()
+      ? env.VITE_API_BASE_URL
+      : typeof window !== "undefined"
+        ? window.location.origin
+        : "",
     clerkPublishableKey: env.VITE_CLERK_PUBLISHABLE_KEY ?? "",
     traceUrlTemplate: env.VITE_TRACE_URL_TEMPLATE ?? "",
   };

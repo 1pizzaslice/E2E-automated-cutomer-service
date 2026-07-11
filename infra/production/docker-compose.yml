@@ -308,6 +308,27 @@ services:
           cpus: "2.0"
           memory: 2g
 
+  # Reviewer console SPA (Milestone 23, ADR-0028): a static bundle served by a
+  # tiny Caddy on the internal network; the edge Caddy proxies non-API paths
+  # here. VITE_* are build-time (baked into the bundle) and non-secret.
+  console:
+    image: ${REGISTRY:-ghcr.io/1pizzaslice}/support-console:${IMAGE_TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: infra/production/console.Dockerfile
+      args:
+        VITE_API_BASE_URL: ${CONSOLE_API_BASE_URL:-}
+        VITE_CLERK_PUBLISHABLE_KEY: ${CONSOLE_CLERK_PUBLISHABLE_KEY:-}
+        VITE_TRACE_URL_TEMPLATE: ${CONSOLE_TRACE_URL_TEMPLATE:-}
+    restart: *restart
+    logging: *logging
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+
   # ---- one-shot setup (profile: setup) ---------------------------------
   # docker compose ... --profile setup run --rm migrate
   migrate:
@@ -342,7 +363,7 @@ services:
     image: caddy:2.10-alpine
     restart: *restart
     logging: *logging
-    depends_on: [api]
+    depends_on: [api, console]
     ports:
       - "80:80"
       - "443:443"
