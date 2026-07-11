@@ -174,6 +174,8 @@ Default V1 workflow:
 11. Ticket waits for customer or resolves.
 12. QA sample may be created.
 
+From Milestone 23 the reviewer console (`apps/console`, ADR-0026/ADR-0028) is the default surface for this loop — queue → evidence → decide (approve/edit/reject/escalate) and the QA scorecard all run in the browser against `/v1/*`; the raw HTTP API is the fallback. The console gates actions by the reviewer's permissions, but the API remains the authority.
+
 Human reviewer checklist:
 
 - [ ] Customer issue understood.
@@ -621,9 +623,11 @@ every box does not ship.
 Mechanics (Milestone 18, ADR-0027): the deployment target is the hardened
 single-VM Compose profile at `infra/production/`. `infra/production/README.md`
 is the operational runbook — bring-up order, secrets, tunnels, and the exact
-commands. In brief: fill `.env` + `env/*.env` from the templates; `docker
-compose -f infra/production/docker-compose.yml up -d` (Caddy is the only public
-service; operator UIs are `127.0.0.1`-bound, reached by SSH tunnel);
+commands. In brief: fill `.env` + `env/*.env` from the templates (including the
+`CONSOLE_*` build args — Milestone 23, ADR-0028); `docker compose -f
+infra/production/docker-compose.yml up -d` (Caddy is the only public service and
+now fronts both the API at `/v1/*` and the reviewer console SPA at the site
+root; operator UIs are `127.0.0.1`-bound, reached by SSH tunnel);
 `--profile setup run --rm migrate` then `seed`; back up with the `pg-backup`
 service and prove it with `pg-restore-drill.sh`; deploy/roll back with
 `deploy.sh <tag>` / `rollback.sh` (CI drives these on a `v*` tag once
@@ -647,6 +651,13 @@ Environment and infrastructure:
       and Prometheus + Grafana + Alertmanager provisioned from
       `infra/observability/` (dashboards + the nine `Support*` alert rules
       load as code; Alertmanager's Slack webhook is set).
+- [ ] Reviewer console (Milestone 23) served: the `console` service is up, the
+      edge Caddy proxies the site root (everything but `/v1/*` and `/internal/*`)
+      to it over public-domain TLS, and the SPA loads; the production Clerk
+      publishable key is set as the `CONSOLE_CLERK_PUBLISHABLE_KEY` build arg
+      (blank falls back to the dev token sign-in), `CONSOLE_API_BASE_URL` is
+      blank for same-origin, and a reviewer completes the SOPS §4 loop in the
+      browser (queue → evidence → decide).
 
 Security gates (all automated — run the suites):
 
