@@ -69,6 +69,7 @@ import {
   TicketUpdateRequestSchema,
   WeeklyPilotReportResponseSchema,
   createHealthResponse,
+  type SessionIdentityResponse,
 } from "@support/shared-schemas";
 import { HttpError } from "./errors.js";
 import { buildOpenApiDocument } from "./openapi.js";
@@ -76,7 +77,7 @@ import {
   requireAuthenticatedRequestContext,
   requireTenantRequestContext,
 } from "./request-context.js";
-import { requirePermission } from "./rbac.js";
+import { permissionsForActor, requirePermission } from "./rbac.js";
 import type { ApiServices, ApprovalDecisionInput } from "./services.js";
 
 const TenantParamsSchema = z.object({
@@ -234,6 +235,26 @@ export function registerRoutes(
     requirePermission(context.actor, "openapi:read");
 
     return buildOpenApiDocument();
+  });
+
+  // The authenticated caller's own identity (Milestone 23). Tenant-optional so
+  // a tenant-bound reviewer can bootstrap: it returns the home tenant the
+  // console then scopes every other request to. `session:read` is held by every
+  // console-facing role, so any reviewer can read their own identity.
+  app.get("/v1/me", async (request) => {
+    const context = requireAuthenticatedRequestContext(request);
+
+    requirePermission(context.actor, "session:read");
+
+    const identity: SessionIdentityResponse = {
+      user_id: context.actor.userId,
+      tenant_id: context.membershipTenantId ?? null,
+      email: context.actor.email ?? null,
+      roles: [...context.actor.roles],
+      permissions: permissionsForActor(context.actor),
+    };
+
+    return identity;
   });
 
   app.get("/v1/tenants", async (request) => {

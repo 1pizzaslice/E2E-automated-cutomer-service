@@ -31,6 +31,7 @@ import {
   QaReviewEvidenceResponseSchema,
   QaReviewListResponseSchema,
   QaReviewResourceResponseSchema,
+  SessionIdentityResponseSchema,
   TenantListResponseSchema,
   TenantResourceResponseSchema,
   TicketEventListResponseSchema,
@@ -159,6 +160,16 @@ export class SupportApiClient {
 
   ready() {
     return this.#send("GET", "/ready", HealthResponseSchema);
+  }
+
+  // ---- session -----------------------------------------------------------
+  /**
+   * The authenticated caller's identity, roles, and permissions. Tenant-
+   * optional (no `x-tenant-id` needed); the returned `tenant_id` is the
+   * caller's home tenant, which the console scopes subsequent requests to.
+   */
+  me() {
+    return this.#send("GET", "/v1/me", SessionIdentityResponseSchema);
   }
 
   // ---- tenants -----------------------------------------------------------

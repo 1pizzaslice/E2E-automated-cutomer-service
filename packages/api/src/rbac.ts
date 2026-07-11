@@ -4,6 +4,11 @@ import type { AuthContext } from "./request-context.js";
 
 export type ApiPermission =
   | "openapi:read"
+  // Read your own identity/roles/permissions (Milestone 23, GET /v1/me). Held
+  // by every console-facing human role — it exposes only the caller's own
+  // identity — but not integration_admin (deliberately pinned to openapi:read)
+  // or internal_service (the machine principal carries no user identity).
+  | "session:read"
   | "tenants:list"
   | "tenants:read"
   | "tenants:create"
@@ -41,6 +46,7 @@ export const ROLE_PERMISSIONS: Readonly<
 > = {
   platform_admin: new Set([
     "openapi:read",
+    "session:read",
     "tenants:list",
     "tenants:read",
     "tenants:create",
@@ -68,6 +74,7 @@ export const ROLE_PERMISSIONS: Readonly<
   ]),
   ops_admin: new Set([
     "openapi:read",
+    "session:read",
     "tenants:read",
     "tenants:update",
     "customers:read",
@@ -96,6 +103,7 @@ export const ROLE_PERMISSIONS: Readonly<
   ]),
   support_agent: new Set([
     "openapi:read",
+    "session:read",
     "customers:read",
     "customers:create",
     "customers:update",
@@ -116,6 +124,7 @@ export const ROLE_PERMISSIONS: Readonly<
   ]),
   qa_reviewer: new Set([
     "openapi:read",
+    "session:read",
     "customers:read",
     "conversations:read",
     "messages:read",
@@ -132,6 +141,7 @@ export const ROLE_PERMISSIONS: Readonly<
   ]),
   client_viewer: new Set([
     "openapi:read",
+    "session:read",
     "customers:read",
     "conversations:read",
     "messages:read",
@@ -168,4 +178,22 @@ export function requirePermission(
 
 function hasPermission(actor: AuthContext, permission: ApiPermission): boolean {
   return actor.roles.some((role) => ROLE_PERMISSIONS[role].has(permission));
+}
+
+/**
+ * The union of every permission the actor's roles grant, sorted for a stable
+ * wire order. `GET /v1/me` returns this so a client (the reviewer console) can
+ * gate navigation off the caller's effective permissions without replicating
+ * `ROLE_PERMISSIONS`.
+ */
+export function permissionsForActor(actor: AuthContext): ApiPermission[] {
+  const permissions = new Set<ApiPermission>();
+
+  for (const role of actor.roles) {
+    for (const permission of ROLE_PERMISSIONS[role]) {
+      permissions.add(permission);
+    }
+  }
+
+  return [...permissions].sort();
 }

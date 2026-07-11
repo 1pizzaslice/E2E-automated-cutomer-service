@@ -18,6 +18,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: "GET", path: "/ready" },
   { method: "GET", path: "/openapi.json" },
 
+  { method: "GET", path: "/v1/me" },
+
   { method: "GET", path: "/v1/tenants" },
   { method: "POST", path: "/v1/tenants" },
   { method: "GET", path: "/v1/tenants/{tenant_id}" },

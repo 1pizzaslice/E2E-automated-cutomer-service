@@ -86,6 +86,27 @@ export const RoleNameSchema = z.enum([
 
 export type RoleName = z.infer<typeof RoleNameSchema>;
 
+/**
+ * The authenticated caller's identity, resolved server-side from the verified
+ * token (Milestone 23, `GET /v1/me`). `tenant_id` is the caller's home tenant
+ * (null for platform-level users) — the reviewer console reads it to learn
+ * which `x-tenant-id` to send on subsequent requests. `permissions` is the
+ * union of the caller's roles' grants, so a client can gate navigation without
+ * replicating the server's `ROLE_PERMISSIONS` table (the API stays the
+ * authority; the UI gate is a courtesy).
+ */
+export const SessionIdentityResponseSchema = z.object({
+  user_id: z.string().min(1),
+  tenant_id: z.string().min(1).nullable(),
+  email: z.string().nullable(),
+  roles: z.array(RoleNameSchema),
+  permissions: z.array(z.string()),
+});
+
+export type SessionIdentityResponse = z.infer<
+  typeof SessionIdentityResponseSchema
+>;
+
 export const DomainEventNameSchema = z.enum([
   "support.message.received.v1",
   "support.conversation.updated.v1",
