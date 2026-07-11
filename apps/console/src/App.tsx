@@ -1,15 +1,28 @@
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { AuthGate } from "./auth/auth-gate.js";
+import { ApprovalsPage } from "./pages/approvals-page.js";
+import { NotFoundPage } from "./pages/not-found-page.js";
+import { QaPage } from "./pages/qa-page.js";
+import { AppShell } from "./shell/app-shell.js";
+
 /**
- * Root of the reviewer console (Milestone 23). Slice 1 is the framework
- * scaffold — a static shell that proves the Vite/React/vitest toolchain builds
- * and tests green under `pnpm -r build` / `pnpm -r test`. Slices 2-4 layer on
- * Clerk auth, permission-gated navigation, and the queue → evidence → decide
- * and QA surfaces, all against `@support/api-client`.
+ * Root of the reviewer console (Milestone 23). `AuthGate` resolves the reviewer
+ * session (Clerk or the dev token form → `GET /v1/me`), then the router mounts
+ * the permission-gated shell over the queue, evidence, and QA routes.
  */
 export function App() {
   return (
-    <main className="app-shell">
-      <h1>Support Reviewer Console</h1>
-      <p>Reviewer workspace for the support automation pilot.</p>
-    </main>
+    <AuthGate>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route index element={<Navigate to="/approvals" replace />} />
+            <Route path="approvals" element={<ApprovalsPage />} />
+            <Route path="qa" element={<QaPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </AuthGate>
   );
 }
