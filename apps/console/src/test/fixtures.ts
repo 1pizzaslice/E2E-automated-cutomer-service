@@ -4,6 +4,8 @@ import type {
   ApprovalResponse,
   ConversationResponse,
   MessageResponse,
+  QaReviewEvidenceResponse,
+  QaReviewResponse,
   RoleName,
   SessionIdentityResponse,
   TicketResponse,
@@ -185,6 +187,40 @@ export function evidenceFixture(
     ai_run: aiRun,
     tool_calls: [toolCall],
     prior_approvals: [],
+    ...overrides,
+  };
+}
+
+export function qaReviewFixture(
+  overrides: Partial<QaReviewResponse> = {},
+): QaReviewResponse {
+  return {
+    qa_review_id: "qa_1",
+    tenant_id: "ten_1",
+    ticket_id: "tic_1",
+    ai_run_id: "air_1",
+    reviewer_user_id: null,
+    sample_reason: "random_sample",
+    scores: {},
+    defects: [],
+    notes: null,
+    created_at: NOW,
+    completed_at: null,
+    ...overrides,
+  };
+}
+
+export function qaEvidenceFixture(
+  overrides: Partial<QaReviewEvidenceResponse> = {},
+): QaReviewEvidenceResponse {
+  return {
+    qa_review: qaReviewFixture(),
+    ticket,
+    conversation,
+    messages: [message],
+    ai_run: aiRun,
+    tool_calls: [toolCall],
+    approvals: [],
     ...overrides,
   };
 }
