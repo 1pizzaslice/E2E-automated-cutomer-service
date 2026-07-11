@@ -2,6 +2,10 @@ packages:
   - "packages/*"
   - "apps/*"
 allowBuilds:
+  # Clerk's only build script is a telemetry-notice postinstall (prints a notice
+  # and writes ~/.config/clerk/config.json); the console does not need it, so we
+  # explicitly decline to run it rather than leave the build undecided.
+  "@clerk/shared": false
   "@swc/core": true
   esbuild: true
   protobufjs: true

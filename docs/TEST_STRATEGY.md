@@ -515,6 +515,17 @@ The reviewer console (`apps/console`, ADR-0026) consumes the API contract throug
 - `packages/api-client/src/index.test.ts` — the typed client: query/header serialization, JSON request bodies, `ApiClientError` mapping from structured error bodies, and a non-empty `API_ROUTES` manifest, all against an injected fetch.
 - `apps/console/src/review-flow.test.ts` — the Milestone 20 acceptance proof: `runReviewFlow` (login → queue → evidence → decide) driven purely through `SupportApiClient` against the real Fastify app via an `app.inject()` transport, covering the approve and edit paths and confirming the original AI draft stays visible in the evidence during an edit.
 
+### 3.16 Reviewer Console Frontend (Milestone 23)
+
+The console (`apps/console`, a Vite + React 19 SPA, ADR-0028) has two test tiers. **Component tests** (jsdom, vitest, in the root `pnpm test`) render components against a partial fake `SupportApiClient` and a provided session, asserting behavior and permission gating. **The browser walkthrough** (`pnpm --filter @support/console test:e2e:console`, Playwright + chromium) drives the real built bundle with `/v1/*` mocked at the network boundary — kept out of the root `pnpm test` (which requires `uv`). The default vitest environment is Node so the Milestone 20 `review-flow.test.ts` (which boots the real Fastify app via `inject`) is unaffected; component tests opt into jsdom with a `// @vitest-environment jsdom` docblock.
+
+- `apps/console/src/App.test.tsx` — the auth gate renders the dev sign-in when there is no session/Clerk key.
+- `apps/console/src/shell/app-shell.test.tsx` — permission-gated navigation: a `qa_reviewer` sees Approvals + QA, a `client_viewer` (no `qa_reviews:read`) loses the QA tab.
+- `apps/console/src/pages/approvals-page.test.tsx` — the queue renders the pending list + open-count badge and opens the selected approval's evidence.
+- `apps/console/src/pages/evidence-page.test.tsx` — evidence gating: a `support_agent` sees the AI-run card + decide actions; a `client_viewer` sees neither (read-only, no `ai_runs:read`); the edit flow submits the edited draft as `approved_payload` while the original stays visible.
+- `apps/console/src/pages/qa-review-page.test.tsx` — a `qa_reviewer` submits dimension scores + a defect from the closed taxonomy; a `support_agent` (no `qa_reviews:write`) is read-only.
+- `apps/console/e2e/reviewer-flow.spec.ts` — the acceptance walkthrough in a real browser: sign in → queue → evidence → approve → the reply sends, proving the built bundle, router, and fetch layer work end to end. (This tier caught two real bugs the Node tests could not: an `@support/api-client` unbound-`fetch` `Illegal invocation` in browsers, and a same-origin `new URL('')` throw — both fixed.)
+
 ## 4. Golden Dataset
 
 Create the first golden dataset under the future AI package.

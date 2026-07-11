@@ -1,0 +1,23 @@
+# Static file server for the reviewer console SPA (Milestone 23).
+#
+# Runs inside the `console` image on :80 (internal network only); the edge Caddy
+# reverse-proxies non-API paths here. Serves the built Vite bundle with a
+# history-API fallback so client-side routes (/approvals, /qa/…) resolve to
+# index.html. Hashed assets are cached immutably; index.html is never cached so
+# a redeploy is picked up immediately.
+:80 {
+	root * /srv
+	encode zstd gzip
+
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	header /index.html Cache-Control "no-cache"
+
+	try_files {path} /index.html
+	file_server
+
+	log {
+		output stdout
+		format json
+	}
+}

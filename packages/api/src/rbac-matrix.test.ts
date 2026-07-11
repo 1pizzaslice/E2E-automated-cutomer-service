@@ -56,6 +56,12 @@ const ROUTE_PERMISSION_CATALOG: ReadonlyArray<{
   },
   {
     method: "GET",
+    url: "/v1/me",
+    routePath: "/v1/me",
+    permission: "session:read",
+  },
+  {
+    method: "GET",
     url: "/v1/tenants",
     routePath: "/v1/tenants",
     permission: "tenants:list",
@@ -886,6 +892,40 @@ describe("rbac route enforcement matrix (real JWT fixtures)", () => {
 
     expect(response.statusCode).not.toBe(401);
     expect(response.statusCode).not.toBe(403);
+  });
+
+  it("returns the caller's home tenant from GET /v1/me without an x-tenant-id (console bootstrap)", async () => {
+    const built = buildMatrixApp();
+    app = built.app;
+    await app.ready();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${roleTokens.get("support_agent")!}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.user_id).toBe("usr_matrix_support_agent");
+    expect(body.tenant_id).toBe("ten_test");
+    expect(body.roles).toEqual(["support_agent"]);
+    expect(body.permissions).toContain("session:read");
+  });
+
+  it("reports a NULL home tenant for a platform-level user on GET /v1/me", async () => {
+    const built = buildMatrixApp();
+    app = built.app;
+    await app.ready();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${platformWideToken}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().tenant_id).toBeNull();
   });
 
   it("ignores identity headers under JWT auth: roles come from the directory", async () => {

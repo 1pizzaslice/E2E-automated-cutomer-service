@@ -52,6 +52,27 @@ export function buildOpenApiDocument() {
           },
         },
       },
+      "/v1/me": {
+        get: {
+          summary:
+            "The authenticated caller's identity, roles, and permissions",
+          description:
+            "Tenant-optional: returns the caller's home tenant (null for platform-level users) so a reviewer console can scope subsequent requests. `x-tenant-id` is not required here.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ $ref: "#/components/parameters/RequestIdHeader" }],
+          responses: {
+            "200": {
+              description: "Session identity",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/SessionIdentity" },
+                },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/v1/tenants": {
         get: {
           summary: "List tenants",
@@ -3046,6 +3067,17 @@ export function buildOpenApiDocument() {
           properties: {
             counts: { $ref: "#/components/schemas/ApprovalStatusCounts" },
             total: { type: "integer", minimum: 0 },
+          },
+        },
+        SessionIdentity: {
+          type: "object",
+          required: ["user_id", "tenant_id", "email", "roles", "permissions"],
+          properties: {
+            user_id: { type: "string", minLength: 1 },
+            tenant_id: { type: "string", minLength: 1, nullable: true },
+            email: { type: "string", nullable: true },
+            roles: { type: "array", items: { type: "string" } },
+            permissions: { type: "array", items: { type: "string" } },
           },
         },
         TicketEvent: {

@@ -24,6 +24,14 @@ export interface RequestContext {
   readonly correlationId: string;
   readonly actor?: AuthContext;
   readonly tenant?: TenantContext;
+  /**
+   * The authenticated user's home tenant: `null` for platform-level users
+   * (members of every tenant), `undefined` for the machine principal. Distinct
+   * from `tenant`, which is the tenant *selected* via `x-tenant-id`. `GET
+   * /v1/me` returns it so a tenant-bound reviewer's console learns which tenant
+   * to scope subsequent requests to.
+   */
+  readonly membershipTenantId?: string | null;
 }
 
 export interface AuthenticatedRequestContext extends RequestContext {
@@ -161,6 +169,7 @@ export function registerRequestContext(
       requestId,
       correlationId,
       actor: actor.context,
+      membershipTenantId: actor.membershipTenantId,
       tenant,
     };
   });

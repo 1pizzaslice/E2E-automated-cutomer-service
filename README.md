@@ -294,4 +294,4 @@ Non-health endpoints require IdP-issued JWTs by default (Milestone 16, ADR-0024)
 
 ## Scope
 
-Backend first. Do not build frontend UI until backend contracts, workflows, and AI runtime are implemented and documented. The reviewer console lives in this repository at `apps/console`, consumes `/v1/*` through `packages/api-client`, and is built at Milestone 23 (ADR-0026). There is no backend-for-frontend: `packages/api` is the console's backend.
+Backend first. Do not build frontend UI until backend contracts, workflows, and AI runtime are implemented and documented. The reviewer console lives in this repository at `apps/console` — a static Vite + React 19 SPA (ADR-0028) that consumes `/v1/*` through `packages/api-client`, built at Milestone 23. There is no backend-for-frontend: `packages/api` is the console's backend. Console loop: `pnpm --filter @support/console dev` (Vite dev server), `pnpm --filter @support/console test` (jsdom component tests, in root `pnpm test`), `pnpm --filter @support/console test:e2e:console` (Playwright browser walkthrough, kept out of root `pnpm test`).

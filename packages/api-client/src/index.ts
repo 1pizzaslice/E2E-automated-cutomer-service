@@ -31,6 +31,7 @@ import {
   QaReviewEvidenceResponseSchema,
   QaReviewListResponseSchema,
   QaReviewResourceResponseSchema,
+  SessionIdentityResponseSchema,
   TenantListResponseSchema,
   TenantResourceResponseSchema,
   TicketEventListResponseSchema,
@@ -133,13 +134,18 @@ export class SupportApiClient {
     this.#baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.#token = options.token;
     this.#tenantId = options.tenantId;
-    const resolvedFetch = options.fetch ?? globalThis.fetch;
 
-    if (!resolvedFetch) {
+    if (options.fetch) {
+      this.#fetch = options.fetch;
+    } else if (globalThis.fetch) {
+      // The default global `fetch` must keep its receiver bound to the global
+      // object: stored as a field and invoked unbound (`this.#fetch(...)`), a
+      // browser throws `TypeError: Illegal invocation`. Node's fetch tolerates
+      // it, so this only bites in the browser — bind defensively.
+      this.#fetch = globalThis.fetch.bind(globalThis);
+    } else {
       throw new Error("No fetch implementation available; pass options.fetch.");
     }
-
-    this.#fetch = resolvedFetch;
   }
 
   /** Returns a copy of this client scoped to a different tenant. */
@@ -159,6 +165,16 @@ export class SupportApiClient {
 
   ready() {
     return this.#send("GET", "/ready", HealthResponseSchema);
+  }
+
+  // ---- session -----------------------------------------------------------
+  /**
+   * The authenticated caller's identity, roles, and permissions. Tenant-
+   * optional (no `x-tenant-id` needed); the returned `tenant_id` is the
+   * caller's home tenant, which the console scopes subsequent requests to.
+   */
+  me() {
+    return this.#send("GET", "/v1/me", SessionIdentityResponseSchema);
   }
 
   // ---- tenants -----------------------------------------------------------

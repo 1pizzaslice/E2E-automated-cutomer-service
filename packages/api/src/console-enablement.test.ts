@@ -4,6 +4,7 @@ import {
   ApprovalEvidenceResponseSchema,
   ApprovalListResponseSchema,
   ApprovalSummaryResponseSchema,
+  SessionIdentityResponseSchema,
   TicketEventListResponseSchema,
   TicketListResponseSchema,
   type ApprovalResponse,
@@ -214,6 +215,55 @@ describe("approval summary", () => {
     const body = ApprovalSummaryResponseSchema.parse(response.json());
     expect(body.counts.pending).toBe(3);
     expect(body.total).toBe(16);
+  });
+});
+
+describe("session identity (GET /v1/me)", () => {
+  it("returns the caller's identity, roles, and the union of their permissions", async () => {
+    app = buildApp({ services: {} as unknown as ApiServices });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { ...headers, "x-user-email": "reviewer@test.example" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = SessionIdentityResponseSchema.parse(response.json());
+    expect(body.user_id).toBe("usr_test");
+    expect(body.email).toBe("reviewer@test.example");
+    expect(body.roles).toEqual(["support_agent"]);
+    // Union of the support_agent grants — enough for the console to gate on.
+    expect(body.permissions).toContain("session:read");
+    expect(body.permissions).toContain("approvals:read");
+    expect(body.permissions).toContain("approvals:review");
+    expect(body.permissions).not.toContain("tenants:create");
+    // Stable, sorted wire order.
+    expect(body.permissions).toEqual([...body.permissions].sort());
+  });
+
+  it("is tenant-optional: it resolves without an x-tenant-id header", async () => {
+    app = buildApp({ services: {} as unknown as ApiServices });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/me",
+      // No x-tenant-id — the console calls this to bootstrap before it knows
+      // which tenant to scope to. Header mode carries no membership tenant.
+      headers: {
+        authorization: "Bearer test-token",
+        "x-user-id": "usr_test",
+        "x-user-roles": "qa_reviewer",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = SessionIdentityResponseSchema.parse(response.json());
+    expect(body.tenant_id).toBeNull();
+    expect(body.roles).toEqual(["qa_reviewer"]);
+    // qa_reviewer is read-only on approvals: it cannot decide.
+    expect(body.permissions).toContain("approvals:read");
+    expect(body.permissions).not.toContain("approvals:review");
   });
 });
 

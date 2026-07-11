@@ -58,7 +58,7 @@ Before ending a coding session:
 - Event bus: NATS JetStream for v1.
 - Cache and rate limits: Redis.
 - Observability: OpenTelemetry, structured logs, metrics, traces, and LLM trace/eval tooling.
-- Reviewer console: TypeScript at `apps/console`, calling `/v1/*` through `packages/api-client`. No backend-for-frontend — `packages/api` is the console's backend (ADR-0026). The UI framework is unchosen and is a Milestone 23 decision.
+- Reviewer console: a static Vite + React 19 SPA at `apps/console`, calling `/v1/*` through `packages/api-client` (ADR-0028). No backend-for-frontend — `packages/api` is the console's backend (ADR-0026). Clerk runs client-side behind an auth-provider seam; browser tests are Playwright behind `test:e2e:console`, out of root `pnpm test`.
 
 If a change contradicts these defaults, update `docs/DECISIONS.md` in the same change with the reason.
 
