@@ -26,6 +26,7 @@ import { pollInboundEmailPlaceholder } from "./webhooks.js";
 
 const TENANT_ID = "ten_wh";
 const EMAIL_CHANNEL_ID = "chn_email";
+const GENERIC_EMAIL_CHANNEL_ID = "chn_email_generic";
 const WHATSAPP_CHANNEL_ID = "chn_wa";
 const SECRET = "webhook-signing-secret";
 
@@ -38,9 +39,36 @@ const emailChannel: InboundChannelRecord = {
   config: { signature_secret_ref: "WEBHOOK_SECRET_REF" },
 };
 
+/**
+ * A non-Mailgun email provider, which posts the provider-neutral JSON shape and
+ * signs with the generic HMAC-over-body scheme. Keeps that documented path
+ * covered now that Mailgun has its own field mapping.
+ */
+const genericEmailChannel: InboundChannelRecord = {
+  tenant_id: TENANT_ID,
+  channel_id: GENERIC_EMAIL_CHANNEL_ID,
+  type: "email",
+  provider: "generic",
+  status: "active",
+  config: { signature_secret_ref: "WEBHOOK_SECRET_REF" },
+};
+
 const whatsappChannel: InboundChannelRecord = {
   tenant_id: TENANT_ID,
   channel_id: WHATSAPP_CHANNEL_ID,
+  type: "whatsapp",
+  provider: "cloud",
+  status: "active",
+  config: {
+    signature_secret_ref: "WEBHOOK_SECRET_REF",
+    verify_token_ref: "WHATSAPP_VERIFY_TOKEN_REF",
+  },
+};
+
+/** A WhatsApp channel that declares no verify token: the handshake must fail closed. */
+const whatsappChannelNoToken: InboundChannelRecord = {
+  tenant_id: TENANT_ID,
+  channel_id: "chn_wa_notoken",
   type: "whatsapp",
   provider: "cloud",
   status: "active",
@@ -61,7 +89,11 @@ afterEach(async () => {
 });
 
 function setup(
-  channels: InboundChannelRecord[] = [emailChannel, whatsappChannel],
+  channels: InboundChannelRecord[] = [
+    emailChannel,
+    genericEmailChannel,
+    whatsappChannel,
+  ],
 ) {
   const store = createInMemoryInboundIntakeStore(channels);
   const launcher: InboundWorkflowLauncher & {
@@ -86,26 +118,107 @@ function setup(
   return { launcher, rawPayloadStore };
 }
 
-function mailgunEmailPayload(messageId: string): {
-  raw: string;
-  signatureHeader: undefined;
-} {
-  const timestamp = "1751414400";
-  const token = "token-123";
+/**
+ * The field set Mailgun's inbound routes actually POST: mixed-case `Message-Id`,
+ * hyphenated `body-plain`, a Unix-SECONDS `timestamp`, and the signing triplet
+ * FLAT at the top level (its event/tracking webhooks are the ones that nest it
+ * under `signature`). The previous fixture here posted a neutral-shaped JSON
+ * body Mailgun never sends, which is exactly why the ingress gap went unnoticed.
+ */
+function mailgunFields(
+  messageId: string,
+  overrides: Record<string, string> = {},
+): Record<string, string> {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const token = `token-${messageId}`;
   const signature = createHmac("sha256", SECRET)
     .update(`${timestamp}${token}`)
     .digest("hex");
 
+  return {
+    recipient: "support@mg.example.test",
+    sender: "buyer@example.test",
+    from: "Buyer <buyer@example.test>",
+    subject: "Where is my order?",
+    "body-plain": "Where is my order?",
+    "stripped-text": "Where is my order?",
+    "Message-Id": `<${messageId}>`,
+    "message-headers": JSON.stringify([
+      ["Message-Id", `<${messageId}>`],
+      ["From", "Buyer <buyer@example.test>"],
+    ]),
+    timestamp,
+    token,
+    signature,
+    ...overrides,
+  };
+}
+
+function urlEncoded(fields: Record<string, string>): {
+  payload: string;
+  contentType: string;
+} {
+  return {
+    payload: new URLSearchParams(fields).toString(),
+    contentType: "application/x-www-form-urlencoded",
+  };
+}
+
+/** Mailgun switches to multipart when the received mail carries attachments. */
+function multipart(
+  fields: Record<string, string>,
+  files: readonly {
+    field: string;
+    filename: string;
+    contentType: string;
+    content: Buffer;
+  }[] = [],
+): { payload: Buffer; contentType: string } {
+  const boundary = "----supporttestboundary";
+  const parts: Buffer[] = [];
+
+  for (const [name, value] of Object.entries(fields)) {
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+      ),
+    );
+  }
+
+  for (const file of files) {
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${file.field}"; filename="${file.filename}"\r\n` +
+          `Content-Type: ${file.contentType}\r\n\r\n`,
+      ),
+      file.content,
+      Buffer.from("\r\n"),
+    );
+  }
+
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+
+  return {
+    payload: Buffer.concat(parts),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+/** The provider-neutral JSON shape a non-Mailgun email provider posts. */
+function genericEmailPayload(messageId: string): {
+  raw: string;
+  signatureHeader: string;
+} {
   const raw = JSON.stringify({
     message_id: messageId,
     from: { email: "buyer@example.test", name: "Buyer" },
     subject: "Where is my order?",
     text: "Where is my order?",
     received_at: "2026-07-02T00:00:00.000Z",
-    signature: { timestamp, token, signature },
   });
+  const digest = createHmac("sha256", SECRET).update(raw).digest("hex");
 
-  return { raw, signatureHeader: undefined };
+  return { raw, signatureHeader: `sha256=${digest}` };
 }
 
 function whatsappPayload(messageId: string): {
@@ -143,16 +256,18 @@ function whatsappPayload(messageId: string): {
   return { raw, signatureHeader: `sha256=${digest}` };
 }
 
-describe("inbound email webhook", () => {
-  it("accepts a signed webhook, stores the raw payload, and starts the workflow", async () => {
+const MAILGUN_URL = `/v1/webhooks/email/mailgun?channel_id=${EMAIL_CHANNEL_ID}`;
+
+describe("inbound mailgun webhook (form-encoded, as Mailgun actually posts)", () => {
+  it("accepts a urlencoded route post, stores the raw payload, and starts the workflow", async () => {
     const { launcher, rawPayloadStore } = setup();
-    const { raw } = mailgunEmailPayload("email-msg-1");
+    const { payload, contentType } = urlEncoded(mailgunFields("email-msg-1"));
 
     const response = await app!.inject({
       method: "POST",
-      url: `/v1/webhooks/email/mailgun?channel_id=${EMAIL_CHANNEL_ID}`,
-      headers: { "content-type": "application/json" },
-      payload: raw,
+      url: MAILGUN_URL,
+      headers: { "content-type": contentType },
+      payload,
     });
     const body = InboundWebhookAcceptedResponseSchema.parse(response.json());
 
@@ -164,6 +279,7 @@ describe("inbound email webhook", () => {
       accepted: 1,
       deduplicated: 0,
     });
+    // Angle brackets are stripped off the RFC 5322 Message-Id.
     expect(body.results[0]!.external_message_id).toBe("email-msg-1");
     expect(body.results[0]!.workflow_id).toContain(
       `ticket-lifecycle:${TENANT_ID}:`,
@@ -172,25 +288,79 @@ describe("inbound email webhook", () => {
     expect(launcher.calls).toHaveLength(1);
   });
 
-  it("rejects a webhook with an invalid signature", async () => {
-    const { launcher, rawPayloadStore } = setup();
-    const raw = JSON.stringify({
-      message_id: "email-msg-1",
-      from: { email: "buyer@example.test" },
-      text: "hi",
-      received_at: "2026-07-02T00:00:00.000Z",
-      signature: {
-        timestamp: "1751414400",
-        token: "token-123",
-        signature: "0".repeat(64),
-      },
-    });
+  it("accepts a multipart route post carrying an allowed attachment", async () => {
+    const { launcher } = setup();
+    const { payload, contentType } = multipart(
+      mailgunFields("email-msg-attach", { "attachment-count": "1" }),
+      [
+        {
+          field: "attachment-1",
+          filename: "receipt.pdf",
+          contentType: "application/pdf",
+          content: Buffer.from("%PDF-1.4 fake"),
+        },
+      ],
+    );
 
     const response = await app!.inject({
       method: "POST",
-      url: `/v1/webhooks/email/mailgun?channel_id=${EMAIL_CHANNEL_ID}`,
-      headers: { "content-type": "application/json" },
-      payload: raw,
+      url: MAILGUN_URL,
+      headers: { "content-type": contentType },
+      payload,
+    });
+    const body = InboundWebhookAcceptedResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(202);
+    expect(body.accepted).toBe(1);
+    expect(body.results[0]!.rejected).toBe(false);
+    expect(launcher.calls).toHaveLength(1);
+  });
+
+  it("routes multipart attachment metadata through the attachment policy gate", async () => {
+    // A disallowed content type can only be caught if the parsed file part's
+    // metadata actually reached the validator, so this pins the whole path:
+    // multipart parse -> Mailgun mapping -> normalized attachment -> policy.
+    const { launcher } = setup();
+    const { payload, contentType } = multipart(
+      mailgunFields("email-msg-badattach", { "attachment-count": "1" }),
+      [
+        {
+          field: "attachment-1",
+          filename: "payload.exe",
+          contentType: "application/x-msdownload",
+          content: Buffer.from("MZ"),
+        },
+      ],
+    );
+
+    const response = await app!.inject({
+      method: "POST",
+      url: MAILGUN_URL,
+      headers: { "content-type": contentType },
+      payload,
+    });
+    const body = InboundWebhookAcceptedResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(202);
+    expect(body.rejected).toBe(1);
+    expect(body.results[0]!.rejected).toBe(true);
+    expect(body.results[0]!.rejection_reason).toBe(
+      "attachment_type_not_allowed",
+    );
+    expect(launcher.calls).toHaveLength(0);
+  });
+
+  it("rejects a tampered signature", async () => {
+    const { launcher, rawPayloadStore } = setup();
+    const { payload, contentType } = urlEncoded(
+      mailgunFields("email-msg-bad", { signature: "0".repeat(64) }),
+    );
+
+    const response = await app!.inject({
+      method: "POST",
+      url: MAILGUN_URL,
+      headers: { "content-type": contentType },
+      payload,
     });
     const body = ApiErrorResponseSchema.parse(response.json());
 
@@ -200,23 +370,68 @@ describe("inbound email webhook", () => {
     expect(launcher.calls).toHaveLength(0);
   });
 
+  it("rejects a correctly signed but STALE post, bounding the replay window", async () => {
+    const { launcher } = setup();
+    const staleTimestamp = String(Math.floor(Date.now() / 1000) - 3600);
+    const token = "stale-token";
+    const signature = createHmac("sha256", SECRET)
+      .update(`${staleTimestamp}${token}`)
+      .digest("hex");
+    const { payload, contentType } = urlEncoded(
+      mailgunFields("email-msg-stale", {
+        timestamp: staleTimestamp,
+        token,
+        signature,
+      }),
+    );
+
+    const response = await app!.inject({
+      method: "POST",
+      url: MAILGUN_URL,
+      headers: { "content-type": contentType },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(launcher.calls).toHaveLength(0);
+  });
+
+  it("rejects a signed post whose body cannot be normalized", async () => {
+    const { launcher } = setup();
+    const fields = mailgunFields("email-msg-nomapping");
+    delete fields["Message-Id"];
+    delete fields["message-headers"];
+    const { payload, contentType } = urlEncoded(fields);
+
+    const response = await app!.inject({
+      method: "POST",
+      url: MAILGUN_URL,
+      headers: { "content-type": contentType },
+      payload,
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(launcher.calls).toHaveLength(0);
+  });
+
   it("deduplicates a repeated provider event", async () => {
     const { launcher } = setup();
-    const { raw } = mailgunEmailPayload("email-msg-dup");
-    const url = `/v1/webhooks/email/mailgun?channel_id=${EMAIL_CHANNEL_ID}`;
-    const headers = { "content-type": "application/json" };
+    const { payload, contentType } = urlEncoded(mailgunFields("email-msg-dup"));
+    const headers = { "content-type": contentType };
 
     const first = await app!.inject({
       method: "POST",
-      url,
+      url: MAILGUN_URL,
       headers,
-      payload: raw,
+      payload,
     });
     const second = await app!.inject({
       method: "POST",
-      url,
+      url: MAILGUN_URL,
       headers,
-      payload: raw,
+      payload,
     });
     const firstBody = InboundWebhookAcceptedResponseSchema.parse(first.json());
     const secondBody = InboundWebhookAcceptedResponseSchema.parse(
@@ -232,13 +447,13 @@ describe("inbound email webhook", () => {
 
   it("returns 404 for an unknown channel", async () => {
     setup();
-    const { raw } = mailgunEmailPayload("email-msg-1");
+    const { payload, contentType } = urlEncoded(mailgunFields("email-msg-1"));
 
     const response = await app!.inject({
       method: "POST",
       url: "/v1/webhooks/email/mailgun?channel_id=chn_missing",
-      headers: { "content-type": "application/json" },
-      payload: raw,
+      headers: { "content-type": contentType },
+      payload,
     });
     const body = ApiErrorResponseSchema.parse(response.json());
 
@@ -248,16 +463,59 @@ describe("inbound email webhook", () => {
 
   it("does not require bearer authentication", async () => {
     setup();
-    const { raw } = mailgunEmailPayload("email-msg-noauth");
+    const { payload, contentType } = urlEncoded(
+      mailgunFields("email-msg-noauth"),
+    );
 
     const response = await app!.inject({
       method: "POST",
-      url: `/v1/webhooks/email/mailgun?channel_id=${EMAIL_CHANNEL_ID}`,
-      headers: { "content-type": "application/json" },
-      payload: raw,
+      url: MAILGUN_URL,
+      headers: { "content-type": contentType },
+      payload,
     });
 
     expect(response.statusCode).toBe(202);
+  });
+});
+
+describe("inbound email webhook (generic provider, neutral JSON shape)", () => {
+  it("accepts the neutral shape signed with the generic HMAC-over-body scheme", async () => {
+    const { launcher } = setup();
+    const { raw, signatureHeader } = genericEmailPayload("generic-msg-1");
+
+    const response = await app!.inject({
+      method: "POST",
+      url: `/v1/webhooks/email/generic?channel_id=${GENERIC_EMAIL_CHANNEL_ID}`,
+      headers: {
+        "content-type": "application/json",
+        "x-webhook-signature-256": signatureHeader,
+      },
+      payload: raw,
+    });
+    const body = InboundWebhookAcceptedResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(202);
+    expect(body.accepted).toBe(1);
+    expect(body.results[0]!.external_message_id).toBe("generic-msg-1");
+    expect(launcher.calls).toHaveLength(1);
+  });
+
+  it("rejects the neutral shape when the body signature does not match", async () => {
+    const { launcher } = setup();
+    const { raw } = genericEmailPayload("generic-msg-bad");
+
+    const response = await app!.inject({
+      method: "POST",
+      url: `/v1/webhooks/email/generic?channel_id=${GENERIC_EMAIL_CHANNEL_ID}`,
+      headers: {
+        "content-type": "application/json",
+        "x-webhook-signature-256": `sha256=${"0".repeat(64)}`,
+      },
+      payload: raw,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(launcher.calls).toHaveLength(0);
   });
 });
 
@@ -297,6 +555,107 @@ describe("inbound whatsapp webhook", () => {
 
     expect(response.statusCode).toBe(403);
     expect(launcher.calls).toHaveLength(0);
+  });
+});
+
+describe("whatsapp webhook subscription handshake", () => {
+  function verifyUrl(
+    params: Partial<{
+      channel_id: string;
+      mode: string;
+      token: string;
+      challenge: string;
+    }> = {},
+  ): string {
+    const query = new URLSearchParams({
+      channel_id: params.channel_id ?? WHATSAPP_CHANNEL_ID,
+      "hub.mode": params.mode ?? "subscribe",
+      "hub.verify_token": params.token ?? SECRET,
+      "hub.challenge": params.challenge ?? "1158201444",
+    });
+
+    return `/v1/webhooks/whatsapp/cloud?${query.toString()}`;
+  }
+
+  it("echoes the RAW challenge as text/plain when the verify token matches", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ challenge: "1158201444" }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    // Meta rejects a JSON-wrapped challenge; the body must be the bare value.
+    expect(response.body).toBe("1158201444");
+    expect(response.headers["content-type"]).toContain("text/plain");
+  });
+
+  it("rejects a mismatched verify token", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ token: "wrong-token" }),
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("rejects a hub.mode other than subscribe", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ mode: "unsubscribe" }),
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("fails closed when the channel declares no verify token", async () => {
+    setup([emailChannel, whatsappChannel, whatsappChannelNoToken]);
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ channel_id: "chn_wa_notoken" }),
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("returns 404 for an unknown channel", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ channel_id: "chn_missing" }),
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(404);
+    expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("rejects a handshake missing Meta's parameters", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: `/v1/webhooks/whatsapp/cloud?channel_id=${WHATSAPP_CHANNEL_ID}`,
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("does not require bearer authentication", async () => {
+    setup();
+
+    const response = await app!.inject({ method: "GET", url: verifyUrl() });
+
+    expect(response.statusCode).toBe(200);
   });
 });
 

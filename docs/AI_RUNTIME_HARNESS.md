@@ -2,9 +2,11 @@
 
 ## Purpose
 
-This document defines the backend AI runtime architecture: LangGraph graph design, model calls, prompts, tools, guardrails, evals, traces, and the rules that keep AI useful without letting it become uncontrolled business logic.
+This document defines the backend AI runtime architecture: agent graph design, model calls, prompts, tools, guardrails, evals, traces, and the rules that keep AI useful without letting it become uncontrolled business logic.
 
 The AI runtime is a Python service called by Temporal activities or backend APIs. It returns structured outputs. It does not own durable ticket state and does not send messages directly to customers.
+
+> **Naming, once, so it does not mislead:** the graph engine is **`ai/runtime/graph.py`**, a small in-repo engine that reproduces the LangGraph API surface (`add_node` / `set_entry_point` / `add_edge` / `add_conditional_edges` / `compile().invoke()`). **The LangGraph library is not a dependency of this project.** Where this document says "the graph owns X", it means that engine. The swap to the real library was deferred in ADR-0016 and deferred again, on stronger reasoning, in ADR-0023: node code is engine-agnostic, a swap would change no observable behavior, and it would add a runtime dependency to every sidecar deployment. Revisit only when a genuine LangGraph capability (checkpointing, interrupts, streaming) is actually needed. See `docs/HORZ_DESIGN_REVIEW.md`.
 
 ## 1. Core Principle
 
@@ -20,7 +22,7 @@ Temporal/backend owns:
 - Policy enforcement.
 - Idempotency.
 
-LangGraph owns:
+The agent graph owns:
 
 - Agent state for one AI run.
 - Classification.
@@ -137,7 +139,7 @@ Current backend boundary:
 - Structured failures return `status: "failed"`, an error code/message, retryability, reason codes, eval signals, and optional run/trace IDs; `ticketLifecycleWorkflow` audits the failure and routes the ticket to human approval.
 - Since Milestone 14 the production activity calls the Python runtime over HTTP (section 20); the in-process deterministic TypeScript stand-in remains the offline default when no sidecar is configured.
 
-## 5. LangGraph State
+## 5. Agent Graph State
 
 State fields:
 

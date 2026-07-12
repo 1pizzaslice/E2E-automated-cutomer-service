@@ -1137,7 +1137,7 @@ Acceptance criteria:
 - [x] Tool results are bounded and AI-safe. (Result validated against the tool's schema — out-of-contract → `output_invalid`; serialized size capped, oversized → `result_too_large`, rejected not truncated; KB content returned as cited data, documented as never-instructions.)
 - [x] Every tool call is audited. (Visibility→permission→args→execute→bound each writes/updates a `tool_calls` row via the store; asserted through the in-memory store's `listCalls()`.)
 
-## Milestone 9: AI Runtime With LangGraph
+## Milestone 9: AI Runtime (LangGraph-Style Graph Engine)
 
 Goal: Implement the first support agent graph.
 
@@ -1386,8 +1386,22 @@ Acceptance criteria:
 
 Goal: Real channel providers wired to staging and the full production checklist rehearsed. (Phase 2. User-owned inputs: Mailgun account + DNS changes, Meta Business verification, the pilot support address/domain choice.)
 
+### Slice 0: Provider Ingress Adapters — DONE (2026-07-12)
+
+The provider-shape layer between Mailgun's/Meta's real HTTP posts and the (already built and tested) adapters had never been written, so the checklist below could not have passed. Four defects, all verified against source and the providers' documented contracts, all now fixed and regression-tested:
+
+- [x] The API registered a parser for `application/json` only; Mailgun's inbound routes POST `application/x-www-form-urlencoded`, switching to `multipart/form-data` with attachments. Both 415'd. → `packages/api/src/form-body.ts` (urlencoded + multipart, `rawBody` preserved for the archive; attachment bytes drained, not stored — binary storage remains a Milestone 22 item).
+- [x] Mailgun signature verification read the nested `body.signature.{...}` envelope — the shape Mailgun's _event/tracking_ webhooks use. Inbound routes send the triplet as **flat top-level form fields**, so every real delivery 403'd. → accepts both envelopes.
+- [x] No Mailgun→neutral field mapping existed (`Message-Id` vs `message_id`, `sender`/`from`, Unix-seconds vs ISO-8601), so real payloads 400'd. → `packages/integrations/src/channels/mailgun-inbound.ts`.
+- [x] No `GET` route existed, so the WhatsApp Cloud webhook **could not be registered at all** — Meta refuses to subscribe a URL that does not echo back `hub.challenge`. → `GET /v1/webhooks/whatsapp/:provider`, raw challenge as `text/plain`, token from `channels.config.verify_token_ref`, fails closed.
+- [x] Bounded the Mailgun replay window (5 min; Mailgun signs a timestamp but leaves staleness to the receiver).
+- [x] `PILOT_MAILGUN_SIGNING_KEY` / `PILOT_MAILGUN_API_KEY` were referenced by the pilot seed but present in **no** `.env.example`; added, split by resolving process (API verifies inbound, worker sends), plus the WhatsApp trio. Seed gained the `sending_domain` its absence would have turned into `channel_config_invalid` on the first outbound send.
+
+> **Caveat carried into the checklist below:** these fixes were built against Mailgun's and Meta's _documented_ shapes, not _observed_ ones. **The first real delivery is the real test.** Start M19 by capturing a live Mailgun payload and a live Meta handshake and diffing them against the fixtures in `packages/api/src/webhooks.test.ts` / `packages/integrations/src/channels/mailgun-inbound.test.ts`.
+
 Checklist:
 
+- [ ] Capture a real Mailgun inbound payload + a real Meta handshake; diff against the Slice 0 fixtures and reconcile any field-shape surprise.
 - [ ] Configure the Mailgun domain (SPF/DKIM/DMARC verified) and inbound route to `POST /v1/webhooks/email/mailgun?channel_id=...` on staging; signing/API keys as env refs.
 - [ ] Confirm signature verification with a real Mailgun delivery; confirm a bad signature is rejected 403.
 - [ ] Verify outbound delivery: an approved draft lands in a real external mailbox, threaded correctly via the RFC 5322 reply headers.

@@ -169,6 +169,9 @@ export function buildPilotSeedPlan(
     roleId: `role_global_${user.role}`,
   }));
 
+  // Config rows carry secret REFERENCES (env var names), never values
+  // (BACKEND_SPEC §4.1). The API resolves the inbound refs, the worker resolves
+  // the send refs — see infra/production/env/{api,worker}.env.example.
   const channelsPlan: NewChannel[] = [
     {
       channelId: "chn_pilot_email",
@@ -177,10 +180,29 @@ export function buildPilotSeedPlan(
       provider: "mailgun",
       status: "active",
       config: {
+        // Required by the Mailgun sender; without it an outbound send fails
+        // with `channel_config_invalid`.
+        sending_domain: "pilot.example",
         from_address: "support@pilot.example",
         from_name: "Pilot Support",
         signature_secret_ref: "PILOT_MAILGUN_SIGNING_KEY",
         send_credential_ref: "PILOT_MAILGUN_API_KEY",
+      },
+    },
+    {
+      // Inert until Meta clears verification and the callback URL is pointed
+      // here: nothing is delivered, and an unsigned post fails closed with 403.
+      // Seeded so the channel id exists for the Meta subscription handshake.
+      channelId: "chn_pilot_whatsapp",
+      tenantId,
+      type: "whatsapp",
+      provider: "cloud",
+      status: "active",
+      config: {
+        phone_number_id: "",
+        signature_secret_ref: "PILOT_WHATSAPP_APP_SECRET",
+        verify_token_ref: "PILOT_WHATSAPP_VERIFY_TOKEN",
+        send_credential_ref: "PILOT_WHATSAPP_ACCESS_TOKEN",
       },
     },
   ];

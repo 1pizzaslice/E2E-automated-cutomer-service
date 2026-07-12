@@ -279,7 +279,7 @@ pnpm infra:down
 pnpm test:py
 ```
 
-`pnpm test:integration` exists as a placeholder and intentionally reports that integration tests are not implemented yet. `uv` is not installed locally, so Python scaffold tests currently use standard library `unittest`; switch to `uv` and/or `pytest` when implementing the real LangGraph runtime.
+`pnpm test:integration` runs the live-PostgreSQL suites. Python tests run through `uv` (`uv run --frozen --project ai`), which is installed and pins CPython 3.12 via `ai/.python-version`; `ai/uv.lock` is committed, so the Python harness is reproducible regardless of the system interpreter.
 
 ## 8. Implementation Invariants
 

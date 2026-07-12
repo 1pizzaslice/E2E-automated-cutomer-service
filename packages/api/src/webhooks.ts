@@ -1,12 +1,17 @@
+import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  extractMailgunSignatureFields,
+  mapMailgunInboundToRawEmail,
   parseInboundEmailMessage,
   parseInboundWhatsAppMessages,
   verifyHmacSha256Signature,
   verifyMailgunSignature,
   verifyWhatsAppCloudSignature,
+  MAILGUN_DEFAULT_MAX_SIGNATURE_AGE_SECONDS,
   type InboundAdapterContext,
+  type MailgunInboundPayload,
 } from "@support/integrations";
 import {
   InboundWebhookAcceptedResponseSchema,
@@ -15,6 +20,7 @@ import {
   type NormalizedInboundMessage,
 } from "@support/shared-schemas";
 import { HttpError } from "./errors.js";
+import { isParsedFormBody } from "./form-body.js";
 import type { InboundIntakeService } from "./inbound-intake.js";
 import type { RawPayloadStore } from "./raw-payload-store.js";
 
@@ -23,6 +29,14 @@ export interface InboundWebhookDependencies {
   readonly rawPayloadStore: RawPayloadStore;
   close?(): Promise<void>;
 }
+
+/**
+ * Inbound email carries attachments, so the webhook routes need a far larger
+ * body ceiling than Fastify's 1 MB default. Sized above Mailgun's ~25 MB
+ * inbound message limit; the per-attachment policy still gates individual files.
+ * Scoped to these routes only — the rest of the API keeps the small default.
+ */
+const WEBHOOK_BODY_LIMIT_BYTES = 30 * 1024 * 1024;
 
 const WebhookParamsSchema = z.object({
   provider: z.string().min(1),
@@ -34,22 +48,97 @@ const WebhookQuerySchema = z
   })
   .strict();
 
-const MailgunSignatureSchema = z.object({
-  timestamp: z.string().min(1),
-  token: z.string().min(1),
-  signature: z.string().min(1),
+/**
+ * Meta's webhook subscription handshake. Before it will deliver anything, Meta
+ * GETs the callback URL with these three parameters and expects the raw
+ * `hub.challenge` echoed back. Not `.strict()`: Meta appends its `hub.*` params
+ * to whatever query string the callback URL already carries (ours carries
+ * `channel_id`), and reserves the right to add more.
+ */
+const WebhookVerificationQuerySchema = z.object({
+  channel_id: z.string().min(1),
+  "hub.mode": z.string().min(1),
+  "hub.verify_token": z.string().min(1),
+  "hub.challenge": z.string().min(1),
 });
 
 export function registerWebhookRoutes(
   app: FastifyInstance,
   deps: InboundWebhookDependencies,
 ): void {
-  app.post("/v1/webhooks/email/:provider", async (request, reply) =>
-    handleInboundWebhook("email", request, reply, deps),
+  app.post(
+    "/v1/webhooks/email/:provider",
+    { bodyLimit: WEBHOOK_BODY_LIMIT_BYTES },
+    async (request, reply) =>
+      handleInboundWebhook("email", request, reply, deps),
   );
-  app.post("/v1/webhooks/whatsapp/:provider", async (request, reply) =>
-    handleInboundWebhook("whatsapp", request, reply, deps),
+  app.post(
+    "/v1/webhooks/whatsapp/:provider",
+    { bodyLimit: WEBHOOK_BODY_LIMIT_BYTES },
+    async (request, reply) =>
+      handleInboundWebhook("whatsapp", request, reply, deps),
   );
+  // Without this the WhatsApp Cloud callback cannot be registered at all: Meta
+  // refuses to subscribe a URL that does not complete the GET handshake.
+  app.get("/v1/webhooks/whatsapp/:provider", async (request, reply) =>
+    handleWebhookVerification("whatsapp", request, reply, deps),
+  );
+}
+
+async function handleWebhookVerification(
+  channelType: NormalizedInboundChannel,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  deps: InboundWebhookDependencies,
+) {
+  const { provider } = parse(WebhookParamsSchema, request.params);
+  const query = parse(WebhookVerificationQuerySchema, request.query);
+
+  const resolution = await deps.intake.resolveChannel({
+    channelType,
+    provider,
+    channelId: query["channel_id"],
+  });
+
+  if (!resolution) {
+    throw new HttpError(
+      404,
+      "RESOURCE_NOT_FOUND",
+      "Webhook channel was not found or is not active.",
+    );
+  }
+
+  // Fails closed: a channel with no `verify_token_ref`, or a ref that resolves
+  // to nothing, can never complete the handshake.
+  const expected = resolution.verify_token;
+
+  if (
+    query["hub.mode"] !== "subscribe" ||
+    expected === null ||
+    !secretsMatch(query["hub.verify_token"], expected)
+  ) {
+    throw new HttpError(
+      403,
+      "FORBIDDEN",
+      "Webhook verification token did not match.",
+    );
+  }
+
+  // Meta requires the raw challenge as the body. A JSON-wrapped value fails
+  // verification on their side.
+  reply.status(200).type("text/plain");
+  return query["hub.challenge"];
+}
+
+function secretsMatch(provided: string, expected: string): boolean {
+  const providedBytes = Buffer.from(provided, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+
+  if (providedBytes.length !== expectedBytes.length) {
+    return false;
+  }
+
+  return timingSafeEqual(providedBytes, expectedBytes);
 }
 
 async function handleInboundWebhook(
@@ -118,7 +207,12 @@ async function handleInboundWebhook(
     raw_payload_ref: ref,
   };
 
-  const messages = parseInboundMessages(channelType, request.body, context);
+  const messages = parseInboundMessages(
+    channelType,
+    resolution.provider,
+    request.body,
+    context,
+  );
 
   const results: InboundWebhookMessageResult[] = [];
 
@@ -152,12 +246,13 @@ async function handleInboundWebhook(
 
 function parseInboundMessages(
   channelType: NormalizedInboundChannel,
+  provider: string,
   body: unknown,
   context: InboundAdapterContext,
 ): NormalizedInboundMessage[] {
   try {
     return channelType === "email"
-      ? [parseInboundEmailMessage(body, context)]
+      ? [parseInboundEmailMessage(emailPayloadFor(provider, body), context)]
       : parseInboundWhatsAppMessages(body, context);
   } catch (error) {
     const details = error instanceof z.ZodError ? error.issues : [];
@@ -168,6 +263,54 @@ function parseInboundMessages(
       details,
     );
   }
+}
+
+/**
+ * Mailgun's inbound routes post their own field names (`body-plain`, `sender`,
+ * `Message-Id`) and a Unix-seconds `timestamp`, none of which match the
+ * provider-neutral `RawInboundEmail` contract. Map them first. Other email
+ * providers are expected to post the neutral shape directly, which is what the
+ * generic HMAC-over-body signature scheme pairs with.
+ */
+function emailPayloadFor(provider: string, body: unknown): unknown {
+  if (provider !== "mailgun") {
+    return body;
+  }
+
+  return mapMailgunInboundToRawEmail(toMailgunPayload(body));
+}
+
+function toMailgunPayload(body: unknown): MailgunInboundPayload {
+  if (isParsedFormBody(body)) {
+    return { fields: body.fields, files: body.files };
+  }
+
+  return { fields: toMailgunFields(body), files: [] };
+}
+
+/**
+ * Accept Mailgun's field set however it arrives. The live routes send form
+ * encoding (every value a string); a JSON post of the same field names is
+ * coerced to the same shape, so `message-headers` works whether it arrives as
+ * a JSON *string* (form) or an already-parsed array (JSON).
+ */
+function toMailgunFields(body: unknown): Record<string, string> {
+  const fields: Record<string, string> = {};
+
+  if (body === null || typeof body !== "object") {
+    return fields;
+  }
+
+  for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+
+    fields[key] =
+      typeof value === "object" ? JSON.stringify(value) : String(value);
+  }
+
+  return fields;
 }
 
 function verifyInboundSignature(params: {
@@ -191,19 +334,23 @@ function verifyInboundSignature(params: {
   }
 
   if (params.provider === "mailgun") {
-    const signature = MailgunSignatureSchema.safeParse(
-      (params.parsedBody as { signature?: unknown } | null)?.signature,
-    );
+    // Mailgun's inbound ROUTES send the signing triplet as flat top-level form
+    // fields; its event/tracking webhooks nest it under `signature`. Reading
+    // only the nested envelope (as this did) 403s every real inbound delivery.
+    const signature = extractMailgunSignatureFields(params.parsedBody);
 
-    if (!signature.success) {
+    if (!signature) {
       return false;
     }
 
     return verifyMailgunSignature({
-      timestamp: signature.data.timestamp,
-      token: signature.data.token,
-      signature: signature.data.signature,
+      timestamp: signature.timestamp,
+      token: signature.token,
+      signature: signature.signature,
       signingKey: params.secret,
+      // Mailgun signs a timestamp but does not reject stale posts itself; the
+      // receiver bounds the replay window.
+      maxAgeSeconds: MAILGUN_DEFAULT_MAX_SIGNATURE_AGE_SECONDS,
     });
   }
 

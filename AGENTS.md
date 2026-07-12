@@ -17,7 +17,7 @@ Read these files in this order before making non-trivial changes:
    - `PLAN.md` for product/backend architecture and roadmap.
    - `docs/DEVELOPMENT_RULES.md` for coding, testing, architecture, and documentation rules.
    - `docs/BACKEND_SPEC.md` for backend contracts, data model, APIs, workflows, events, and service boundaries.
-   - `docs/AI_RUNTIME_HARNESS.md` for LangGraph agent graph, tool governance, prompts, evals, and guardrails.
+   - `docs/AI_RUNTIME_HARNESS.md` for the AI agent graph, tool governance, prompts, evals, and guardrails.
    - `docs/TEST_STRATEGY.md` for required tests by change type.
    - `docs/DECISIONS.md` for accepted architectural decisions.
 
@@ -53,7 +53,7 @@ Before ending a coding session:
 - API and core backend services: TypeScript.
 - AI runtime: Python.
 - Durable workflow engine: Temporal.
-- Stateful agent orchestration: LangGraph.
+- Stateful agent orchestration: an in-repo LangGraph-style graph engine (`ai/runtime/graph.py`). NOT the LangGraph library — see ADR-0005 (amended), ADR-0016, ADR-0023.
 - Database: PostgreSQL with `pgvector` for v1 retrieval.
 - Event bus: NATS JetStream for v1.
 - Cache and rate limits: Redis.
@@ -108,7 +108,7 @@ Whenever a feature, API, event, data model, workflow, prompt, tool, guardrail, t
 - Bug fixes require regression tests.
 - New behavior requires unit and integration coverage at the correct boundary.
 - Temporal workflows require deterministic workflow tests and replay-safe implementation.
-- LangGraph/LLM behavior requires eval cases and traceability.
+- AI graph / LLM behavior requires eval cases and traceability.
 - Security-sensitive code requires negative tests.
 - Migrations require forward and rollback/compatibility notes.
 

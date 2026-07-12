@@ -48,6 +48,14 @@ export interface InboundChannelResolution {
   readonly channel_type: NormalizedInboundChannel;
   readonly provider: string;
   readonly signing_secret: string | null;
+  /**
+   * The shared token Meta echoes back during the webhook subscription
+   * handshake (`GET ?hub.verify_token=...`). Resolved from
+   * `config.verify_token_ref` through the same validating secret resolver as
+   * the signing secret; null when the channel declares none, which fails the
+   * handshake closed.
+   */
+  readonly verify_token: string | null;
 }
 
 export interface InboundIngestResult {
@@ -79,8 +87,11 @@ export interface InboundIntakeServiceDeps {
   readonly attachmentPolicy?: AttachmentValidationPolicy;
 }
 
-function readSecretRef(config: InboundChannelRecord["config"]): string | null {
-  const ref = config["signature_secret_ref"];
+function readConfigRef(
+  config: InboundChannelRecord["config"],
+  key: string,
+): string | null {
+  const ref = config[key];
   return typeof ref === "string" && ref.length > 0 ? ref : null;
 }
 
@@ -122,9 +133,14 @@ export function createInboundIntakeService(
         return null;
       }
 
-      const secretRef = readSecretRef(channel.config);
+      const secretRef = readConfigRef(channel.config, "signature_secret_ref");
       const signingSecret = secretRef
         ? await secretResolver.resolve(secretRef)
+        : null;
+
+      const verifyTokenRef = readConfigRef(channel.config, "verify_token_ref");
+      const verifyToken = verifyTokenRef
+        ? await secretResolver.resolve(verifyTokenRef)
         : null;
 
       return {
@@ -133,6 +149,7 @@ export function createInboundIntakeService(
         channel_type: params.channelType,
         provider: channel.provider,
         signing_secret: signingSecret,
+        verify_token: verifyToken,
       };
     },
     async ingestNormalizedMessage(message) {

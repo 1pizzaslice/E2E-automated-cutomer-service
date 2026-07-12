@@ -4,6 +4,7 @@ import {
   verifyHmacSha256Signature,
   verifyMailgunSignature,
   verifyWhatsAppCloudSignature,
+  MAILGUN_DEFAULT_MAX_SIGNATURE_AGE_SECONDS,
 } from "./signature.js";
 
 function hmacHex(payload: string, secret: string): string {
@@ -134,5 +135,66 @@ describe("verifyMailgunSignature", () => {
         signingKey,
       }),
     ).toBe(false);
+  });
+
+  describe("replay window", () => {
+    // Mailgun signs a timestamp but never rejects a stale post itself; the
+    // receiver bounds how long a captured signed request stays usable.
+    const nowMs = Number(timestamp) * 1000;
+
+    function verifyAt(offsetSeconds: number): boolean {
+      const stamp = String(Number(timestamp) + offsetSeconds);
+
+      return verifyMailgunSignature({
+        timestamp: stamp,
+        token,
+        signature: hmacHex(`${stamp}${token}`, signingKey),
+        signingKey,
+        maxAgeSeconds: MAILGUN_DEFAULT_MAX_SIGNATURE_AGE_SECONDS,
+        nowMs,
+      });
+    }
+
+    it("accepts a fresh, correctly signed request", () => {
+      expect(verifyAt(0)).toBe(true);
+      expect(verifyAt(-60)).toBe(true);
+    });
+
+    it("rejects a correctly signed request that is outside the window", () => {
+      expect(verifyAt(-(MAILGUN_DEFAULT_MAX_SIGNATURE_AGE_SECONDS + 1))).toBe(
+        false,
+      );
+    });
+
+    it("rejects a far-future timestamp, so a forged clock buys nothing", () => {
+      expect(verifyAt(MAILGUN_DEFAULT_MAX_SIGNATURE_AGE_SECONDS + 1)).toBe(
+        false,
+      );
+    });
+
+    it("fails closed on a non-numeric timestamp rather than coercing to NaN", () => {
+      expect(
+        verifyMailgunSignature({
+          timestamp: "not-a-number",
+          token,
+          signature: hmacHex(`not-a-number${token}`, signingKey),
+          signingKey,
+          maxAgeSeconds: MAILGUN_DEFAULT_MAX_SIGNATURE_AGE_SECONDS,
+          nowMs,
+        }),
+      ).toBe(false);
+    });
+
+    it("skips the freshness check when no window is configured", () => {
+      expect(
+        verifyMailgunSignature({
+          timestamp,
+          token,
+          signature: hmacHex(`${timestamp}${token}`, signingKey),
+          signingKey,
+          nowMs: nowMs + 10 * 365 * 24 * 3600 * 1000,
+        }),
+      ).toBe(true);
+    });
   });
 });

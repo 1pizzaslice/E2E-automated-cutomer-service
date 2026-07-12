@@ -129,7 +129,7 @@ flowchart TD
 
   subgraph AI
     AIRuntime[Python AI Runtime]
-    LangGraph[LangGraph Support Agent Graph]
+    LangGraph[Support Agent Graph - LangGraph-style engine, ADR-0016]
     RAG[KB Retrieval]
     Guardrails[Guardrails + Critic]
     Evals[Eval Capture]

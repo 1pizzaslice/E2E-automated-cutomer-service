@@ -84,7 +84,34 @@ describe("inbound intake channel resolution", () => {
       channel_type: "email",
       provider: "mailgun",
       signing_secret: "resolved-secret",
+      // The email channel declares no `verify_token_ref`; only the WhatsApp
+      // subscription handshake needs one.
+      verify_token: null,
     });
+  });
+
+  it("resolves a verify token when the channel declares one", async () => {
+    const { intake } = makeService([
+      {
+        tenant_id: TENANT_ID,
+        channel_id: "chn_wa",
+        type: "whatsapp",
+        provider: "cloud",
+        status: "active",
+        config: {
+          signature_secret_ref: "WEBHOOK_SECRET_REF",
+          verify_token_ref: "WHATSAPP_VERIFY_TOKEN_REF",
+        },
+      },
+    ]);
+
+    const resolution = await intake.resolveChannel({
+      channelType: "whatsapp",
+      provider: "cloud",
+      channelId: "chn_wa",
+    });
+
+    expect(resolution?.verify_token).toBe("resolved-secret");
   });
 
   it("returns null for unknown, mismatched, or inactive channels", async () => {
