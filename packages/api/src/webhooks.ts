@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
@@ -47,6 +48,20 @@ const WebhookQuerySchema = z
   })
   .strict();
 
+/**
+ * Meta's webhook subscription handshake. Before it will deliver anything, Meta
+ * GETs the callback URL with these three parameters and expects the raw
+ * `hub.challenge` echoed back. Not `.strict()`: Meta appends its `hub.*` params
+ * to whatever query string the callback URL already carries (ours carries
+ * `channel_id`), and reserves the right to add more.
+ */
+const WebhookVerificationQuerySchema = z.object({
+  channel_id: z.string().min(1),
+  "hub.mode": z.string().min(1),
+  "hub.verify_token": z.string().min(1),
+  "hub.challenge": z.string().min(1),
+});
+
 export function registerWebhookRoutes(
   app: FastifyInstance,
   deps: InboundWebhookDependencies,
@@ -63,6 +78,67 @@ export function registerWebhookRoutes(
     async (request, reply) =>
       handleInboundWebhook("whatsapp", request, reply, deps),
   );
+  // Without this the WhatsApp Cloud callback cannot be registered at all: Meta
+  // refuses to subscribe a URL that does not complete the GET handshake.
+  app.get("/v1/webhooks/whatsapp/:provider", async (request, reply) =>
+    handleWebhookVerification("whatsapp", request, reply, deps),
+  );
+}
+
+async function handleWebhookVerification(
+  channelType: NormalizedInboundChannel,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  deps: InboundWebhookDependencies,
+) {
+  const { provider } = parse(WebhookParamsSchema, request.params);
+  const query = parse(WebhookVerificationQuerySchema, request.query);
+
+  const resolution = await deps.intake.resolveChannel({
+    channelType,
+    provider,
+    channelId: query["channel_id"],
+  });
+
+  if (!resolution) {
+    throw new HttpError(
+      404,
+      "RESOURCE_NOT_FOUND",
+      "Webhook channel was not found or is not active.",
+    );
+  }
+
+  // Fails closed: a channel with no `verify_token_ref`, or a ref that resolves
+  // to nothing, can never complete the handshake.
+  const expected = resolution.verify_token;
+
+  if (
+    query["hub.mode"] !== "subscribe" ||
+    expected === null ||
+    !secretsMatch(query["hub.verify_token"], expected)
+  ) {
+    throw new HttpError(
+      403,
+      "FORBIDDEN",
+      "Webhook verification token did not match.",
+    );
+  }
+
+  // Meta requires the raw challenge as the body. A JSON-wrapped value fails
+  // verification on their side.
+  reply.status(200).type("text/plain");
+  return query["hub.challenge"];
+}
+
+function secretsMatch(provided: string, expected: string): boolean {
+  const providedBytes = Buffer.from(provided, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+
+  if (providedBytes.length !== expectedBytes.length) {
+    return false;
+  }
+
+  return timingSafeEqual(providedBytes, expectedBytes);
 }
 
 async function handleInboundWebhook(

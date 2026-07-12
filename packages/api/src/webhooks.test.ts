@@ -59,6 +59,19 @@ const whatsappChannel: InboundChannelRecord = {
   type: "whatsapp",
   provider: "cloud",
   status: "active",
+  config: {
+    signature_secret_ref: "WEBHOOK_SECRET_REF",
+    verify_token_ref: "WHATSAPP_VERIFY_TOKEN_REF",
+  },
+};
+
+/** A WhatsApp channel that declares no verify token: the handshake must fail closed. */
+const whatsappChannelNoToken: InboundChannelRecord = {
+  tenant_id: TENANT_ID,
+  channel_id: "chn_wa_notoken",
+  type: "whatsapp",
+  provider: "cloud",
+  status: "active",
   config: { signature_secret_ref: "WEBHOOK_SECRET_REF" },
 };
 
@@ -542,6 +555,107 @@ describe("inbound whatsapp webhook", () => {
 
     expect(response.statusCode).toBe(403);
     expect(launcher.calls).toHaveLength(0);
+  });
+});
+
+describe("whatsapp webhook subscription handshake", () => {
+  function verifyUrl(
+    params: Partial<{
+      channel_id: string;
+      mode: string;
+      token: string;
+      challenge: string;
+    }> = {},
+  ): string {
+    const query = new URLSearchParams({
+      channel_id: params.channel_id ?? WHATSAPP_CHANNEL_ID,
+      "hub.mode": params.mode ?? "subscribe",
+      "hub.verify_token": params.token ?? SECRET,
+      "hub.challenge": params.challenge ?? "1158201444",
+    });
+
+    return `/v1/webhooks/whatsapp/cloud?${query.toString()}`;
+  }
+
+  it("echoes the RAW challenge as text/plain when the verify token matches", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ challenge: "1158201444" }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    // Meta rejects a JSON-wrapped challenge; the body must be the bare value.
+    expect(response.body).toBe("1158201444");
+    expect(response.headers["content-type"]).toContain("text/plain");
+  });
+
+  it("rejects a mismatched verify token", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ token: "wrong-token" }),
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("rejects a hub.mode other than subscribe", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ mode: "unsubscribe" }),
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("fails closed when the channel declares no verify token", async () => {
+    setup([emailChannel, whatsappChannel, whatsappChannelNoToken]);
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ channel_id: "chn_wa_notoken" }),
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("returns 404 for an unknown channel", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: verifyUrl({ channel_id: "chn_missing" }),
+    });
+    const body = ApiErrorResponseSchema.parse(response.json());
+
+    expect(response.statusCode).toBe(404);
+    expect(body.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("rejects a handshake missing Meta's parameters", async () => {
+    setup();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: `/v1/webhooks/whatsapp/cloud?channel_id=${WHATSAPP_CHANNEL_ID}`,
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("does not require bearer authentication", async () => {
+    setup();
+
+    const response = await app!.inject({ method: "GET", url: verifyUrl() });
+
+    expect(response.statusCode).toBe(200);
   });
 });
 

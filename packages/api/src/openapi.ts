@@ -1771,6 +1771,55 @@ export function buildOpenApiDocument() {
             default: { $ref: "#/components/responses/Error" },
           },
         },
+        get: {
+          summary: "Complete the WhatsApp webhook subscription handshake",
+          description:
+            "Unauthenticated provider handshake. Meta GETs the callback URL before it will deliver anything and expects the raw `hub.challenge` echoed back as `text/plain` (a JSON-wrapped value fails on their side). The supplied `hub.verify_token` is compared against the token resolved from the channel's `verify_token_ref`; a mismatch, a channel that declares no ref, or a `hub.mode` other than `subscribe` all fail closed with 403.",
+          security: [],
+          parameters: [
+            {
+              name: "provider",
+              in: "path",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "channel_id",
+              in: "query",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "hub.mode",
+              in: "query",
+              required: true,
+              schema: { type: "string", enum: ["subscribe"] },
+            },
+            {
+              name: "hub.verify_token",
+              in: "query",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            {
+              name: "hub.challenge",
+              in: "query",
+              required: true,
+              schema: { type: "string", minLength: 1 },
+            },
+            { $ref: "#/components/parameters/RequestIdHeader" },
+          ],
+          responses: {
+            "200": {
+              description:
+                "Handshake accepted; the body is the raw `hub.challenge` value",
+              content: {
+                "text/plain": { schema: { type: "string" } },
+              },
+            },
+            default: { $ref: "#/components/responses/Error" },
+          },
+        },
       },
       "/internal/tools/execute": {
         post: {
