@@ -8,6 +8,11 @@ name: Deploy
 #   - Repository variable DEPLOY_ENABLED=true turns the deploy job on. Until
 #     then only build-and-push runs, so tagging is safe before the VM exists.
 #   - Secrets: DEPLOY_SSH_HOST, DEPLOY_SSH_USER, DEPLOY_SSH_KEY, DEPLOY_DIR.
+#   - Repository VARIABLES (not secrets) for the console bundle, because Vite
+#     bakes them at BUILD time — they cannot be supplied as runtime env on the
+#     VM. None is secret: CONSOLE_API_BASE_URL (leave unset for same-origin),
+#     CONSOLE_CLERK_PUBLISHABLE_KEY (public by design — the console cannot
+#     authenticate anyone without it), CONSOLE_TRACE_URL_TEMPLATE (optional).
 
 on:
   push:
@@ -44,6 +49,18 @@ jobs:
           - image: support-ai
             dockerfile: infra/production/ai.Dockerfile
             context: ./ai
+          # Without this the console image never exists, and a clean
+          # `docker compose up` on the VM fails to pull the tag that
+          # docker-compose.yml already references (Milestone 23, ADR-0028).
+          # The console is a static SPA, so its config is baked in here at build
+          # time rather than injected on the VM.
+          - image: support-console
+            dockerfile: infra/production/console.Dockerfile
+            context: .
+            build-args: |
+              VITE_API_BASE_URL=${{ vars.CONSOLE_API_BASE_URL }}
+              VITE_CLERK_PUBLISHABLE_KEY=${{ vars.CONSOLE_CLERK_PUBLISHABLE_KEY }}
+              VITE_TRACE_URL_TEMPLATE=${{ vars.CONSOLE_TRACE_URL_TEMPLATE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -71,6 +88,8 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          # Empty for every image except the console; an empty value is a no-op.
+          build-args: ${{ matrix.build-args }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

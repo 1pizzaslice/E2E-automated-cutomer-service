@@ -23,7 +23,7 @@ fi
 
 # DEPLOY_SKIP_PULL=1 uses locally-present images (air-gapped hosts / local drills).
 if [[ "${DEPLOY_SKIP_PULL:-}" != "1" ]]; then
-  "${COMPOSE[@]}" pull api worker ai-service
+  "${COMPOSE[@]}" pull api worker ai-service console
 fi
 "${COMPOSE[@]}" up -d
 echo "[rollback] restored ${target}"
