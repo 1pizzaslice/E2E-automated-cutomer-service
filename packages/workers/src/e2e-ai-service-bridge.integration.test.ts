@@ -100,26 +100,42 @@ const FIRST_PARTY_TOOL_NAMES = [
   { name: "kb_search", permission: "kb_read" },
 ] as const;
 
+const MAILGUN_CONTENT_TYPE = "application/x-www-form-urlencoded";
+
+/**
+ * The field set Mailgun's inbound routes actually POST — form-encoded, with
+ * mixed-case `Message-Id`, hyphenated `body-plain`, a Unix-SECONDS `timestamp`,
+ * and the signing triplet flat at the top level. The timestamp is generated
+ * fresh because the webhook now bounds the replay window.
+ *
+ * Threading rides on `In-Reply-To`, as it does on a real reply chain; Mailgun
+ * does not send a synthetic thread id.
+ */
 function mailgunPayload(
   messageId: string,
   threadId: string,
   text: string,
 ): string {
-  const timestamp = "1783180800";
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const token = `token-${messageId}`;
   const signature = createHmac("sha256", SIGNING_SECRET)
     .update(`${timestamp}${token}`)
     .digest("hex");
+  const bareId = messageId.replace(/^<|>$/g, "");
 
-  return JSON.stringify({
-    message_id: messageId,
-    thread_id: threadId,
-    from: { email: `${prefix}.buyer@example.test`, name: "E2E Buyer" },
+  return new URLSearchParams({
+    recipient: `support@${SENDING_DOMAIN}`,
+    sender: `${prefix}.buyer@example.test`,
+    from: `E2E Buyer <${prefix}.buyer@example.test>`,
     subject: "Where is my order?",
-    text,
-    received_at: "2026-07-04T12:00:00.000Z",
-    signature: { timestamp, token, signature },
-  });
+    "body-plain": text,
+    "stripped-text": text,
+    "Message-Id": `<${bareId}>`,
+    "In-Reply-To": threadId,
+    timestamp,
+    token,
+    signature,
+  }).toString();
 }
 
 async function pollUntil<T>(
@@ -446,7 +462,7 @@ describeLive("live AI runtime service bridge end to end", () => {
     const response = await app!.inject({
       method: "POST",
       url: `/v1/webhooks/email/mailgun?channel_id=${CHANNEL}`,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": MAILGUN_CONTENT_TYPE },
       payload: mailgunPayload(
         `<${idSuffix}-${prefix}@mail.example>`,
         `<thread-${idSuffix}-${prefix}@mail.example>`,

@@ -52,19 +52,46 @@ export function verifyWhatsAppCloudSignature(params: {
 }
 
 /**
+ * Mailgun signs a timestamp but does not itself reject stale requests — the
+ * receiver is responsible for bounding the replay window. Five minutes bounds
+ * how long a captured signed request stays usable while tolerating ordinary
+ * clock skew between Mailgun and this host.
+ */
+export const MAILGUN_DEFAULT_MAX_SIGNATURE_AGE_SECONDS = 300;
+
+/**
  * Verify a Mailgun webhook signature. Mailgun signs the concatenation of the
  * `timestamp` and `token` values with the account HTTP signing key and sends
  * the hex-encoded HMAC-SHA256 as `signature`.
+ *
+ * Pass `maxAgeSeconds` to additionally reject a signature whose timestamp is
+ * outside the replay window. The check is two-sided: a far-future timestamp is
+ * rejected as well, so a forged clock cannot buy an attacker an indefinitely
+ * valid capture.
  */
 export function verifyMailgunSignature(params: {
   timestamp: string;
   token: string;
   signature: string;
   signingKey: string;
+  maxAgeSeconds?: number;
+  /** Injectable clock; defaults to the wall clock. */
+  nowMs?: number;
 }): boolean {
-  const { timestamp, token, signature, signingKey } = params;
+  const { timestamp, token, signature, signingKey, maxAgeSeconds } = params;
 
   if (timestamp.length === 0 || token.length === 0) {
+    return false;
+  }
+
+  if (
+    maxAgeSeconds !== undefined &&
+    !isMailgunTimestampFresh(
+      timestamp,
+      maxAgeSeconds,
+      params.nowMs ?? Date.now(),
+    )
+  ) {
     return false;
   }
 
@@ -73,4 +100,22 @@ export function verifyMailgunSignature(params: {
     secret: signingKey,
     expectedHex: signature,
   });
+}
+
+/**
+ * Mailgun's `timestamp` is Unix epoch SECONDS. A non-numeric value fails closed
+ * rather than coercing to NaN and slipping through a comparison.
+ */
+function isMailgunTimestampFresh(
+  timestamp: string,
+  maxAgeSeconds: number,
+  nowMs: number,
+): boolean {
+  const seconds = Number(timestamp);
+
+  if (!Number.isFinite(seconds)) {
+    return false;
+  }
+
+  return Math.abs(nowMs / 1000 - seconds) <= maxAgeSeconds;
 }

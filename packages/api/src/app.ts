@@ -13,6 +13,10 @@ import {
 } from "./auth.js";
 import { loadCorsConfig, registerCors, type CorsConfig } from "./cors.js";
 import { HttpError, registerErrorHandler } from "./errors.js";
+import {
+  parseMultipartFormBody,
+  parseUrlEncodedFormBody,
+} from "./form-body.js";
 import { createDatabaseInboundWebhookDependencies } from "./inbound-webhook-deps.js";
 import {
   loadInternalAuthConfig,
@@ -137,7 +141,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       ? loadRateLimitConfig()
       : (options.rateLimit ?? undefined);
 
-  registerRawJsonBodyParser(app);
+  registerRawBodyParsers(app);
   registerErrorHandler(app);
   // CORS runs first so a browser preflight (OPTIONS) is answered before auth.
   if (corsConfig) {
@@ -176,11 +180,16 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
 }
 
 /**
- * Replaces the default JSON body parser with one that retains the exact raw
- * request bytes on `request.rawBody`. Provider webhooks verify HMAC signatures
- * over the raw body, so the bytes must survive parsing unmodified.
+ * Body parsers that retain the exact request bytes on `request.rawBody`.
+ * Provider webhooks verify HMAC signatures over the raw body and the bytes are
+ * archived to the `RawPayloadStore`, so they must survive parsing unmodified.
+ *
+ * JSON covers the platform's own API and the WhatsApp Cloud webhook. The two
+ * form encodings exist for inbound email: Mailgun's routes POST
+ * `application/x-www-form-urlencoded`, switching to `multipart/form-data` when
+ * the mail carries attachments. Without them Fastify 415s every real delivery.
  */
-function registerRawJsonBodyParser(app: FastifyInstance): void {
+function registerRawBodyParsers(app: FastifyInstance): void {
   app.addContentTypeParser(
     "application/json",
     { parseAs: "buffer" },
@@ -205,6 +214,62 @@ function registerRawJsonBodyParser(app: FastifyInstance): void {
           undefined,
         );
       }
+    },
+  );
+
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "buffer" },
+    (request, body, done) => {
+      const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
+      request.rawBody = buffer;
+
+      if (buffer.length === 0) {
+        done(null, undefined);
+        return;
+      }
+
+      try {
+        done(null, parseUrlEncodedFormBody(buffer));
+      } catch {
+        done(
+          new HttpError(
+            400,
+            "VALIDATION_ERROR",
+            "Request body is not valid form-encoded data.",
+          ),
+          undefined,
+        );
+      }
+    },
+  );
+
+  app.addContentTypeParser(
+    "multipart/form-data",
+    { parseAs: "buffer" },
+    (request, body, done) => {
+      const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
+      request.rawBody = buffer;
+
+      if (buffer.length === 0) {
+        done(null, undefined);
+        return;
+      }
+
+      parseMultipartFormBody(request.headers, buffer)
+        .then((parsed) => {
+          done(null, parsed);
+        })
+        .catch(() => {
+          done(
+            new HttpError(
+              400,
+              "VALIDATION_ERROR",
+              "Request body is not valid multipart form data.",
+            ),
+            undefined,
+          );
+        });
     },
   );
 }
