@@ -32,7 +32,7 @@ fi
 # DEPLOY_SKIP_PULL=1 uses locally-present images (air-gapped hosts / local drills).
 if [[ "${DEPLOY_SKIP_PULL:-}" != "1" ]]; then
   echo "[deploy] pulling images"
-  "${COMPOSE[@]}" pull api worker ai-service
+  "${COMPOSE[@]}" pull api worker ai-service console
 fi
 
 # Migrations first. They are additive-only / backward-compatible (SOPS §19),

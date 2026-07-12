@@ -13,6 +13,7 @@ checklist). Run §19 for every deployment; this file explains the mechanics.
 | ----------------- | -------------------------------------- | ------------------------------- |
 | `caddy`           | TLS reverse proxy                      | Public `:80`/`:443`             |
 | `api`             | Fastify API (`/v1/*`, webhooks)        | Internal only (via Caddy)       |
+| `console`         | Reviewer console SPA (static)          | Internal only (via Caddy, `/`)  |
 | `worker`          | Temporal worker + job schedules        | Internal only                   |
 | `ai-service`      | Python AI sidecar (`/internal/ai/run`) | Internal only                   |
 | `postgres`        | Source of truth (pgvector)             | Internal only                   |
@@ -150,14 +151,26 @@ attachments, not lost tickets).
 
 ## 7. Deploy + rollback
 
-CI (`.github/workflows/deploy.yml`) builds + pushes the three images to GHCR on
-a `v*` tag, then — once you set the repo variable `DEPLOY_ENABLED=true` and the
+CI (`.github/workflows/deploy.yml`) builds + pushes the **four** images
+(`support-api`, `support-worker`, `support-ai`, `support-console`) to GHCR on a
+`v*` tag, then — once you set the repo variable `DEPLOY_ENABLED=true` and the
 `DEPLOY_SSH_*` / `DEPLOY_DIR` secrets — SSHes in and runs `deploy.sh`, which:
 
 1. records the current tag (for rollback),
 2. pins the new tag, pulls, applies migrations,
 3. rolls the app services, and
 4. health-gates the API — **auto-rolling-back** if the gate fails.
+
+> **Console build-time config.** The console is a static Vite SPA, so its config
+> is baked into the bundle **when CI builds the image** — it cannot be injected
+> as runtime env on the VM. Set these as repository **variables** (not secrets;
+> none is secret) before tagging a release, or the console ships misconfigured:
+>
+> | Repo variable                   | Purpose                                                               | Leave unset?                                                                          |
+> | ------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+> | `CONSOLE_CLERK_PUBLISHABLE_KEY` | Clerk **production** publishable key (`pk_live_…`). Public by design. | **No** — without it the console cannot sign anyone in.                                |
+> | `CONSOLE_API_BASE_URL`          | API origin.                                                           | **Yes** — empty means same-origin, which is the Caddy topology here.                  |
+> | `CONSOLE_TRACE_URL_TEMPLATE`    | Deep-link from a QA review to a trace viewer.                         | **Yes** — no trace backend is deployed yet (the collector exports traces to `debug`). |
 
 Manual equivalents on the VM:
 
