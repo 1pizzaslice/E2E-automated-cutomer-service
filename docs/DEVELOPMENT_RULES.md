@@ -26,7 +26,7 @@ Update docs in the same change whenever any of the following changes:
 - Database schema.
 - Ticket state machine.
 - Temporal workflow.
-- LangGraph agent graph.
+- The in-repo LangGraph-style agent graph (`ai/runtime/graph.py`; not the LangGraph library — ADR-0016, ADR-0023).
 - Prompt template or prompt version.
 - Tool schema, permissions, or side-effect behavior.
 - Tenant policy behavior.
@@ -168,7 +168,7 @@ Workflow changes must include:
 - Replay-safety considerations.
 - Versioning plan if existing workflows may be running.
 
-## 8. LangGraph And AI Runtime Rules
+## 8. AI Runtime And Agent Graph Rules
 
 AI behavior must be structured and auditable:
 

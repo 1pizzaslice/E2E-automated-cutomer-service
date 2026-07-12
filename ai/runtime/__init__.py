@@ -8,12 +8,8 @@ Public surface:
   ``RuntimeResult``, ...) in :mod:`runtime.schemas`.
 * The pluggable ports: :class:`ModelProvider`, :class:`RetrievalPort`,
   :class:`ToolExecutor`, and their deterministic offline implementations.
-
-``build_initial_decision`` is retained from the Milestone 0-8 scaffold for
-backward compatibility.
 """
 
-from .harness import RuntimeDecision, build_initial_decision
 from .providers import (
     DeterministicSupportModel,
     ModelProvider,
@@ -41,8 +37,6 @@ from .tools import (
 from .tracing import RunTrace
 
 __all__ = [
-    "RuntimeDecision",
-    "build_initial_decision",
     "run_support_graph",
     "RuntimeRequest",
     "RuntimeResult",

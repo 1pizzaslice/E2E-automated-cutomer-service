@@ -58,11 +58,21 @@ Use this format:
 ## ADR-0005: LangGraph Owns Stateful AI Agent Graphs
 
 - Date: 2026-06-18
-- Status: Accepted
+- Status: **Accepted, then AMENDED — see the amendment below. The LangGraph library is NOT a dependency of this project.**
 - Context: AI resolution flows require classification, retrieval, tool-use planning, drafting, critique, and escalation decisions. The user selected Temporal + LangGraph.
 - Decision: Use LangGraph in the Python AI runtime for stateful AI graph orchestration.
 - Consequences: LangGraph returns structured outputs to Temporal/backend. It does not own durable ticket state.
 - Follow-up: Define graph state schemas and eval fixtures before broad automation.
+
+### Amendment (2026-07-12): the library was never adopted; the shape of the decision survives
+
+ADRs here are append-only, so the record above stands as written. What it says is no longer true of the codebase, and this amendment is the correction a reader needs.
+
+- **What actually shipped.** `ai/runtime/graph.py` is a ~130-line in-repo engine that reproduces the LangGraph API surface the graph uses (`add_node` / `set_entry_point` / `add_edge` / `add_conditional_edges` / `compile().invoke()`). Node code is written exactly as it would be for LangGraph. **`langgraph` appears in no manifest and is imported nowhere.** (LangChain _is_ a real dependency, but only for the model adapter in `ai/runtime/llm.py` — ADR-0023 — not for the graph.)
+- **Why it was deferred the first time (ADR-0016).** An environmental constraint: the Python harness ran on the system interpreter with no `uv` and no third-party packages. **That reason has since evaporated** — `uv` is installed, CPython 3.12 is pinned, and `ai/uv.lock` is committed.
+- **Why it stays deferred (ADR-0023, and this amendment affirms it).** On the merits, not the environment: node code is engine-agnostic, byte-identical parity is the proof standard, so a swap would change _no observable behavior_ while adding a runtime dependency to every sidecar deployment. That is cost with no benefit. Revisit only when a genuine LangGraph capability — checkpointing, interrupts, streaming — is actually needed.
+- **What survives from ADR-0005, unchanged and still binding:** a stateful agent graph owns one AI run's reasoning; it returns structured outputs; **it does not own durable ticket state** (Temporal does, ADR-0004); and policy/guardrail governance is deterministic, never the model's to decide (ADR-0016 (4), ADR-0023 (2)).
+- **Why this amendment exists at all.** The docs asserted a library the code does not use, in the stack list, the milestone title, and this ADR. The engineering call was right; the documentation was misleading, and every fresh AI session and new engineer would have inherited that. See `docs/HORZ_DESIGN_REVIEW.md`.
 
 ## ADR-0006: PostgreSQL Is Source Of Truth; pgvector First For Retrieval
 

@@ -79,7 +79,7 @@ drain-and-close shutdown.
 
 Responsibilities:
 
-- LangGraph support agent graph.
+- The in-repo LangGraph-style support agent graph (not the LangGraph library — ADR-0016, ADR-0023).
 - Classification.
 - Retrieval planning.
 - Tool planning.

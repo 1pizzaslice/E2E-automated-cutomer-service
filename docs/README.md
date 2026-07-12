@@ -23,9 +23,10 @@ For any new session:
 - `DEVELOPMENT_RULES.md`: coding rules, testing rules, documentation update rules, and current commands.
 - `ENGINEERING_HARNESS.md`: how to run AI-assisted development across sessions, plans, reviews, and handoffs.
 - `BACKEND_SPEC.md`: backend data model, API families, events, workflows, tenancy, and service contracts.
-- `AI_RUNTIME_HARNESS.md`: LangGraph runtime, AI graph nodes, prompts, tools, guardrails, and evals.
+- `AI_RUNTIME_HARNESS.md`: the AI runtime, graph nodes, prompts, tools, guardrails, and evals.
 - `TEST_STRATEGY.md`: unit, integration, workflow, eval, security, and release test requirements.
 - `SOPS.md`: operational process for onboarding, KB ingestion, policy approval, QA, incidents, and pilot reviews.
+- `HORZ_DESIGN_REVIEW.md`: what the sibling `horz/backend/` design-of-record proposes, what we rejected from it and why, and the two things it gets right that we defer on purpose (the Company Brain; a signer registry). Read this before acting on anything in `horz/backend/` — its stack table is not a backlog.
 
 Use `../PLAN.md` when you need the overall product architecture, milestones, and roadmap.
 
